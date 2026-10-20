@@ -176,4 +176,35 @@ describe('computeGoalBackCalc options: cohort floors and the Roxzone at the goal
     expect(r.shortfallSec).toBe(0);
     expect(r.achievedSec).toBeCloseTo(p.totalSec - 60, 6);
   });
+
+  it('a Roxzone floor: the target never goes below it, held at the forecast\'s own when that is faster', () => {
+    const p = buildPrediction({ roxzoneSec: 300 });
+    const floors = { stationSec: {}, runSec: 0, roxzoneSec: 250 };
+    const r = computeGoalBackCalc(p, p.totalSec - 200, { floors, roxzoneTargetSec: 200 });
+    expect(r.roxzoneSec).toBe(250);
+    // Forecast Roxzone already under the floor: held there.
+    const q = buildPrediction({ roxzoneSec: 240 });
+    const r2 = computeGoalBackCalc(q, q.totalSec - 200, { floors, roxzoneTargetSec: 200 });
+    expect(r2.roxzoneSec).toBe(240);
+  });
+
+  it('every other component at its floor: the Roxzone gives up to its floor, so the fastest time is the floor sum', () => {
+    const stations = buildStations();
+    const stationSec = Object.fromEntries(stations.map(l => [l.station, l.adjustedSec])) as Record<string, number>;
+    // Run and stations already at their floors; the Roxzone target sits
+    // above the Roxzone floor.
+    const p = buildPrediction({ stations, roxzoneSec: 300 });
+    const floors = { stationSec, runSec: p.runSec, roxzoneSec: 250 };
+    for (const goal of [p.totalSec - 200, p.totalSec - 400]) {
+      const r = computeGoalBackCalc(p, goal, { floors, roxzoneTargetSec: 290 });
+      expect(r.feasibility).toBe('unrealistic');
+      expect(r.roxzoneSec).toBe(250);
+      expect(r.achievedSec).toBeCloseTo(p.totalSec - 50, 6);
+    }
+    // 30 s faster: inside what the Roxzone can give, so a stretch.
+    const r3 = computeGoalBackCalc(p, p.totalSec - 30, { floors, roxzoneTargetSec: 290 });
+    expect(r3.feasibility).toBe('stretch');
+    expect(r3.roxzoneSec).toBeCloseTo(270, 6);
+    expect(r3.achievedSec).toBeCloseTo(p.totalSec - 30, 6);
+  });
 });

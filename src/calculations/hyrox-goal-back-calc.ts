@@ -23,7 +23,12 @@
  *
  * Roxzone: held at the forecast's unless opts.roxzoneTargetSec gives the
  * Roxzone at the goal (the race plan scales it with finish time from the
- * real results). It never absorbs more than the whole gain.
+ * real results). It never absorbs more than the whole gain, and never goes
+ * below opts.floors.roxzoneSec (the cohort's competitive Roxzone median),
+ * held at the forecast's own Roxzone when that is already faster. When every
+ * other component sits at its floor and the goal is still out of reach, the
+ * Roxzone gives up to its own floor, so the fastest time the floors allow
+ * (achievedSec) is the floor sum whatever the goal.
  */
 
 import type { HyroxPrediction } from './race-prediction.hyrox';
@@ -50,6 +55,9 @@ export interface GoalBackCalcFloors {
   stationSec: Partial<Record<HyroxStation, number>>;
   /** The 8 run legs together. */
   runSec: number;
+  /** The Roxzone floor (the cohort's competitive Roxzone median). Without it
+   *  the Roxzone has no floor beyond the whole-gain clamp. */
+  roxzoneSec?: number;
 }
 
 export interface GoalBackCalcOptions {
@@ -95,9 +103,15 @@ export function computeGoalBackCalc(
   const currentRunSec = prediction.runSec; // post-venue, post-fatigue
   const floorSource: GoalBackCalcResult['floorSource'] = opts.floors ? 'cohort' : 'legacy';
   const totalGain = prediction.totalSec - targetTotalSec;
-  // Roxzone at the goal, never absorbing more than the whole gain.
-  const roxzoneSec = opts.roxzoneTargetSec != null && totalGain > 0
-    ? Math.max(opts.roxzoneTargetSec, prediction.roxzoneSec - totalGain)
+  // Roxzone floor: the cohort's competitive Roxzone, held at the forecast's
+  // own when that is already faster.
+  const roxzoneFloorSec = opts.floors?.roxzoneSec != null
+    ? Math.min(prediction.roxzoneSec, opts.floors.roxzoneSec)
+    : null;
+  // Roxzone at the goal, never absorbing more than the whole gain and never
+  // below its floor.
+  let roxzoneSec = opts.roxzoneTargetSec != null && totalGain > 0
+    ? Math.max(opts.roxzoneTargetSec, prediction.roxzoneSec - totalGain, roxzoneFloorSec ?? -Infinity)
     : prediction.roxzoneSec;
 
   // Floor for run pace: the field's top-1% run total, else 8 legs at the
@@ -227,9 +241,17 @@ export function computeGoalBackCalc(
     };
   });
 
-  const achievedSec = runTargetSec
+  let achievedSec = runTargetSec
     + stationTargets.reduce((sum, t) => sum + t.targetSec, 0)
     + roxzoneSec;
+  // Run and stations all at their floors and the goal still out of reach:
+  // the Roxzone gives up to its own floor, so the fastest time the floors
+  // allow is the floor sum, whatever the goal.
+  if (totalGain > 0 && roxzoneFloorSec != null && achievedSec - targetTotalSec > 0.5 && roxzoneSec > roxzoneFloorSec) {
+    const give = Math.min(achievedSec - targetTotalSec, roxzoneSec - roxzoneFloorSec);
+    roxzoneSec -= give;
+    achievedSec -= give;
+  }
   // Shortfall = achieved - target when we couldn't get fast enough (achieved > target).
   // The reverse direction (achieved < target, i.e. achieved is faster than asked)
   // is impossible because we cap allocations at headroom.
@@ -242,7 +264,7 @@ export function computeGoalBackCalc(
   if (shortfallSec > 0) {
     feasibility = 'unrealistic';
     caveat = opts.floors
-      ? 'No realistic combination of station and run gains reaches this time. Every station and the run would have to beat the median split of the top 1% of finishers in your field. Pick a more achievable goal or extend training time.'
+      ? `No realistic combination of station and run gains reaches this time. Every station${opts.floors.roxzoneSec != null ? ', the run and the Roxzone' : ' and the run'} would have to beat the median split of the top 1% of finishers in your field. Pick a more achievable goal or extend training time.`
       : `No realistic combination of station and run-pace gains reaches this time. The estimate uses the competitive population floor across all stations and run pace. Pick a more achievable goal or extend training time.`;
   } else if (gainNeeded > totalHeadroom * 0.7) {
     feasibility = 'stretch';
