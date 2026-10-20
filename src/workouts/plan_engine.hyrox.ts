@@ -376,7 +376,9 @@ import {
 //   down (full to half to none); a doubles sim's stations are the partner's
 //   half; a sim week's notes name the sim;
 // - only the race taper's smallest circuit's station work sits outside the
-//   taper fractions (its warm-up and light block count inside);
+//   taper fractions (its warm-up and light block count inside), and a taper
+//   week over its fraction shortens its long run toward the run floor before
+//   the long run leaves;
 // - under a partial station capacity a station session loses rounds, keeps
 //   its warm-up, and leaves the week under 15 min.
 export const HYROX_GENERATOR_VERSION = 19;
