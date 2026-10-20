@@ -130,8 +130,9 @@ export function applyHyroxPrevTimeUpdate(update: HyroxPrevTimeUpdate): HyroxPrev
   const targetIsDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
   // The planning band (hyroxPlanningBandFor): the finish in Open Singles
   // terms, banded on the Open Singles field of the athlete's sex, so a Pro or
-  // Doubles race never lowers the plan for its heavier weights or partner.
-  const newBand = hyroxPlanningBandFor(update.timeSec, update.format, s.biologicalSex, hx.division);
+  // Doubles race never lowers the plan for its heavier weights or partner. A
+  // doubles result decomposes in the field it was raced in (prevDivision).
+  const newBand = hyroxPlanningBandFor(update.timeSec, update.format, s.biologicalSex, hx.division, prevDivision);
   const rebanded = newBand !== oldBand;
   if (rebanded) {
     hx.athleteBand = newBand;

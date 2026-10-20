@@ -23,6 +23,7 @@ import { initializeHyroxSimulator } from './initialization.hyrox';
 import { applyHyroxPrevTimeUpdate } from './hyrox-prev-time-update';
 import { getMutableState, resetState } from './store';
 import { analyzeHyroxLoseTime } from '@/calculations/hyrox-lose-time';
+import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
 
 function init() {
   resetState();
@@ -107,5 +108,34 @@ describe('applyHyroxPrevTimeUpdate stores the whole result', () => {
     expect(hx.hyroxPreviousRunSplitsSec).toEqual(LEGS);
     expect(hx.hyroxPreviousRoxzoneSec).toBe(372);
     expect(hx.stationBenchmarksSingles?.ski_erg).toBe(270);
+  });
+});
+
+describe('the past doubles result reads the division it was raced in everywhere', () => {
+  function doublesAthlete(division: 'women' | 'mixed') {
+    const s = init();
+    s.hyroxConfig!.format = 'open_doubles';
+    s.hyroxConfig!.division = division;
+    s.hyroxConfig!.personalRunPaceOffsetSec = undefined;
+    return s;
+  }
+
+  it('planning band and personal run pace use the Mixed race, not the athlete\'s current Women\'s division', () => {
+    const now = doublesAthlete('women');
+    applyHyroxPrevTimeUpdate({ timeSec: 4700, format: 'open_doubles', division: 'mixed', raceDateISO: '2026-03-14', stationSplits: { ...STATIONS } });
+    expect(now.hyroxConfig!.athleteBand).toBe(hyroxPlanningBandFor(4700, 'open_doubles', 'female', 'women', 'mixed'));
+    const offsetFromPast = now.hyroxConfig!.personalRunPaceOffsetSec;
+    expect(typeof offsetFromPast).toBe('number');
+    // The same result logged by an athlete whose current division is Mixed.
+    const same = doublesAthlete('mixed');
+    applyHyroxPrevTimeUpdate({ timeSec: 4700, format: 'open_doubles', division: 'mixed', raceDateISO: '2026-03-14', stationSplits: { ...STATIONS } });
+    expect(offsetFromPast).toBe(same.hyroxConfig!.personalRunPaceOffsetSec);
+    expect(analyzeHyroxLoseTime(now).cohort).toEqual({ format: 'open_doubles', sex: 'mixed' });
+    // Without a recorded division the current Women's field is read, and the
+    // run pace comes out differently.
+    const unrecorded = doublesAthlete('women');
+    applyHyroxPrevTimeUpdate({ timeSec: 4700, format: 'open_doubles', raceDateISO: '2026-03-14', stationSplits: { ...STATIONS } });
+    expect(typeof unrecorded.hyroxConfig!.personalRunPaceOffsetSec).toBe('number');
+    expect(unrecorded.hyroxConfig!.personalRunPaceOffsetSec).not.toBe(offsetFromPast);
   });
 });

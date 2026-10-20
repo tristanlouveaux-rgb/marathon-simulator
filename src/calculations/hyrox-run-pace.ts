@@ -282,9 +282,11 @@ export function refreshHyroxPersonalRunPaceOffset(state: SimulatorState): boolea
   const splitCount = splits ? Object.keys(splits).length : 0;
   const hasSplits = splitCount >= 6;
   const band = hx.athleteBand;
-  // The previous race's own field: its weight family, the pair's division
-  // (else sex) for doubles, the athlete's sex for singles.
-  const prevTables = hyroxDoublesTables(prevFmt, state.biologicalSex, hx.division);
+  // The previous race's own field: its weight family, the division the pair
+  // raced in (hyroxPreviousTimeDivision, else the current division, else
+  // sex) for doubles, the athlete's sex for singles. The same field "where
+  // you lost time" compares the result in.
+  const prevTables = hyroxDoublesTables(prevFmt, state.biologicalSex, hx.hyroxPreviousTimeDivision ?? hx.division);
 
   let stationsTotalSec: number;
   let roxzoneSec: number;
@@ -318,7 +320,7 @@ export function refreshHyroxPersonalRunPaceOffset(state: SimulatorState): boolea
     (prevFmt === 'open_doubles' || prevFmt === 'pro_doubles') ? 'doubles' : 'singles';
   const fakeState = {
     ...state,
-    hyroxConfig: { ...hx, format: prevFmt, athleteBand: band },
+    hyroxConfig: { ...hx, format: prevFmt, athleteBand: band, division: hx.hyroxPreviousTimeDivision ?? hx.division },
   } as SimulatorState;
   const modelAtPrev = derivePopulationRunPace(fakeState, prevTargetFormat);
   if (!modelAtPrev) return false;
