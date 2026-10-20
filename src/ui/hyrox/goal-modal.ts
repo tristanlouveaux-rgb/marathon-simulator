@@ -9,10 +9,12 @@
  * carries the per-leg splits (the modal's own list of run and station targets
  * repeated them one tap earlier, rounded differently). Reads the existing
  * `targetFinishTimeSec` on `hyroxConfig` if set ("Change goal", with "Clear
- * goal"); otherwise offers the forecast ("Set a goal"). Saving the offered
- * forecast unchanged sets no goal: the forecast is already the race plan's
- * target, so the hero never grades the athlete against a goal they did not
- * choose.
+ * goal"); otherwise offers the forecast ("Set a goal"). With no goal on
+ * file and the input at the forecast the button does not save: it reads what
+ * it does instead (the opener's keepForecast label, default "Keep forecast",
+ * which closes; "Open race plan" where the view behind has no race clock) and
+ * reads "Save goal" as soon as the input differs. The hero never grades the
+ * athlete against a goal they did not choose.
  *
  * Per CLAUDE.md UI rules:
  *   - Vertically centered overlay (`flex items-center justify-center`)
@@ -103,16 +105,29 @@ export function goalEchoText(input: string, sec: number): string {
   return input.trim() === resolved ? '' : `Goal: ${resolved}`;
 }
 
+/** The button's no-save state (no goal on file, input at the forecast). */
+export interface HyroxKeepForecastAction {
+  label: string;
+  /** After the modal closes; nothing is written. Omitted: just close. */
+  run?: () => void;
+}
+
+/** The save button's label: the keep action's while no goal is on file and
+ *  the input is the forecast, else "Save goal". */
+export function goalSaveLabel(hasGoal: boolean, sec: number | null, forecastSec: number, keepLabel: string): string {
+  return !hasGoal && sec === forecastSec ? keepLabel : 'Save goal';
+}
+
 /**
  * `opts.onChange` runs after a save or clear, so the view that opened the
  * modal re-renders (default: the forecast view, which opens it from the
- * hero; the race plan passes its own). `opts.onKeepForecast` runs instead
- * when no goal was set and the offered forecast is saved unchanged (nothing
- * is written; default: just close).
+ * hero; the race plan passes its own). `opts.keepForecast` is the button
+ * while no goal is on file and the input is the forecast (default "Keep
+ * forecast", which closes).
  */
 export function openHyroxGoalModal(
   prediction: HyroxPrediction,
-  opts: { onChange?: () => void; onKeepForecast?: () => void } = {},
+  opts: { onChange?: () => void; keepForecast?: HyroxKeepForecastAction } = {},
 ): void {
   const existing = document.getElementById('hx-goal-modal');
   if (existing) existing.remove();
@@ -123,6 +138,7 @@ export function openHyroxGoalModal(
   // default), never a made-up improvement.
   const forecastSec = Math.round(prediction.totalSec);
   const initialTarget = hasGoal ? ms.hyroxConfig!.targetFinishTimeSec! : forecastSec;
+  const keep: HyroxKeepForecastAction = opts.keepForecast ?? { label: 'Keep forecast' };
 
   const overlay = document.createElement('div');
   overlay.id = 'hx-goal-modal';
@@ -145,7 +161,7 @@ export function openHyroxGoalModal(
       <div id="hx-goal-result" style="margin-top:10px"></div>
       <div style="display:flex;gap:10px;margin-top:14px">
         ${hasGoal ? '<button id="hx-goal-clear" style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">Clear goal</button>' : ''}
-        <button id="hx-goal-save" style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">Save goal</button>
+        <button id="hx-goal-save" style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">${goalSaveLabel(hasGoal, initialTarget, forecastSec, keep.label)}</button>
       </div>
     </div>
   `;
@@ -159,6 +175,8 @@ export function openHyroxGoalModal(
     const echoEl = document.getElementById('hx-goal-echo');
     if (!inputEl || !resultEl) return;
     const sec = parseHhMmSs(inputEl.value, floorSec);
+    const saveEl = document.getElementById('hx-goal-save');
+    if (saveEl) saveEl.textContent = goalSaveLabel(hasGoal, sec, forecastSec, keep.label);
     if (sec == null) {
       if (echoEl) { echoEl.textContent = ''; echoEl.style.display = 'none'; }
       resultEl.innerHTML = `<div style="font-size:12px;color:#ef4444;padding:8px 0">Enter time as mm:ss (e.g. 75:00) or h:mm:ss (e.g. 1:15:00).</div>`;
@@ -198,10 +216,10 @@ export function openHyroxGoalModal(
     const sec = inputEl ? parseHhMmSs(inputEl.value, floorSec) : null;
     if (sec == null) return;
     if (!hasGoal && sec === forecastSec) {
-      // The offered forecast, unchanged: no goal is set (the race plan's
-      // target is already the forecast).
+      // The forecast, with no goal on file: the button reads the keep
+      // action's label, and nothing is written.
       close();
-      opts.onKeepForecast?.();
+      keep.run?.();
       return;
     }
     const ms2 = getMutableState();

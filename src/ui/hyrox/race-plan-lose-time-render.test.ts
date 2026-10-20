@@ -204,21 +204,93 @@ describe('goal modal', () => {
     expect(document.querySelector('[data-goal-feasibility]')!.textContent!.trim()).toBe('Matches your forecast.');
     expect(document.getElementById('hx-goal-echo')!.textContent).toBe('');
     expect(document.getElementById('hx-goal-clear')).toBeNull();
+    expect(document.getElementById('hx-goal-save')!.textContent).toBe('Keep forecast');
   });
 
-  it('saving the offered forecast unchanged sets no goal and opens the race plan at the forecast', () => {
+  it('singles, no goal: the button reads "Keep forecast" at the forecast and "Save goal" once the input differs; keeping saves nothing and the hero keeps "Set a goal"', () => {
+    const s = hyroxState({ raceDate: new Date(Date.now() + 70 * 86400000).toISOString().slice(0, 10) });
+    setState(s);
+    renderHyroxForecastView();
+    const cta = () => document.getElementById('hx-set-target-cta') as HTMLButtonElement;
+    expect(cta().textContent!.trim()).toBe('Set a goal ›');
+    cta().click();
+    return vi.waitFor(() => expect(document.getElementById('hx-goal-save')).not.toBeNull()).then(() => {
+      const save = () => document.getElementById('hx-goal-save') as HTMLButtonElement;
+      const input = document.getElementById('hx-goal-input') as HTMLInputElement;
+      const offered = input.value;
+      expect(save().textContent).toBe('Keep forecast');
+      input.value = '1:20:00';
+      input.dispatchEvent(new Event('input'));
+      expect(save().textContent).toBe('Save goal');
+      input.value = 'abc';
+      input.dispatchEvent(new Event('input'));
+      expect(save().textContent).toBe('Save goal');
+      input.value = offered;
+      input.dispatchEvent(new Event('input'));
+      expect(save().textContent).toBe('Keep forecast');
+      save().click();
+      expect(s.hyroxConfig!.targetFinishTimeSec).toBeUndefined();
+      expect(document.getElementById('hx-goal-modal')).toBeNull();
+      // Still the Forecast tab (its Race order card is the forecast's plan),
+      // not a race plan page repeating it.
+      expect(app().querySelector('[data-rp-subhead]')).toBeNull();
+      expect(cta().textContent!.trim()).toBe('Set a goal ›');
+      expect(cta().getAttribute('data-has-goal')).not.toBe('1');
+    });
+  });
+
+  it('singles, no goal: a changed input saves the goal and opens the race plan on it', () => {
     const s = hyroxState({ raceDate: new Date(Date.now() + 70 * 86400000).toISOString().slice(0, 10) });
     setState(s);
     renderHyroxForecastView();
     (document.getElementById('hx-set-target-cta') as HTMLButtonElement).click();
     return vi.waitFor(() => expect(document.getElementById('hx-goal-save')).not.toBeNull()).then(() => {
+      const input = document.getElementById('hx-goal-input') as HTMLInputElement;
+      input.value = '1:20:00';
+      input.dispatchEvent(new Event('input'));
       (document.getElementById('hx-goal-save') as HTMLButtonElement).click();
-      expect(s.hyroxConfig!.targetFinishTimeSec).toBeUndefined();
-      expect(document.getElementById('hx-goal-modal')).toBeNull();
-      const sub = app().querySelector('[data-rp-subhead]')!.textContent!;
-      expect(sub).toBe(`Splits for your ${ftRounded(predictHyroxRace(s)!.totalSec)} forecast`);
-      expect(document.getElementById('rp-splits')!.textContent).not.toContain('Forecast');
+      expect(s.hyroxConfig!.targetFinishTimeSec).toBe(4800);
+      return vi.waitFor(() => expect(app().querySelector('[data-rp-subhead]')!.textContent).toContain('Splits for your 1:20:00 goal.'));
     });
+  });
+
+  it('doubles, no goal, from the Forecast tab: "Open race plan" opens the race plan at the forecast and sets no goal; Back keeps "Set a goal"', () => {
+    const s = hyroxState({ format: 'open_doubles', division: 'mixed', raceDate: new Date(Date.now() + 70 * 86400000).toISOString().slice(0, 10) });
+    setState(s);
+    renderHyroxForecastView();
+    (document.getElementById('hx-set-target-cta') as HTMLButtonElement).click();
+    return vi.waitFor(() => expect(document.getElementById('hx-goal-save')).not.toBeNull()).then(() => {
+      const save = document.getElementById('hx-goal-save') as HTMLButtonElement;
+      expect(save.textContent).toBe('Open race plan');
+      save.click();
+      expect(s.hyroxConfig!.targetFinishTimeSec).toBeUndefined();
+      const sub = app().querySelector('[data-rp-subhead]')!.textContent!;
+      expect(sub).toBe(`Splits for your ${ftRounded(predictHyroxRace(s)!.totalSec)} forecast.`);
+      expect(document.getElementById('rp-splits')!.textContent).not.toContain('Forecast');
+      // On the race plan itself the same state keeps the page: "Keep forecast".
+      (document.getElementById('rp-goal-link') as HTMLButtonElement).click();
+      return vi.waitFor(() => expect(document.getElementById('hx-goal-save')).not.toBeNull()).then(() => {
+        expect(document.getElementById('hx-goal-save')!.textContent).toBe('Keep forecast');
+        (document.getElementById('hx-goal-save') as HTMLButtonElement).click();
+        expect(app().querySelector('[data-rp-subhead]')).not.toBeNull();
+        (document.getElementById('rp-back-btn') as HTMLButtonElement).click();
+        return vi.waitFor(() => expect(document.getElementById('hx-set-target-cta')).not.toBeNull()).then(() => {
+          expect(document.getElementById('hx-set-target-cta')!.textContent!.trim()).toBe('Set a goal ›');
+        });
+      });
+    });
+  });
+
+  it('a goal on file: the button always reads "Save goal", even at the forecast', () => {
+    const s = hyroxState({ targetFinishTimeSec: 5000 });
+    setState(s);
+    const p = predictHyroxRace(s)!;
+    openHyroxGoalModal(p);
+    const input = document.getElementById('hx-goal-input') as HTMLInputElement;
+    expect(document.getElementById('hx-goal-save')!.textContent).toBe('Save goal');
+    input.value = ftRounded(p.totalSec);
+    input.dispatchEvent(new Event('input'));
+    expect(document.getElementById('hx-goal-save')!.textContent).toBe('Save goal');
   });
 
   it('a goal on file: "Change goal" with Clear goal; the echo only when the input reads differently', () => {

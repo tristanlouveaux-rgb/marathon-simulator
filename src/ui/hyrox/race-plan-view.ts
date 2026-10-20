@@ -58,7 +58,7 @@ export function racePlanSubhead(plan: Pick<HyroxRacePlan, 'basis' | 'planSec' | 
   if (plan.goalSec != null && plan.feasibility === 'already_on_pace') {
     return `Splits for your ${fmt(plan.planSec)} goal. ${hyroxGoalFeasibilityLine(plan)}`;
   }
-  return `Splits for your ${fmt(plan.planSec)} forecast`;
+  return `Splits for your ${fmt(plan.planSec)} forecast.`;
 }
 
 function legRow(leg: HyroxRacePlanLeg, withForecast: boolean, first: boolean): string {
@@ -141,17 +141,23 @@ export function buildRacePlanEntryCard(state: Pick<SimulatorState, 'hyroxConfig'
 /**
  * Open the goal modal as the race plan's goal step (the Forecast hero's
  * "Set a goal ›", the race plan's "Change goal ›"). After a save
- * that sets a goal the race plan opens on it; saving the offered forecast
- * unchanged sets no goal and opens the race plan at the forecast. After a
- * clear the view that opened the modal stays: the Forecast tab, or the race
- * plan for doubles (it shows the forecast's clock); singles clearing on the
- * race plan return to the Forecast tab, whose Race order card is the
- * forecast's plan.
+ * that sets a goal the race plan opens on it. After a clear the view that
+ * opened the modal stays: the Forecast tab, or the race plan for doubles (it
+ * shows the forecast's clock); singles clearing on the race plan return to
+ * the Forecast tab, whose Race order card is the forecast's plan.
+ *
+ * With no goal on file and the input at the forecast the button saves
+ * nothing and says what it does. Doubles on the Forecast tab: "Open race
+ * plan" (the tab has no Race order card, so the race plan is the forecast's
+ * clock). Singles on the Forecast tab, and the race plan itself: "Keep
+ * forecast", which closes; the view behind already is the forecast's plan,
+ * so no page repeats it (singles never see a race plan without a goal).
  */
 export function openRacePlanGoalModal(from: 'forecast' | 'race-plan' = 'race-plan'): void {
   const current = predictHyroxRace(getState());
   if (!current) return;
   const toForecast = () => import('./forecast-view').then(({ renderHyroxForecastView }) => renderHyroxForecastView());
+  const opensPlan = from === 'forecast' && isHyroxDoublesFormat(getState().hyroxConfig?.format);
   import('./goal-modal').then(({ openHyroxGoalModal }) => {
     openHyroxGoalModal(current, {
       onChange: () => {
@@ -161,7 +167,9 @@ export function openRacePlanGoalModal(from: 'forecast' | 'race-plan' = 'race-pla
         else if (from === 'race-plan' && isHyroxDoublesFormat(hx?.format)) renderHyroxRacePlanView();
         else void toForecast();
       },
-      onKeepForecast: () => renderHyroxRacePlanView(),
+      keepForecast: opensPlan
+        ? { label: 'Open race plan', run: () => renderHyroxRacePlanView() }
+        : { label: 'Keep forecast' },
     });
   });
 }
