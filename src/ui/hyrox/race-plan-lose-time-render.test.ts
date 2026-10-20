@@ -229,7 +229,7 @@ describe('where you lost time', () => {
 
   it('no past result: one line inviting a paste', () => {
     const html = buildLoseTimeCard(hyroxState({}));
-    expect(html).toContain('Paste a past result to compare each segment with athletes who finished in the same time.');
+    expect(html).toContain('Raced HYROX before? Paste a result to compare each segment with athletes who finished in the same time.');
     expect(html).toContain('data-lt-status="no_result"');
     expectVisualConstraints(html);
   });
@@ -242,8 +242,17 @@ describe('where you lost time', () => {
 
   it('a finish without splits: one line asking for them', () => {
     const html = buildLoseTimeCard(hyroxState({ previousHyroxTimeSec: 5071, hyroxPreviousTimeFormat: 'open_singles' }));
-    expect(html).toContain('Add the splits from your 1:24:31 to compare each segment');
+    expect(html).toContain('Add the splits from your 1:24:31 to compare each segment with athletes who finished in the same time.');
     expectVisualConstraints(html);
+  });
+
+  it('a doubles finish without splits says pairs, on the card and the drill-down', () => {
+    const s = hyroxState({ format: 'open_doubles', division: 'mixed', previousHyroxTimeSec: 4320, hyroxPreviousTimeFormat: 'open_doubles', hyroxPreviousTimeDivision: 'mixed' });
+    expect(buildLoseTimeCard(s)).toContain('Add the splits from your 1:12:00 to compare each segment with pairs who finished in the same time.');
+    setState(s);
+    renderHyroxLoseTimeView();
+    expect(app().textContent).toContain('Against pairs who finished in the same time');
+    expect(app().textContent).not.toContain('athletes');
   });
 
   it('the drill-down: time lost, time gained, level, provenance', () => {

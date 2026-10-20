@@ -40,12 +40,18 @@ export function fmtLostSigned(lostSec: number): string {
   return `${lostSec >= 0 ? '+' : '−'}${body}`;
 }
 
-/** The one-line invitation when there is nothing to compare yet. */
-export function loseTimeInviteLine(lt: Pick<HyroxLoseTime, 'status' | 'totalSec'>): string {
+/**
+ * The one-line invitation when there is nothing to compare yet. With no
+ * result on file it is phrased for both groups (a first-timer banded above
+ * total_beginner by running fitness sees it too). "pairs" when the result on
+ * file is a doubles one.
+ */
+export function loseTimeInviteLine(lt: Pick<HyroxLoseTime, 'status' | 'totalSec' | 'format'>): string {
+  const who = lt.format ? hyroxPeerNoun(lt.format) : 'athletes';
   if (lt.status === 'no_splits' && lt.totalSec) {
-    return `Add the splits from your ${ftRounded(lt.totalSec)} to compare each segment with athletes who finished in the same time.`;
+    return `Add the splits from your ${ftRounded(lt.totalSec)} to compare each segment with ${who} who finished in the same time.`;
   }
-  return 'Paste a past result to compare each segment with athletes who finished in the same time.';
+  return `Raced HYROX before? Paste a result to compare each segment with ${who} who finished in the same time.`;
 }
 
 /**
@@ -147,8 +153,9 @@ export function renderLoseTimeBody(lt: HyroxLoseTime, hasWhereToGain: boolean): 
 
 /** Subhead: "Your 1:24:31 against athletes who finished in the same time". */
 export function loseTimeSubhead(lt: HyroxLoseTime): string {
-  if (lt.status !== 'ok' || !lt.totalSec || !lt.format) return 'Against athletes who finished in the same time';
-  return `Your ${ftRounded(lt.totalSec)} against ${hyroxPeerNoun(lt.format)} who finished in the same time`;
+  const who = lt.format ? hyroxPeerNoun(lt.format) : 'athletes';
+  if (lt.status !== 'ok' || !lt.totalSec) return `Against ${who} who finished in the same time`;
+  return `Your ${ftRounded(lt.totalSec)} against ${who} who finished in the same time`;
 }
 
 /** Scroll the Forecast tab to "Where to gain". */
