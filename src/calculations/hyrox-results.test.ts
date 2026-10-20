@@ -102,6 +102,14 @@ describe('captions lead with provenance', () => {
     expect(c).toBe(`HYROX results, ${HYROX_S89_SEASONS_LABEL}, ${HYROX_S89_FINISHER_COUNTS.open_singles.female!.total.toLocaleString('en-US')} Open Singles women finishers, via the open pyrox project.`);
     expect(c).not.toContain('—');
   });
+  it('a split table\'s count says which table it counts, so it never reads as a second finisher count for the field', () => {
+    const cohort = { format: 'open_singles' as const, sex: 'female' as const };
+    const ski = hyroxResultsCaption(cohort, 'ski_erg');
+    expect(ski).toBe(`HYROX results, ${HYROX_S89_SEASONS_LABEL}, ${HYROX_S89_FINISHER_COUNTS.open_singles.female!.ski_erg.toLocaleString('en-US')} Open Singles women finishers with a timed SkiErg, via the open pyrox project.`);
+    expect(hyroxResultsCaption(cohort, 'run_total')).toContain('finishers with a timed run total,');
+    expect(hyroxResultsCaption(cohort, 'roxzone')).toContain('finishers with a timed Roxzone,');
+    expect(hyroxResultsCaption(cohort)).not.toContain('timed');
+  });
   it('cohort labels', () => {
     expect(hyroxCohortLabel({ format: 'pro_doubles', sex: 'male' })).toBe('Pro Doubles men');
     expect(hyroxCohortLabel({ format: 'open_doubles', sex: 'mixed' })).toBe('Open Doubles mixed');

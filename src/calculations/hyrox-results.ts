@@ -52,6 +52,8 @@ import {
   HYROX_S79_IMPROVEMENT,
   HYROX_S79_IMPROVEMENT_BAND_THRESHOLDS,
   HYROX_S79_STATION_LOWER_FENCES_SEC,
+  HYROX_S89_BAND_SEEDS,
+  HYROX_S79_RUN_LEG_MEDIANS_SEC,
   type HyroxImprovementCell,
   type HyroxPercentileTable,
   type HyroxResultsMetric,
@@ -63,6 +65,8 @@ import {
   stationSeedTimesFor,
   seedRunPaceSecKmFor,
   seedRoxzoneSecFor,
+  HYROX_STATION_ORDER,
+  STATION_DISPLAY,
   type HyroxSeedFormat,
 } from '@/constants/hyrox-benchmarks';
 import {
@@ -340,14 +344,26 @@ export function hyroxCohortNoun(cohort: HyroxResultsCohort): string {
  * Provenance caption for anything placed on the S8-S9 tables: seasons with
  * years, the cohort's finisher count, and the source. E.g. "HYROX results,
  * seasons 8 and 9 (2025 to 2026), 119,468 Open Singles women finishers, via
- * the open pyrox project."
+ * the open pyrox project." A split table's count is the finishers with that
+ * split timed, a little under the finish count, so it says which table it
+ * counts ("118,063 Open Singles women finishers with a timed SkiErg"): one tab
+ * shows both, and two bare counts for one field read as a contradiction.
  */
 export function hyroxResultsCaption(cohort: HyroxResultsCohort, metric: HyroxResultsMetric = 'total'): string {
   const n = hyroxResultsCount(metric, cohort).toLocaleString('en-US');
   const who = cohort.sex === 'pooled'
     ? `${hyroxFormatName(cohort.format)} finishers (women and men${cohort.format === 'open_doubles' ? ', and mixed pairs' : ''})`
     : `${hyroxCohortLabel(cohort)} finishers`;
-  return `HYROX results, ${HYROX_S89_SEASONS_LABEL}, ${n} ${who}, ${HYROX_RESULTS_VIA}.`;
+  const timed = metric === 'total' ? '' : ` with a timed ${resultsMetricName(metric)}`;
+  return `HYROX results, ${HYROX_S89_SEASONS_LABEL}, ${n} ${who}${timed}, ${HYROX_RESULTS_VIA}.`;
+}
+
+/** A split table's name in a caption: the station, "run total", "Roxzone". */
+function resultsMetricName(metric: Exclude<HyroxResultsMetric, 'total'>): string {
+  if (metric === 'run_total') return 'run total';
+  if (metric === 'work_total') return 'station total';
+  if (metric === 'roxzone') return 'Roxzone';
+  return STATION_DISPLAY[metric].name;
 }
 
 // ─── Age groups (pooled seasons 7 to 9) ─────────────────────────────────────
@@ -764,4 +780,193 @@ export function hyroxSeedRunPaceSecKm(state: HyroxSeedStateInput, band?: Ability
 export function hyroxSeedRoxzoneSec(state: HyroxSeedStateInput, band?: AbilityBand): number {
   const field = hyroxSeedField(state);
   return seedRoxzoneSecFor(band ?? state.hyroxConfig?.athleteBand ?? 'intermediate', field.format, field.sex);
+}
+
+// ─── Peers: finishers at the same finish time (tracking) ────────────────────
+
+/** The segments of a HYROX result a peer reference covers, in the order the
+ *  results report them: the 8 km of running, the 8 stations, the Roxzone. */
+export type HyroxPeerSegment = 'run_total' | HyroxStation | 'roxzone';
+
+export const HYROX_PEER_SEGMENTS: readonly HyroxPeerSegment[] = ['run_total', ...HYROX_STATION_ORDER, 'roxzone'];
+
+/** What finishers at one finish time typically do in each segment. */
+export interface HyroxPeerSplits {
+  cohort: HyroxResultsCohort;
+  totalSec: number;
+  /** Seconds per segment: the band medians at totalSec plus the medians'
+   *  additivity gap spread by skew, so the 10 segments sum to totalSec. */
+  segments: Record<HyroxPeerSegment, number>;
+  /** Each segment's share of the medians' additivity gap (included in
+   *  `segments`): an estimate, so "Where you lost time" widens a segment's
+   *  level band by it (hyrox-lose-time.ts). */
+  residualSec: Record<HyroxPeerSegment, number>;
+  /** segments.run_total over the 8 legs, by the cohort's median leg shape. */
+  runLegsSec: number[];
+  /** The cohort's median leg shape: share of the run total per leg. */
+  runLegShares: number[];
+  /** totalSec against the band anchors: between two (interpolated), or
+   *  faster than the fastest band's median finish / slower than the slowest
+   *  (the end band's split mix, scaled to totalSec). */
+  position: 'within' | 'faster' | 'slower';
+}
+
+function bandSeedCellsFor(cohort: HyroxResultsCohort) {
+  const cells = HYROX_S89_BAND_SEEDS[cohort.format];
+  const bySex = cells[cohort.sex] ?? cells.pooled;
+  if (!bySex) return null;
+  const anchors = TIME_BANDS.map(b => bySex[b]).filter((c): c is NonNullable<typeof c> => c != null);
+  return anchors.length >= 2 ? [...anchors].sort((a, b) => a.medians.total - b.medians.total) : null;
+}
+
+/** Share of the run total per leg (run 1 to run 8): the cohort's median leg
+ *  splits (seasons 7 to 9, the only per-leg data in the results); a pooled
+ *  cohort averages the shares of the format's published sex cells. */
+export function hyroxRunLegShares(cohort: HyroxResultsCohort): number[] {
+  const cells = HYROX_S79_RUN_LEG_MEDIANS_SEC[cohort.format];
+  const share = (legs: readonly number[]): number[] => {
+    const sum = legs.reduce((a, b) => a + b, 0);
+    return legs.map(l => l / sum);
+  };
+  const own = cohort.sex !== 'pooled' ? cells[cohort.sex] : undefined;
+  if (own && own.length === 8) return share(own);
+  const all = Object.values(cells).filter((l): l is readonly number[] => l != null && l.length === 8).map(share);
+  if (all.length === 0) return new Array(8).fill(1 / 8);
+  return Array.from({ length: 8 }, (_, i) => all.reduce((a, s) => a + s[i], 0) / all.length);
+}
+
+/**
+ * Each segment's weight in the medians' additivity gap (hyroxPeerSplitsAt):
+ * its right skew in the cohort's own S8-S9 results table, the Bowley
+ * numerator (p75 - p50) - (p50 - p25), as a share of the 10 segments' total.
+ * A right-skewed split's mean sits above its median, and the means are what
+ * add up to the finish, so the gap between the summed medians and the median
+ * finish belongs mostly to the skewed segments (Open Singles women: run total
+ * 94 s, wall balls 40 s, Roxzone 36 s, SkiErg 4 s). A segment with no right
+ * skew gets none. Null without a published table for every segment.
+ */
+export function hyroxPeerResidualWeights(cohort: HyroxResultsCohort): Record<HyroxPeerSegment, number> | null {
+  const skew = {} as Record<HyroxPeerSegment, number>;
+  for (const seg of HYROX_PEER_SEGMENTS) {
+    const table = hyroxResultsTable(seg, cohort);
+    if (!table) return null;
+    const q = (pct: number) => secondsAtPercentileIn(table, pct);
+    skew[seg] = Math.max(0, (q(75) - q(50)) - (q(50) - q(25)));
+  }
+  const sum = HYROX_PEER_SEGMENTS.reduce((a, seg) => a + skew[seg], 0);
+  if (!(sum > 0)) return null;
+  return Object.fromEntries(HYROX_PEER_SEGMENTS.map(seg => [seg, skew[seg] / sum])) as Record<HyroxPeerSegment, number>;
+}
+
+/**
+ * The peer reference for a finish time: what finishers in the cohort who
+ * finished in `totalSec` typically spend on each segment.
+ *
+ * Method: the band seeds are the real median split of every segment among the
+ * finishers in each ability band of the cohort's field (HYROX_S89_BAND_SEEDS,
+ * five bands from the top 1% to the slowest 7%), each band anchored at its
+ * own median finish. Between two anchors each segment is interpolated
+ * linearly in finish time; past the fastest or slowest anchor the end band's
+ * split mix is scaled to the finish time. Medians do not add up: the 10
+ * segment medians of a band sum to within 1.3% of its median finish, nearly
+ * always under it. That gap (finish minus the summed medians) is spread by
+ * each segment's right skew in the cohort's results (hyroxPeerResidualWeights),
+ * so the reference sums to `totalSec` and an athlete at their peers' typical
+ * mix loses nothing anywhere. Spreading it by segment size instead put about
+ * half of it on the run total (19 to 33 s at the band median finishes), so a
+ * typical runner read 20 to 30 s gained on Running; by skew the run takes 4
+ * to 25 s, its own share (lane rp review 3).
+ *
+ * Why not each segment's own quantile at the finish percentile: no finisher
+ * sits at the same percentile in every segment, so per-segment quantiles run
+ * fast of the real band medians at the fast end (up to about 95 s a segment
+ * for the top band, the run total the most) and slow at the slow end (up to
+ * about 180 s on the Roxzone for the slowest band). The conditional medians are the field's own
+ * answer to "what do athletes who finish in this time do".
+ *
+ * Limits: cohort medians, not the same athletes; the skew weights are the
+ * whole field's, not the skew among finishers at one time (the data has no
+ * per-band quartiles); one leg shape for every finish time; venues differ
+ * (sled surface, run course, Roxzone layout), and the band medians mix every
+ * venue. Side of the line: tracking.
+ */
+export function hyroxPeerSplitsAt(cohort: HyroxResultsCohort, totalSec: number): HyroxPeerSplits | null {
+  if (!Number.isFinite(totalSec) || totalSec <= 0) return null;
+  const anchors = bandSeedCellsFor(cohort);
+  if (!anchors) return null;
+  const first = anchors[0].medians;
+  const last = anchors[anchors.length - 1].medians;
+  let raw: Record<HyroxPeerSegment, number>;
+  let position: HyroxPeerSplits['position'] = 'within';
+  const scaled = (m: Record<HyroxResultsMetric, number>, k: number) =>
+    Object.fromEntries(HYROX_PEER_SEGMENTS.map(seg => [seg, m[seg] * k])) as Record<HyroxPeerSegment, number>;
+  if (totalSec <= first.total) {
+    raw = scaled(first, totalSec / first.total);
+    position = totalSec < first.total ? 'faster' : 'within';
+  } else if (totalSec >= last.total) {
+    raw = scaled(last, totalSec / last.total);
+    position = totalSec > last.total ? 'slower' : 'within';
+  } else {
+    let i = 0;
+    while (i < anchors.length - 2 && totalSec > anchors[i + 1].medians.total) i++;
+    const a = anchors[i].medians;
+    const b = anchors[i + 1].medians;
+    const w = (totalSec - a.total) / (b.total - a.total);
+    raw = Object.fromEntries(HYROX_PEER_SEGMENTS.map(seg => [seg, a[seg] + w * (b[seg] - a[seg])])) as Record<HyroxPeerSegment, number>;
+  }
+  const residual = totalSec - HYROX_PEER_SEGMENTS.reduce((acc, seg) => acc + raw[seg], 0);
+  const weights = hyroxPeerResidualWeights(cohort);
+  const rawSum = totalSec - residual;
+  const residualSec = Object.fromEntries(HYROX_PEER_SEGMENTS.map(seg => [
+    seg,
+    residual * (weights ? weights[seg] : raw[seg] / rawSum),
+  ])) as Record<HyroxPeerSegment, number>;
+  const segments = Object.fromEntries(HYROX_PEER_SEGMENTS.map(seg => [seg, raw[seg] + residualSec[seg]])) as Record<HyroxPeerSegment, number>;
+  const runLegShares = hyroxRunLegShares(cohort);
+  const runLegsSec = runLegShares.map(sh => segments.run_total * sh);
+  return { cohort, totalSec, segments, residualSec, runLegsSec, runLegShares, position };
+}
+
+/** The competitive anchor of a cohort: the median split of every segment
+ *  among the top 1% of its finishers (the competitive band seed), and the
+ *  cohort's fast end per segment, the faster of that median and the fastest
+ *  split its S8-S9 table publishes (the p1 row). The goal back-calculation's
+ *  floors are the fast end, one per component for every athlete in the field
+ *  (hyrox-race-plan.ts hyroxGoalBackCalcOptions). Null without a cell. */
+export interface HyroxCompetitiveFloors {
+  stationSec: Record<HyroxStation, number>;
+  runSec: number;
+  roxzoneSec: number;
+  /** The band's median finish. */
+  totalSec: number;
+  /** The fast end per segment: min(top-1% median, the cohort's p1 row; Pro
+   *  Mixed, which does not exist, reads the pooled Pro Doubles table like the
+   *  band seeds). */
+  fastest: { stationSec: Record<HyroxStation, number>; runSec: number; roxzoneSec: number };
+}
+
+/** The fastest split a cohort's S8-S9 table publishes for a segment (its
+ *  first row, the p1 point in every published cell); the format's pooled
+ *  table when the cell is not published. */
+function fastestPublishedSec(seg: HyroxPeerSegment, cohort: HyroxResultsCohort): number | null {
+  const table = hyroxResultsTable(seg, cohort) ?? hyroxResultsTable(seg, { format: cohort.format, sex: 'pooled' });
+  return table && table.length > 0 ? table[0][0] : null;
+}
+
+export function hyroxCompetitiveFloors(cohort: HyroxResultsCohort): HyroxCompetitiveFloors | null {
+  const anchors = bandSeedCellsFor(cohort);
+  if (!anchors) return null;
+  const m = anchors[0].medians;
+  const fast = (seg: HyroxPeerSegment, median: number) => Math.min(median, fastestPublishedSec(seg, cohort) ?? median);
+  return {
+    stationSec: Object.fromEntries(HYROX_STATION_ORDER.map(st => [st, m[st]])) as Record<HyroxStation, number>,
+    runSec: m.run_total,
+    roxzoneSec: m.roxzone,
+    totalSec: m.total,
+    fastest: {
+      stationSec: Object.fromEntries(HYROX_STATION_ORDER.map(st => [st, fast(st, m[st])])) as Record<HyroxStation, number>,
+      runSec: fast('run_total', m.run_total),
+      roxzoneSec: fast('roxzone', m.roxzone),
+    },
+  };
 }

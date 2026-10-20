@@ -123,7 +123,10 @@ describe('real station percentiles, no "est." label', () => {
     const p = predictHyroxRace(s)!;
     const cohort = { format: 'open_singles' as const, sex: 'female' as const };
     const out = renderPerformanceRadar({ stations: p.stations, cohort });
-    expect(out).toContain(hyroxResultsCaption(cohort, 'ski_erg'));
+    // The field's finisher count: an 8-spoke chart names no one station's
+    // split count.
+    expect(out).toContain(hyroxResultsCaption(cohort));
+    expect(out).not.toContain('with a timed');
     expect(out).not.toMatch(/est\./);
   });
 

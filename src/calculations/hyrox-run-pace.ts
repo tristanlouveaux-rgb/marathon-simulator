@@ -46,6 +46,7 @@ import { gp } from './paces';
 import { SEED_RUN_PACE_SEC_KM, HYROX_RUN_PACE_MIN_SEC_KM, HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { doublesRatioAt, seedRoxzoneSecForFormat, hyroxDoublesTables, hyroxDoublesTablesForState, type HyroxDoublesTables } from './hyrox-doubles';
 import { hyroxSeedRunPaceSecKm } from './hyrox-results';
+import { resolveHyroxAthleteSex } from './hyrox-division';
 import {
   computePersonalRunPaceOffset,
   blendPersonalRunPaceOffset,
@@ -282,9 +283,20 @@ export function refreshHyroxPersonalRunPaceOffset(state: SimulatorState): boolea
   const splitCount = splits ? Object.keys(splits).length : 0;
   const hasSplits = splitCount >= 6;
   const band = hx.athleteBand;
-  // The previous race's own field: its weight family, the pair's division
-  // (else sex) for doubles, the athlete's sex for singles.
-  const prevTables = hyroxDoublesTables(prevFmt, state.biologicalSex, hx.division);
+  // The previous race's own field: its weight family, the division the pair
+  // raced in (hyroxPreviousTimeDivision, else the current division, else
+  // sex) for doubles, the athlete's sex for singles. The same field "where
+  // you lost time" compares the result in.
+  const raceDivision = hx.hyroxPreviousTimeDivision ?? hx.division;
+  // The athlete's own sex (their singles field), hyroxPlanningBandFor's rule:
+  // biological sex, then the current division pick, then the race's (a
+  // women's or men's pair says it). The race division alone would read a
+  // sex-unset Women pick who raced Mixed in the pooled singles field here
+  // while her planning band reads the women's.
+  const athleteSex = resolveHyroxAthleteSex(state.biologicalSex, hx.division)
+    ?? resolveHyroxAthleteSex(undefined, hx.hyroxPreviousTimeDivision)
+    ?? state.biologicalSex;
+  const prevTables = hyroxDoublesTables(prevFmt, athleteSex, raceDivision);
 
   let stationsTotalSec: number;
   let roxzoneSec: number;
@@ -316,9 +328,12 @@ export function refreshHyroxPersonalRunPaceOffset(state: SimulatorState): boolea
 
   const prevTargetFormat: 'singles' | 'doubles' =
     (prevFmt === 'open_doubles' || prevFmt === 'pro_doubles') ? 'doubles' : 'singles';
+  // The model at the previous race: the athlete's own sex, the race's
+  // format and division (the same tables as the observation above).
   const fakeState = {
     ...state,
-    hyroxConfig: { ...hx, format: prevFmt, athleteBand: band },
+    biologicalSex: athleteSex,
+    hyroxConfig: { ...hx, format: prevFmt, athleteBand: band, division: raceDivision },
   } as SimulatorState;
   const modelAtPrev = derivePopulationRunPace(fakeState, prevTargetFormat);
   if (!modelAtPrev) return false;

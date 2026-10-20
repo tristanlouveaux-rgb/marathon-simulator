@@ -5,25 +5,54 @@
  * finish time, what per-station and per-run-pace times does the athlete need?
  *
  * Algorithm (headroom-weighted distribution per ISSUE-196):
- *   1. Compute total gain needed: prediction.totalSec - targetSec.
+ *   1. Compute total gain needed: prediction.totalSec - targetSec, less what
+ *      the Roxzone gives at the goal (opts.roxzoneTargetSec).
  *   2. For each component (8 stations + run pace bucket), compute headroom =
- *      current - floor. Floor for stations = `competitive` band seed;
- *      floor for run pace = HYROX_RUN_PACE_MIN_SEC_KM × 8 legs.
+ *      current - floor.
  *   3. Distribute gain proportional to headroom share.
  *   4. If allocated gain exceeds a component's headroom, cap at floor and
  *      redistribute the excess to remaining components.
  *   5. If total headroom can't cover the gain, flag as 'unrealistic'.
  *
- * No new constants. `STATION_SEED_TIMES_SEC['competitive']` and
- * `HYROX_RUN_PACE_MIN_SEC_KM` are reused as practical floors.
+ * Feasibility of a reachable goal is graded against the forecast's likely
+ * range (opts.likelyRangeSec, the Forecast hero's "Likely X–Y",
+ * hyroxLikelyRangeSec): at or slower than its fast end, 'achievable'; faster,
+ * 'stretch'. No threshold of its own: the range is the one the athlete
+ * already sees. (Before: a stretch past 70% of headroom, with an unsourced
+ * "6+ months of training" caveat; a 1:29:45 man read "achievable" for a
+ * goal 20 minutes faster, outside his own forecast's range.) Without a range
+ * every reachable goal is 'achievable'.
  *
- * Roxzone is held constant. It's a small slice (~3 min on a 75-min total)
- * and not really trainable in isolation.
+ * Floors (opts.floors): the athlete's own field, per format and sex or
+ * doubles division (hyroxCompetitiveFloors in hyrox-results.ts; the pair's
+ * times for doubles), passed by hyroxGoalBackCalcOptions (hyrox-race-plan.ts).
+ * One floor per component for every athlete: the cohort's fast end, the
+ * faster of the top-1% median split and the fastest split the cohort's table
+ * publishes (its p1 row). A floor belongs to the field: it never moves with the
+ * athlete's own forecast, so the fastest time the floors allow never jumps as
+ * a forecast crosses a band median (review 4: a tier that switched from the
+ * median to p1 at the median moved a competitive man's floor sum 93 s when
+ * each of his stations went 1 s slower).
+ * The floors are venue-neutral results, so each carries the forecast line's own
+ * venue seconds (station adjustedSec - baseSec; the run, runSec less the
+ * pre-venue run). Without opts.floors the legacy floors stand:
+ * `STATION_SEED_TIMES_SEC['competitive']` (Open, sexes pooled) x the line's
+ * doubles ratio, and `HYROX_RUN_PACE_MIN_SEC_KM` x 8.
+ *
+ * Roxzone: held at the forecast's unless opts.roxzoneTargetSec gives the
+ * Roxzone at the goal (the race plan scales it with finish time from the
+ * real results). It never absorbs more than the whole gain, and never goes
+ * below its floor (the cohort's fast-end Roxzone), and a floor never lifts it
+ * above the forecast's own Roxzone. When every other component sits at its
+ * floor and the goal is still out of reach, the Roxzone gives up to its own
+ * floor, so the fastest time the floors allow (achievedSec) is the floor sum
+ * whatever the goal.
  */
 
 import type { HyroxPrediction } from './race-prediction.hyrox';
 import type { HyroxStation } from '@/types/triathlon';
 import { STATION_SEED_TIMES_SEC, HYROX_RUN_PACE_MIN_SEC_KM } from '@/constants/hyrox-benchmarks';
+import { ftRounded } from '@/utils/format';
 
 export interface GoalStationTarget {
   station: HyroxStation;
@@ -40,13 +69,33 @@ export interface GoalRunPaceTarget {
   deltaSecKm: number;
 }
 
+/** Floors from the athlete's own field, venue-neutral, in the forecast
+ *  lines' own terms (the pair's time for doubles): one per component. */
+export interface GoalBackCalcFloors {
+  stationSec: Partial<Record<HyroxStation, number>>;
+  /** The 8 run legs together. */
+  runSec: number;
+  /** The Roxzone floor. Without it the Roxzone has no floor beyond the
+   *  whole-gain clamp. */
+  roxzoneSec?: number;
+}
+
+export interface GoalBackCalcOptions {
+  floors?: GoalBackCalcFloors;
+  /** Roxzone at the goal. Default: held at the forecast's. */
+  roxzoneTargetSec?: number;
+  /** The forecast's likely range [fast, slow] (hyroxLikelyRangeSec). A
+   *  reachable goal faster than its fast end is a stretch. */
+  likelyRangeSec?: [number, number];
+}
+
 export interface GoalBackCalcResult {
   feasibility: 'already_on_pace' | 'achievable' | 'stretch' | 'unrealistic';
   gainNeededSec: number;
   totalHeadroomSec: number;
   stationTargets: GoalStationTarget[];
   runPaceTarget: GoalRunPaceTarget;
-  /** Roxzone is held at current — listed for completeness. */
+  /** Roxzone at the goal: the forecast's, or opts.roxzoneTargetSec. */
   roxzoneSec: number;
   /** Total of (run + stations + roxzone) at the calculated targets — should
    *  equal targetTotalSec for achievable goals; less than target for unrealistic
@@ -54,8 +103,14 @@ export interface GoalBackCalcResult {
   achievedSec: number;
   /** Remaining gap when the gain is unachievable from headroom alone. */
   shortfallSec: number;
-  /** Caveat copy if any (e.g. "this is a stretch goal — most athletes…"). */
+  /** Caveat copy: a stretch goal names the likely range it is faster than;
+   *  an unrealistic one says what the floors are. */
   caveat: string | null;
+  /** opts.likelyRangeSec, or null. */
+  likelyRangeSec: [number, number] | null;
+  /** 'cohort': floors from the athlete's own field (opts.floors); 'legacy':
+   *  the pooled Open competitive seed and the run-pace minimum. */
+  floorSource: 'cohort' | 'legacy';
 }
 
 interface ComponentSlot {
@@ -68,13 +123,33 @@ interface ComponentSlot {
 export function computeGoalBackCalc(
   prediction: HyroxPrediction,
   targetTotalSec: number,
+  opts: GoalBackCalcOptions = {},
 ): GoalBackCalcResult {
   const stationLines = prediction.stations;
   const currentRunSec = prediction.runSec; // post-venue, post-fatigue
-  const roxzoneSec = prediction.roxzoneSec;
+  const floors = opts.floors;
+  const floorSource: GoalBackCalcResult['floorSource'] = floors ? 'cohort' : 'legacy';
+  const likelyRangeSec = opts.likelyRangeSec ?? null;
+  const totalGain = prediction.totalSec - targetTotalSec;
+  // The run's venue seconds: runSec less the pre-venue run (rawSec is the
+  // pre-venue run + stations + Roxzone; the Roxzone takes no venue factor).
+  const rawRunSec = prediction.rawSec - stationLines.reduce((sum, l) => sum + l.baseSec, 0) - prediction.roxzoneSec;
+  const runVenueSec = prediction.courseFactors?.length && rawRunSec > 0 ? currentRunSec - rawRunSec : 0;
+  // Roxzone floor (no venue factor), never above the forecast's own Roxzone.
+  const roxzoneFloorSec = floors?.roxzoneSec != null
+    ? Math.min(prediction.roxzoneSec, floors.roxzoneSec)
+    : null;
+  // Roxzone at the goal, never absorbing more than the whole gain and never
+  // below its floor.
+  let roxzoneSec = opts.roxzoneTargetSec != null && totalGain > 0
+    ? Math.max(opts.roxzoneTargetSec, prediction.roxzoneSec - totalGain, roxzoneFloorSec ?? -Infinity)
+    : prediction.roxzoneSec;
 
-  // Floor for run pace = 8 legs at the band-elite minimum.
-  const runFloorSec = HYROX_RUN_PACE_MIN_SEC_KM * 8;
+  // Floor for the run: the field's floor plus the run's venue seconds, else
+  // 8 legs at the legacy minimum pace.
+  const runFloorSec = floors
+    ? floors.runSec + runVenueSec
+    : HYROX_RUN_PACE_MIN_SEC_KM * 8;
 
   // Component slots. Each row gets a `currentSec` and a `floorSec`. We
   // distribute the gain proportionally to headroom across these.
@@ -84,16 +159,28 @@ export function computeGoalBackCalc(
       kind: 'station' as const,
       station: line.station,
       currentSec: line.adjustedSec,
-      // Floors are singles seed times; a doubles line is the pair's time, so
-      // its floor scales by the same doubles ratio (teamRatio, absent = 1).
-      floorSec: STATION_SEED_TIMES_SEC.competitive[line.station] * (line.teamRatio ?? 1),
+      // Cohort floors are already in the line's terms (venue-neutral, plus
+      // the line's venue seconds). Legacy floors are singles seed times; a
+      // doubles line is the pair's time, so its floor scales by the same
+      // doubles ratio (teamRatio, absent = 1).
+      floorSec: floors?.stationSec[line.station] != null
+        ? floors.stationSec[line.station]! + (line.adjustedSec - line.baseSec)
+        : STATION_SEED_TIMES_SEC.competitive[line.station] * (line.teamRatio ?? 1),
     })),
   ];
 
-  const gainNeeded = prediction.totalSec - targetTotalSec;
+  // The gain run and stations must find, measured from the components' own
+  // sum (the forecast rounds the run and each station line separately, so
+  // their sum can sit a few seconds off totalSec, and measuring from totalSec
+  // left an achievable goal a few seconds short: 'unrealistic'), less what
+  // the Roxzone gives at the goal.
+  const componentsSec = currentRunSec
+    + stationLines.reduce((sum, l) => sum + l.adjustedSec, 0)
+    + prediction.roxzoneSec;
+  const gainNeeded = Math.max(0, componentsSec - targetTotalSec - (prediction.roxzoneSec - roxzoneSec));
 
   // Already on pace. No work needed.
-  if (gainNeeded <= 0) {
+  if (totalGain <= 0) {
     return {
       feasibility: 'already_on_pace',
       gainNeededSec: 0,
@@ -114,6 +201,8 @@ export function computeGoalBackCalc(
       achievedSec: prediction.totalSec,
       shortfallSec: 0,
       caveat: null,
+      likelyRangeSec,
+      floorSource,
     };
   }
 
@@ -188,9 +277,17 @@ export function computeGoalBackCalc(
     };
   });
 
-  const achievedSec = runTargetSec
+  let achievedSec = runTargetSec
     + stationTargets.reduce((sum, t) => sum + t.targetSec, 0)
     + roxzoneSec;
+  // Run and stations all at their floors and the goal still out of reach:
+  // the Roxzone gives up to its own floor, so the fastest time the floors
+  // allow is the floor sum, whatever the goal.
+  if (totalGain > 0 && roxzoneFloorSec != null && achievedSec - targetTotalSec > 0.5 && roxzoneSec > roxzoneFloorSec) {
+    const give = Math.min(achievedSec - targetTotalSec, roxzoneSec - roxzoneFloorSec);
+    roxzoneSec -= give;
+    achievedSec -= give;
+  }
   // Shortfall = achieved - target when we couldn't get fast enough (achieved > target).
   // The reverse direction (achieved < target, i.e. achieved is faster than asked)
   // is impossible because we cap allocations at headroom.
@@ -202,10 +299,12 @@ export function computeGoalBackCalc(
   let caveat: string | null = null;
   if (shortfallSec > 0) {
     feasibility = 'unrealistic';
-    caveat = `No realistic combination of station and run-pace gains reaches this time. The estimate uses the competitive population floor across all stations and run pace. Pick a more achievable goal or extend training time.`;
-  } else if (gainNeeded > totalHeadroom * 0.7) {
+    caveat = floors
+      ? `Every station${floors.roxzoneSec != null ? ', the run and the Roxzone' : ' and the run'} would have to be faster than top-1% level in your field.`
+      : 'Every station and the run would have to be faster than the pooled competitive floor.';
+  } else if (likelyRangeSec && targetTotalSec < likelyRangeSec[0]) {
     feasibility = 'stretch';
-    caveat = 'Most athletes would need 6+ months of focused training to hit a goal this aggressive.';
+    caveat = `Faster than your forecast's likely range, ${ftRounded(likelyRangeSec[0])} to ${ftRounded(likelyRangeSec[1])}.`;
   } else {
     feasibility = 'achievable';
   }
@@ -220,5 +319,7 @@ export function computeGoalBackCalc(
     achievedSec,
     shortfallSec,
     caveat,
+    likelyRangeSec,
+    floorSource,
   };
 }

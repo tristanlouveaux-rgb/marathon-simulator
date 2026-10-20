@@ -25,7 +25,7 @@ import {
 import { ensureHyroxChronicSeed, generateHyroxPlan } from '@/workouts/plan_engine.hyrox';
 import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan } from '@/state/initialization';
 import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
-import { isHyroxProFormat } from '@/calculations/hyrox-division';
+import { isHyroxDoublesFormat, isHyroxProFormat } from '@/calculations/hyrox-division';
 
 type HyroxFormat = 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
 
@@ -112,7 +112,10 @@ export function applyHyroxPrevFormatChange(newFormat: HyroxFormat): PrevFormatCh
   const prevTimeSec = hx.previousHyroxTimeSec;
   if (prevTimeSec != null) {
     const targetIsDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
-    const newBand = hyroxPlanningBandFor(prevTimeSec, newFormat, s.biologicalSex, hx.division);
+    // A doubles result decomposes in the division it was raced in, when one
+    // was recorded with it.
+    const raceDivision = isHyroxDoublesFormat(newFormat) ? hx.hyroxPreviousTimeDivision : undefined;
+    const newBand = hyroxPlanningBandFor(prevTimeSec, newFormat, s.biologicalSex, hx.division, raceDivision);
     if (newBand !== hx.athleteBand) {
       hx.athleteBand = newBand;
       const baseCap = HYROX_MTL_CAP[newBand];

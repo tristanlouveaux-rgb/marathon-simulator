@@ -12,15 +12,16 @@ import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntra
 import { renderTabBar, wireTabBarHandlers, type TabId } from '@/ui/tab-bar';
 import { buildHyroxTrademarkFooter } from './trademark-footer';
 import { predictHyroxRace, hyroxStationSeedsForState, type HyroxStationLine, type HyroxRunLeg, type HyroxProjectionMarkers, type HyroxPrediction, type HyroxStationProjection } from '@/calculations/race-prediction.hyrox';
-import { buildHyroxProjection, hyroxForecastBandPct } from '@/calculations/race-projection.hyrox';
-import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
+import { buildHyroxProjection, hyroxLikelyRangeSec, type HyroxProjection } from '@/calculations/race-projection.hyrox';
+import { STATION_DISPLAY, HYROX_STATION_ORDER as STATION_KEYS } from '@/constants/hyrox-benchmarks';
 import { getHyroxVenueById, rescaleTimeAcrossVenues } from '@/data/hyrox-venues';
 import { getHyroxEventById, getVenueIdForEvent } from '@/data/hyrox-events';
 import { getStationPercentile, stationStatus, STATION_PERCENTILE_CAVEAT, hyroxForecastProvenanceCaption, hyroxTierLabel } from '@/calculations/hyrox-population';
 import { hyroxCohortForState, hyroxCohortLabel } from '@/calculations/hyrox-results';
 import { hyroxDoublesTablesForState } from '@/calculations/hyrox-doubles';
 import { latestIsPR, latestTestAgeMonths, type HyroxFormat } from '@/calculations/hyrox-station-history';
-import { topWeakestLinks } from '@/calculations/hyrox-weakest-link';
+import { topWeakestLinks, weakestLinkRowFor, type WeakestLinkRow } from '@/calculations/hyrox-weakest-link';
+import { analyzeHyroxLoseTime, fmtLostTime, hyroxTopLostSegment, type HyroxLoseTimeSegment } from '@/calculations/hyrox-lose-time';
 import { computeStationPotential } from '@/calculations/hyrox-station-potential';
 import { renderPerformanceRadar } from './performance-radar';
 import { renderPercentileDistributions } from './percentile-distributions';
@@ -30,6 +31,9 @@ import { getDisciplineCapacity } from '@/injury/engine';
 import { injuryWithResumeFallback } from '@/calculations/hyrox-injury';
 import { pbAgeCaptionText } from '@/ui/pb-age-caption';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
+import { buildRacePlanEntryCard, openRacePlanGoalModal, renderHyroxRacePlanView } from './race-plan-view';
+import { hyroxForecastRaceClock } from '@/calculations/hyrox-race-plan';
+import { buildLoseTimeCard, wireLoseTimeCard } from './lose-time-view';
 
 function fmtMmSs(sec: number): string {
   if (!Number.isFinite(sec) || sec <= 0) return '—';
@@ -95,8 +99,8 @@ function renderHyroxRaceOutcomeRetroCard(s: SimulatorState): string {
   return `
     <div style="background:#E8F2E5;border:1px solid #B8D6AE;border-radius:14px;padding:16px;margin-bottom:14px">
       <div style="font-size:11px;font-weight:600;color:#5a8050;margin-bottom:6px">Last race</div>
-      <div style="font-size:15px;font-weight:600;color:#0F172A;margin-bottom:4px">You beat your target by ${gapTxt}</div>
-      <div style="font-size:12px;color:#64748B;line-height:1.5">Target ${fmtMmSs(latest.targetTotalSec)}, actual ${fmtMmSs(latest.actualTotalSec)}.</div>
+      <div style="font-size:15px;font-weight:600;color:#0F172A;margin-bottom:4px">You beat your goal by ${gapTxt}</div>
+      <div style="font-size:12px;color:#64748B;line-height:1.5">Goal ${fmtMmSs(latest.targetTotalSec)}, actual ${fmtMmSs(latest.actualTotalSec)}.</div>
     </div>
   `;
 }
@@ -124,7 +128,7 @@ function renderRunLegsTable(legs: HyroxRunLeg[], currentRunSec: number, projecte
       : (slipSec > 0 ? `+${Math.round(slipSec)}s` : '—');
     return `
       <div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-top:1px solid rgba(0,0,0,0.04);font-size:12px">
-        <span style="width:28px;text-align:center;color:var(--c-faint);font-weight:600;flex-shrink:0">R${leg.legNumber}</span>
+        <span style="width:36px;text-align:left;color:var(--c-faint);font-weight:600;flex-shrink:0;font-size:11px;white-space:nowrap">Run ${leg.legNumber}</span>
         <div style="flex:1;height:4px;background:#F1F5F9;border-radius:2px;overflow:hidden">
           <div style="height:100%;width:${Math.max(2, barPct)}%;background:${barColour};border-radius:2px"></div>
         </div>
@@ -175,26 +179,20 @@ function renderRaceOrderTable(
   const fastestLegPace = Math.min(...legs.map(l => l.paceSecKm));
   const maxLegSlip = Math.max(...legs.map(l => l.paceSecKm - fastestLegPace));
 
-  // Cumulative race-time at the end of each event (run or station), built once
-  // in real-race order. We absorb the gap between summed-displayed-times and
-  // `prediction.totalSec` (course-venue adjustment + RoxZone transitions) as a
-  // uniform per-event overhead, so the last cumulative value lines up with the
-  // headline projected finish. Caption explains it under the card.
-  const sumDisplayed =
-    legs.reduce((s, l) => s + l.paceSecKm, 0) +
-    stations.reduce((s, st) => s + st.baseSec, 0);
-  const overhead = prediction.totalSec - sumDisplayed;
-  const perEventOverhead = overhead / (legs.length + stations.length);
+  // Race clock at the end of each event, in real-race order: the one forecast
+  // clock (hyroxForecastRaceClock, hyrox-race-plan.ts), which the race plan
+  // page reads too. The forecast's own lines, with the Roxzone around each
+  // station, so the clock after Wall Balls is the headline finish. Race order
+  // shows each station's race-day split at the venue (adjustedSec, the line
+  // that clock sums); Station order keeps the test-pace "now" (baseSec).
+  const raceClock = hyroxForecastRaceClock(prediction);
   const cumByKey = new Map<string, number>();
-  let cumSec = 0;
-  for (let i = 0; i < legs.length; i++) {
-    cumSec += legs[i].paceSecKm + perEventOverhead;
-    cumByKey.set(`run-${i}`, Math.round(cumSec));
-    if (i < stations.length) {
-      cumSec += stations[i].baseSec + perEventOverhead;
-      cumByKey.set(`station-${i}`, Math.round(cumSec));
-    }
-  }
+  const splitByKey = new Map<string, number>();
+  raceClock.legs.forEach(l => {
+    const key = l.kind === 'run' ? `run-${l.legNumber - 1}` : `station-${l.legNumber - 1}`;
+    cumByKey.set(key, l.clockSec);
+    splitByKey.set(key, l.splitSec);
+  });
 
   const rows: string[] = [];
   let rowIndex = 0;
@@ -208,7 +206,7 @@ function renderRaceOrderTable(
       if (i < stations.length) {
         const line = stations[i];
         const proj = stationProjByName.get(line.station);
-        rows.push(renderStationOrderRow(line, proj, state, fmt, rowIndex++, cumByKey.get(`station-${i}`) ?? 0, 'race-order'));
+        rows.push(renderStationOrderRow(line, proj, state, fmt, rowIndex++, cumByKey.get(`station-${i}`) ?? 0, 'race-order', splitByKey.get(`station-${i}`)));
       }
     }
   } else {
@@ -254,14 +252,14 @@ function renderRunLegRow(
     return `
       <div style="display:grid;grid-template-columns:auto 1fr 72px 60px;align-items:center;gap:12px;padding:9px 0;border-top:${rowIndex === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'};font-size:12px">
         <span style="display:flex;align-items:center;gap:10px;min-width:0">
-          <span style="width:24px;color:var(--c-faint);font-weight:600;font-size:11px">R${leg.legNumber}</span>
+          <span style="width:36px;color:var(--c-faint);font-weight:600;font-size:11px;white-space:nowrap">Run ${leg.legNumber}</span>
           <div style="width:120px;max-width:30vw;height:3px;background:#F1F5F9;border-radius:2px;overflow:hidden">
             <div style="height:100%;width:${Math.max(2, barPct)}%;background:${barColour};border-radius:2px"></div>
           </div>
         </span>
         <span></span>
         <span style="text-align:right;color:var(--c-muted);font-variant-numeric:tabular-nums;font-size:12px">${fmtPace(leg.paceSecKm)}</span>
-        <span style="text-align:right;color:var(--c-black);font-variant-numeric:tabular-nums;font-size:13px;font-weight:600">${fmtMmSs(cumulativeSec)}</span>
+        <span data-hx-race-clock="run-${leg.legNumber}" style="text-align:right;color:var(--c-black);font-variant-numeric:tabular-nums;font-size:13px;font-weight:600">${fmtMmSs(cumulativeSec)}</span>
       </div>
     `;
   }
@@ -279,7 +277,7 @@ function renderRunLegRow(
 
   return `
     <div style="display:flex;align-items:center;gap:10px;padding:11px 0;border-top:${rowIndex === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'};font-size:13px">
-      <span style="width:36px;text-align:left;color:var(--c-faint);font-weight:600;flex-shrink:0;font-size:11px">R${leg.legNumber}</span>
+      <span style="width:36px;text-align:left;color:var(--c-faint);font-weight:600;flex-shrink:0;font-size:11px;white-space:nowrap">Run ${leg.legNumber}</span>
       <span style="flex:1"></span>
       <span style="min-width:${showProjection ? 120 : 80}px;text-align:right;color:var(--c-black);font-variant-numeric:tabular-nums;font-size:12px">${paceCell}</span>
       <span style="min-width:40px;text-align:right;color:var(--c-faint);font-variant-numeric:tabular-nums;font-size:11px">${deltaCell}</span>
@@ -296,6 +294,7 @@ function renderStationOrderRow(
   rowIndex: number,
   cumulativeSec: number,
   variant: 'race-order' | 'station-order',
+  raceDaySplitSec?: number,
 ): string {
   const display = STATION_DISPLAY[line.station];
   const sourceTag = line.source === 'calibrated' ? 'Your time' : 'Estimated';
@@ -335,8 +334,8 @@ function renderStationOrderRow(
           </span>
         </span>
         <span></span>
-        <span style="text-align:right;color:var(--c-muted);font-variant-numeric:tabular-nums;font-size:12px">${fmtMmSs(currentSec)}</span>
-        <span style="text-align:right;color:var(--c-black);font-variant-numeric:tabular-nums;font-size:13px;font-weight:600">${fmtMmSs(cumulativeSec)}</span>
+        <span style="text-align:right;color:var(--c-muted);font-variant-numeric:tabular-nums;font-size:12px">${fmtMmSs(raceDaySplitSec ?? currentSec)}</span>
+        <span data-hx-race-clock="${line.station}" style="text-align:right;color:var(--c-black);font-variant-numeric:tabular-nums;font-size:13px;font-weight:600">${fmtMmSs(cumulativeSec)}</span>
       </div>
     `;
   }
@@ -599,33 +598,134 @@ function renderTrajectoryFooter(proj: HyroxProjectionMarkers): string {
  * the user's current training dose (per ISSUE-194). Reads the weakest-link
  * helper which reuses the existing per-station horizon model.
  *
+ * The segment where the last race lost the most ("Where you lost time",
+ * directly above) is added when it is not already in the top 2, with its own
+ * forecast line, so both cards name it and the past race and training read as
+ * one story:
+ *  - a station: its horizon line from the same ranking (weakestLinkRowFor);
+ *  - Running: the race-day run projection (buildHyroxProjection byDiscipline
+ *    .run), as average pace per 1 km leg, the numbers behind the Race order
+ *    card's "Average run pace" row; the gain is the run total's, which the
+ *    caption says ("8-run total"), since it is not the pace cell's
+ *    difference;
+ *  - the Roxzone (or Running and Roxzone, a stations-only paste): the same
+ *    projection's Roxzone (and run) totals.
+ *
  * Hidden when no race date is set (projection produces no gain) or when no
  * station has ≥1 second of gain available.
  */
-function renderWhereToGainCard(prediction: HyroxPrediction): string {
+interface WhereToGainRow {
+  /** data-wtg-station for a station, data-wtg-segment otherwise. */
+  attr: string;
+  name: string;
+  sub: string;
+  /** "4:40 → 4:28", or the current value alone when nothing moves. */
+  cell: string;
+  /** The current value alone, for "No gain at this dose". */
+  currentCell: string;
+  gainSec: number;
+}
+
+const LOST_MOST_SUB = 'Most time lost in your last race';
+
+/** The time-back cell of Where to gain and Biggest targets: one neutral
+ *  style, the one number rule (fmtLostTime: m:ss from a minute, "Ns" under). */
+const GAIN_CELL = 'font-size:12px;color:#4f5a3b;font-weight:600;font-variant-numeric:tabular-nums;min-width:40px;text-align:right';
+
+function stationGainRow(r: WeakestLinkRow, sub: string): WhereToGainRow {
+  return {
+    attr: `data-wtg-station="${r.station}"`,
+    name: STATION_DISPLAY[r.station].name,
+    sub,
+    cell: `${fmtMmSs(r.currentSec)} → ${fmtMmSs(r.projectedSec)}`,
+    currentCell: fmtMmSs(r.currentSec),
+    gainSec: r.gainableSec,
+  };
+}
+
+/** The bridge row for the last race's biggest loss, or null when it is
+ *  already shown or has no forecast line. */
+function lostMostGainRow(
+  prediction: HyroxPrediction,
+  proj: HyroxProjection,
+  top: WeakestLinkRow[],
+  seg: HyroxLoseTimeSegment | null,
+): WhereToGainRow | null {
+  if (!seg) return null;
+  const station = (STATION_KEYS as readonly string[]).includes(seg.key) ? seg.key as HyroxStationLine['station'] : null;
+  if (station) {
+    if (top.some(r => r.station === station)) return null;
+    const row = weakestLinkRowFor(prediction, station);
+    return row ? stationGainRow(row, LOST_MOST_SUB) : null;
+  }
+  const run = proj.byDiscipline.run;
+  const rox = proj.byDiscipline.roxzone;
+  if (seg.key === 'run_total') {
+    // Average pace per 1 km leg, rounded as the Race order card rounds it.
+    const cur = Math.round(run.currentSec / 8);
+    const next = Math.round(run.projectedSec / 8);
+    const gainSec = Math.max(0, run.currentSec - run.projectedSec);
+    return {
+      attr: 'data-wtg-segment="run_total"',
+      name: seg.label,
+      // The gain is the 8 legs together, not the per-leg pace difference
+      // the cell shows; the total keeps the subhead's sum.
+      sub: gainSec >= 1 ? `${LOST_MOST_SUB} · 8-run total` : LOST_MOST_SUB,
+      cell: cur - next >= 1 ? `${fmtPace(cur).replace('/km', '')} → ${fmtPace(next)}` : fmtPace(cur),
+      currentCell: fmtPace(cur),
+      gainSec,
+    };
+  }
+  const cur = seg.key === 'roxzone' ? rox.currentSec : run.currentSec + rox.currentSec;
+  const next = seg.key === 'roxzone' ? rox.projectedSec : run.projectedSec + rox.projectedSec;
+  return {
+    attr: `data-wtg-segment="${seg.key}"`,
+    name: seg.label,
+    sub: LOST_MOST_SUB,
+    cell: `${fmtMmSs(cur)} → ${fmtMmSs(next)}`,
+    currentCell: fmtMmSs(cur),
+    gainSec: Math.max(0, cur - next),
+  };
+}
+
+/** The bridge row's name in the subhead: "the Roxzone", as the headline
+ *  says it ("in the Roxzone"); any other segment by its label. */
+function bridgeName(row: WhereToGainRow): string {
+  return row.attr === 'data-wtg-segment="roxzone"' ? 'the Roxzone' : row.name;
+}
+
+export function renderWhereToGainCard(
+  prediction: HyroxPrediction,
+  state: SimulatorState,
+  proj: HyroxProjection = buildHyroxProjection(state, prediction),
+): string {
   const top = topWeakestLinks(prediction, 2);
   if (top.length === 0) return '';
-  const totalGain = top.reduce((sum, r) => sum + r.gainableSec, 0);
-  const rows = top.map((r, i) => {
-    const display = STATION_DISPLAY[r.station];
-    const sub = r.source === 'calibrated' ? 'Your time' : 'Estimated';
-    return `
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;font-size:13px;border-top:${i === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'}">
+  const lostMost = hyroxTopLostSegment(analyzeHyroxLoseTime(state));
+  const bridge = lostMostGainRow(prediction, proj, top, lostMost);
+  const shown = [...top.map(r => stationGainRow(r, r.source === 'calibrated' ? 'Your time' : 'Estimated')), ...(bridge ? [bridge] : [])];
+  const totalGain = shown.reduce((sum, r) => sum + r.gainSec, 0);
+  const rows = shown.map((r, i) => `
+      <div ${r.attr} style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;font-size:13px;border-top:${i === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'}">
         <span style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:0">
-          <span style="color:var(--c-black)">${display.name}</span>
-          <span style="font-size:10px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.06em">${sub}</span>
+          <span style="color:var(--c-black)">${r.name}</span>
+          <span style="font-size:10px;color:var(--c-faint)">${r.sub}</span>
         </span>
+        ${r.gainSec >= 1 ? `
         <span style="display:flex;gap:14px;align-items:baseline;flex-shrink:0">
-          <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(r.currentSec)} → ${fmtMmSs(r.projectedSec)}</span>
-          <span style="font-size:12px;color:#4f5a3b;font-weight:600;font-variant-numeric:tabular-nums;min-width:40px;text-align:right">−${Math.round(r.gainableSec)}s</span>
-        </span>
+          <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${r.cell}</span>
+          <span style="${GAIN_CELL}">−${fmtLostTime(r.gainSec)}</span>
+        </span>` : `
+        <span style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0">
+          <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${r.currentCell}</span>
+          <span style="font-size:11px;color:var(--c-faint)">No gain at this dose</span>
+        </span>`}
       </div>
-    `;
-  }).join('');
+    `).join('');
   return `
-    <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
-      <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Where to gain</div>
-      <div style="font-size:12px;color:var(--c-muted);margin-bottom:8px;line-height:1.5">Highest-impact stations at your current training dose. Total gain available: ~${Math.round(totalGain)} sec.</div>
+    <div id="hx-where-to-gain" style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px;scroll-margin-top:24px">
+      <div style="font-size:13px;font-weight:600;color:var(--c-black)">Where to gain</div>
+      <div style="font-size:12px;color:var(--c-muted);margin:4px 0 8px;line-height:1.5">Highest-impact stations at your current training dose${bridge ? `, plus ${bridgeName(bridge)}, where your last race lost the most` : ''}. Total gain available: ~${fmtLostTime(totalGain)}.</div>
       ${rows}
     </div>
   `;
@@ -648,44 +748,37 @@ function renderSkillsAnalysis(stations: HyroxStationLine[], athleteBand: string,
   });
   if (potential.topTargets.length === 0) return '';
 
-  const fmtSec = (s: number) => {
-    const total = Math.round(s);
-    const m = Math.floor(total / 60);
-    const sec = total % 60;
-    return `${m}:${String(sec).padStart(2, '0')}`;
-  };
-
   const targetBandLabel = potential.topTargets[0]?.targetBand
     ? potential.topTargets[0].targetBand.replace(/_/g, ' ')
     : 'next band';
 
-  // Green saving pill — universal "improvement = green" signal, matching the
-  // trend-card delta colour. Distinct from the radar (indigo) and the four
-  // percentile-row hues, and reads instantly as "good thing".
+  // Times in m:ss, the saving by the one number rule in Where to gain's
+  // neutral cell; under it the station's tier in the field (the time itself
+  // is already on the left).
   const limiterRows = potential.topTargets.map(p => {
     const line = stations.find(l => l.station === p.station);
     const pct = getStationPercentile(p.station, line ? line.baseSec : p.currentSec, cohort);
     return `
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:10px 0;border-top:1px solid rgba(0,0,0,0.05)">
-        <div style="flex:1">
+      <div data-bt-station="${p.station}" style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:10px 0;border-top:1px solid rgba(0,0,0,0.05)">
+        <div style="flex:1;min-width:0">
           <div style="font-size:13px;color:#0F172A;font-weight:500">${p.label}</div>
-          <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${p.currentSec}s now → ${p.targetSec}s at ${targetBandLabel}</div>
+          <div style="font-size:11px;color:var(--c-muted);margin-top:2px;font-variant-numeric:tabular-nums">${fmtMmSs(p.currentSec)} now → ${fmtMmSs(p.targetSec)} at ${targetBandLabel}</div>
         </div>
-        <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:3px">
-          <span style="font-size:11px;font-weight:600;color:#15803D;background:rgba(34,197,94,0.14);border-radius:100px;padding:2px 8px;font-variant-numeric:tabular-nums">−${p.savingSec}s</span>
-          <span style="font-size:10px;color:var(--c-faint);font-variant-numeric:tabular-nums">${fmtSec(p.currentSec)} · ${hyroxTierLabel(pct)}</span>
+        <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0">
+          <span style="${GAIN_CELL}">−${fmtLostTime(p.savingSec)}</span>
+          <span style="font-size:10px;color:var(--c-faint)">${hyroxTierLabel(pct)}</span>
         </div>
       </div>
     `;
   }).join('');
 
   const totalSavingLine = potential.totalSavingSec >= 30
-    ? `<div style="font-size:11px;color:var(--c-faint);padding:10px 0 0;border-top:1px solid rgba(0,0,0,0.05);margin-top:4px">Combined upside if all targets close: ~${Math.round(potential.totalSavingSec)}s.</div>`
+    ? `<div style="font-size:11px;color:var(--c-faint);padding:10px 0 0;border-top:1px solid rgba(0,0,0,0.05);margin-top:4px">Combined upside if all targets close: ~${fmtLostTime(potential.totalSavingSec)}.</div>`
     : '';
 
   return `
-    <div class="hf" style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
-      <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Biggest targets</div>
+    <div id="hx-biggest-targets" class="hf" style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
+      <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Biggest targets</div>
       <div style="font-size:12px;color:var(--c-muted);margin-bottom:2px">Closing the gap to ${targetBandLabel}-band on these would deliver the most time back. ${STATION_PERCENTILE_CAVEAT}</div>
       ${limiterRows}
       ${totalSavingLine}
@@ -793,18 +886,16 @@ function buildHyroxHero(
   const courseFactorPct = ((prediction.totalSec - prediction.rawSec) / rawForPct) * 100;
 
   // Likely range — the factor-based confidence band centred on the displayed
-  // forecast number. Same band-width helper feeds the projection's
-  // confidenceRangeSec, so the two surfaces never disagree. Communicates "how
-  // sure are we about this number" without a Monte Carlo sim.
-  const bandPct = hyroxForecastBandPct(prediction.confidence, proj.weeksRemaining);
-  const bandHalf = prediction.totalSec * bandPct;
-  const rangeLow = Math.round(prediction.totalSec - bandHalf);
-  const rangeHigh = Math.round(prediction.totalSec + bandHalf);
+  // forecast number (hyroxLikelyRangeSec, hyroxForecastBandPct wide). The goal
+  // feasibility grading reads the same helper, so "inside your forecast's
+  // likely range" always means this range. Communicates "how sure are we
+  // about this number" without a Monte Carlo sim.
+  const [rangeLow, rangeHigh] = hyroxLikelyRangeSec(s, prediction);
   const rangeLine = prediction.totalSec > 0
     ? `<div style="font-size:12px;color:var(--c-muted);margin-top:8px;font-variant-numeric:tabular-nums">Likely ${fmtMmSs(rangeLow)}–${fmtMmSs(rangeHigh)}</div>`
     : '';
 
-  // Target delta line: "On pace vs target" / "+X min vs target" / "−X min vs target".
+  // Goal delta line: "On pace vs goal" / "+X min vs goal" / "−X min vs goal".
   // Falls back to race-day projection delta when no target is set, so the slot
   // always carries useful information.
   const target = hx.targetFinishTimeSec ?? 0;
@@ -812,9 +903,9 @@ function buildHyroxHero(
   let deltaTxt = '';
   let deltaColor = 'var(--c-muted)';
   if (target > 0) {
-    if (Math.abs(delta) < 60) { deltaTxt = 'On pace vs target'; deltaColor = '#1F7A3D'; }
-    else if (delta > 0)        { deltaTxt = `+${Math.round(delta / 60)} min vs target`; deltaColor = '#9A6A20'; }
-    else                       { deltaTxt = `−${Math.round(-delta / 60)} min vs target`; deltaColor = '#1F7A3D'; }
+    if (Math.abs(delta) < 60) { deltaTxt = 'On pace vs goal'; deltaColor = '#1F7A3D'; }
+    else if (delta > 0)        { deltaTxt = `+${Math.round(delta / 60)} min vs goal`; deltaColor = '#9A6A20'; }
+    else                       { deltaTxt = `−${Math.round(-delta / 60)} min vs goal`; deltaColor = '#1F7A3D'; }
   } else if (proj.weeksRemaining > 0 && Math.abs(proj.improvementSec) >= 60) {
     const min = Math.round(Math.abs(proj.improvementSec) / 60);
     deltaTxt = proj.improvementSec < 0 ? `Projected −${min} min by race day` : `Projected +${min} min by race day`;
@@ -946,9 +1037,12 @@ function buildHyroxHero(
     : '';
   const runPaceSourceNote = hyroxRunPaceSourceNote(s, prediction.runPaceSource);
 
+  // The race plan's entry: with a goal it opens the race plan (where
+  // "Change goal ›" edits it); without one it opens the goal modal, where a
+  // saved goal lands on the race plan (openRacePlanGoalModal).
   const targetLine = hx.targetFinishTimeSec
-    ? `Target ${fmtMmSs(hx.targetFinishTimeSec)} · Edit ›`
-    : `Set a target finish ›`;
+    ? `Goal ${fmtMmSs(hx.targetFinishTimeSec)} · Race plan ›`
+    : `Set a goal ›`;
 
   const prevRaceLink = prevTimeSec != null ? (() => {
     const label = (() => {
@@ -975,7 +1069,7 @@ function buildHyroxHero(
             <div style="font-size:54px;font-weight:300;color:var(--c-black);letter-spacing:-0.03em;line-height:1;margin-top:10px;font-variant-numeric:tabular-nums">${fmtMmSs(prediction.totalSec)}</div>
             ${rangeLine}
             ${deltaTxt ? `<div style="font-size:13px;color:${deltaColor};margin-top:8px;font-weight:500">${deltaTxt}</div>` : ''}
-            <button id="hx-set-target-cta" style="margin-top:10px;padding:0;background:transparent;border:none;color:var(--c-muted);font-size:12px;cursor:pointer">${targetLine}</button>
+            <button id="hx-set-target-cta" data-has-goal="${hx.targetFinishTimeSec ? '1' : '0'}" style="margin-top:10px;padding:0;background:transparent;border:none;color:var(--c-muted);font-size:12px;cursor:pointer">${targetLine}</button>
           </div>
           ${provisionalBanner}
           ${renderHyroxInjuryNote(s)}
@@ -1058,7 +1152,7 @@ export function renderHyroxForecastView(): void {
             const stationOrderRows = renderRaceOrderTable(prediction, projectedRunSec, s, 'station');
             return `
             <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
-              <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Race order</div>
+              <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Race order</div>
               <div style="font-size:12px;color:var(--c-muted);margin-bottom:12px;line-height:1.4">Race order shows your race-day clock at each split. Station order groups the disciplines and shows where the horizon model expects gain by race day.</div>
               <div role="tablist" style="display:flex;gap:8px;margin-bottom:12px">
                 <button type="button" data-hx-order="race" role="tab" aria-selected="true" style="flex:1;padding:8px 10px;border-radius:10px;border:1px solid var(--c-black);background:var(--c-black);color:#FDFCF7;font-size:12px;font-weight:500;cursor:pointer">Race order</button>
@@ -1076,7 +1170,7 @@ export function renderHyroxForecastView(): void {
                   <span></span>
                   <span></span>
                   <span style="text-align:right">Split</span>
-                  <span style="text-align:right">Total</span>
+                  <span style="text-align:right">Clock</span>
                 </div>
                 ${raceOrderRows}
               </div>
@@ -1086,28 +1180,37 @@ export function renderHyroxForecastView(): void {
           `;
           })() : `
             <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
-              <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Run legs</div>
+              <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Run legs</div>
               <div style="font-size:11px;color:var(--c-faint);margin-bottom:8px">${projectedRunSec ? 'Each 1km. Bar shows in-race fatigue. Right column shows projected race-day pace gain.' : 'Each 1km. Pace drifts with cumulative station fatigue.'}</div>
               ${renderRunLegsTable(prediction.runLegs, prediction.runSec, projectedRunSec)}
             </div>
             <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
-              <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Your stations</div>
+              <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Your stations</div>
               <div style="font-size:12px;color:var(--c-muted);margin-bottom:10px;line-height:1.4">${doublesStationsCaption(prediction, hyroxCohortLabel(hyroxCohortForState(s)))}</div>
               ${renderStationsTable(prediction.stations, s)}
             </div>
           `}
 
-          <!-- Skills analysis (strengths vs limiters) -->
-          ${renderSkillsAnalysis(prediction.stations, hx.athleteBand, s)}
+          <!-- Race plan, doubles with no goal (no Race order card; with a goal
+               the hero's goal line is the entry, as for singles) -->
+          ${(hx.format === 'open_doubles' || hx.format === 'pro_doubles') ? buildRacePlanEntryCard(s) : ''}
+
+          <!-- Where you lost time (past race), then where to gain (training):
+               one story, adjacent, before any other per-station numbers. -->
+          ${buildLoseTimeCard(s)}
 
           <!-- Where to gain (top stations ranked by absolute gainable seconds) -->
-          ${renderWhereToGainCard(prediction)}
+          ${renderWhereToGainCard(prediction, s, proj)}
 
-          <!-- Performance radar (8-axis percentile) -->
+          <!-- Per-station percentile content: the radar, Where you sit, then
+               Biggest targets (the gap to the next band). -->
           ${renderPerformanceRadar({ stations: prediction.stations, cohort: hyroxCohortForState(s) })}
 
           <!-- Percentile distributions (per-metric kernel density) -->
           ${renderPercentileDistributions(prediction)}
+
+          <!-- Skills analysis (biggest targets: the gap to the next band) -->
+          ${renderSkillsAnalysis(prediction.stations, hx.athleteBand, s)}
         `;
       })();
 
@@ -1169,13 +1272,13 @@ export function renderHyroxForecastView(): void {
       renderHyroxChipDetail('stations'));
   });
 
-  // "Set a target finish" CTA → goal-back-calc modal (ISSUE-196).
-  document.getElementById('hx-set-target-cta')?.addEventListener('click', () => {
-    const currentPrediction = predictHyroxRace(getState());
-    if (!currentPrediction) return;
-    import('./goal-modal').then(({ openHyroxGoalModal }) => {
-      openHyroxGoalModal(currentPrediction);
-    });
+  // Hero goal line: the race plan's entry. With a goal it opens the race
+  // plan; without one the goal modal (ISSUE-196), whose saved goal lands on
+  // the race plan ("Keep forecast" stays here, "Open race plan" for doubles).
+  const targetCta = document.getElementById('hx-set-target-cta');
+  targetCta?.addEventListener('click', () => {
+    if (targetCta.getAttribute('data-has-goal') === '1') renderHyroxRacePlanView();
+    else openRacePlanGoalModal('forecast');
   });
 
   // "Previous race format · Change" affordance → opens a small modal listing
@@ -1207,6 +1310,16 @@ export function renderHyroxForecastView(): void {
       });
     });
   });
+
+  // Race plan entry row (doubles with no goal).
+  const racePlanEntry = document.getElementById('hx-race-plan-entry');
+  racePlanEntry?.addEventListener('click', () => renderHyroxRacePlanView());
+  racePlanEntry?.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); renderHyroxRacePlanView(); }
+  });
+
+  // Where you lost time: paste invite, all segments, link to Where to gain.
+  wireLoseTimeCard(() => renderHyroxForecastView());
 
   // Per-station row tap → station detail sub-page (ISSUE-193).
   document.querySelectorAll<HTMLElement>('[data-hx-station-row]').forEach(row => {

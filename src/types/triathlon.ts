@@ -175,6 +175,11 @@ export interface HyroxConfig {
   }>>>;
   /** Which format the user's previous HYROX time was set in. */
   hyroxPreviousTimeFormat?: 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
+  /** The division a doubles previous result was raced in (the pair's
+   *  category; "Log a previous HYROX" asks for it). Unset for singles, and for
+   *  doubles results logged before it was asked, which then read the current
+   *  `division`. "Where you lost time" and the planning band read it. */
+  hyroxPreviousTimeDivision?: HyroxDivision;
   /** Which past race the previous time was set at (id from HYROX_WORLD_SERIES). */
   hyroxPreviousTimeRaceId?: string;
   /** ISO date (YYYY-MM-DD) of the previous HYROX time. Either picked directly
@@ -182,6 +187,18 @@ export interface HyroxConfig {
    *  Used by the race-age staleness model. Without it, the model can't decay
    *  trust on year-old benchmarks vs current physiology. */
   hyroxPreviousRaceDate?: string;
+  /** Station splits logged with the previous result ("Log a previous HYROX"
+   *  modal; the race's own format, the pair's times for doubles). Written by
+   *  applyHyroxPrevTimeUpdate, which replaces all four previous-result split
+   *  fields together, so they always belong to the result on file. */
+  hyroxPreviousStationSplits?: Partial<Record<HyroxStation, number>>;
+  /** Run 1 to run 8 of the previous result, seconds; null where a leg was not
+   *  in the pasted text. "Where you lost time" (hyrox-lose-time.ts). */
+  hyroxPreviousRunSplitsSec?: Array<number | null>;
+  /** The previous result's 8 runs together (Run Total), seconds. */
+  hyroxPreviousRunTotalSec?: number;
+  /** The previous result's total Roxzone time, seconds. */
+  hyroxPreviousRoxzoneSec?: number;
   /** User-updated run pace for forecast (sec/km). Overrides population default for band. */
   hyroxRunPaceSecKm?: number;
   /** Provenance of `hyroxRunPaceSecKm`. 'user' = manually entered, 'derived' =

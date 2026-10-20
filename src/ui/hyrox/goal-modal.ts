@@ -1,10 +1,20 @@
 /**
- * HYROX goal-back-calculation modal.
+ * HYROX goal modal: the race plan's goal step.
  *
- * Triggered from the forecast hero. Lets the user enter a target finish time
- * and shows the per-station + run-pace targets they'd need to hit. Reads from
- * the existing `targetFinishTimeSec` on `hyroxConfig` if set; otherwise
- * defaults to a 5% improvement on current prediction.
+ * Opened from the Forecast hero ("Set a goal ›") and the race plan
+ * ("Change goal ›", openRacePlanGoalModal). The athlete enters a goal
+ * finish; the modal shows one feasibility line from the goal
+ * back-calculation (the race plan's own sentence, graded against the
+ * Forecast hero's likely range) and a save lands on the race plan, which
+ * carries the per-leg splits (the modal's own list of run and station targets
+ * repeated them one tap earlier, rounded differently). Reads the existing
+ * `targetFinishTimeSec` on `hyroxConfig` if set ("Change goal", with "Clear
+ * goal"); otherwise offers the forecast ("Set a goal"). With no goal on
+ * file and the input at the forecast the button does not save: it reads what
+ * it does instead (the opener's keepForecast label, default "Keep forecast",
+ * which closes; "Open race plan" where the view behind has no race clock) and
+ * reads "Save goal" as soon as the input differs. The hero never grades the
+ * athlete against a goal they did not choose.
  *
  * Per CLAUDE.md UI rules:
  *   - Vertically centered overlay (`flex items-center justify-center`)
@@ -13,27 +23,14 @@
  *   - Modal closes back to the forecast view (not Home)
  */
 
-import { getMutableState } from '@/state/store';
+import { getMutableState, getState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import type { HyroxPrediction } from '@/calculations/race-prediction.hyrox';
 import { computeGoalBackCalc, type GoalBackCalcResult } from '@/calculations/hyrox-goal-back-calc';
-import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, HYROX_RUN_PACE_MIN_SEC_KM } from '@/constants/hyrox-benchmarks';
-import { ftRounded, fmtModelPaceKm } from '@/utils/format';
-
-// Times and paces here are fractional (the back-calculation distributes the
-// gain proportionally), so they round to the whole second before the minute
-// split, the way the forecast shows the same numbers: times through ftRounded
-// (forecast hero and station rows), run pace through fmtModelPaceKm (forecast
-// average run pace). Rounding only the seconds part printed 59.6 s as "0:60".
-
-/** "56 min" / "1 min 20 sec" / "40 sec" — readable duration, never raw seconds. */
-function fmtApproxDuration(sec: number): string {
-  const total = Math.round(sec);
-  if (total < 60) return `${total} sec`;
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return s === 0 ? `${m} min` : `${m} min ${s} sec`;
-}
+import { hyroxGoalBackCalcOptions, hyroxGoalFeasibilityLine } from '@/calculations/hyrox-race-plan';
+import { hyroxCohortForState, type HyroxResultsCohort } from '@/calculations/hyrox-results';
+import { STATION_SEED_TIMES_SEC, HYROX_RUN_PACE_MIN_SEC_KM } from '@/constants/hyrox-benchmarks';
+import { ftRounded } from '@/utils/format';
 
 /**
  * Parse a target finish. Accepts mm:ss or h:mm:ss.
@@ -71,13 +68,13 @@ export function parseHhMmSs(input: string, minPlausibleSec: number): number | nu
 }
 
 /**
- * Competitive population floor for this prediction's format: the fastest a
- * HYROX could realistically be from the band-elite seeds. Used both as the
- * parse-disambiguation threshold and (implicitly) the back-calc floor.
+ * The parse-disambiguation threshold ("1:00" read as an hour when the
+ * minutes reading is impossibly fast): the legacy pooled competitive seeds
+ * and the run-pace minimum. Deliberately not the back-calc's cohort floors
+ * (hyroxGoalBackCalcOptions): those sit above an hour for most fields (Open
+ * Singles women 1:06), so "1:00" would read as one minute.
  */
 function populationFloorSec(prediction: HyroxPrediction): number {
-  // Same floor as the back-calc: singles seeds, × the doubles ratio on a
-  // doubles line (the pair's time).
   const stationFloor = prediction.stations.reduce(
     (sum, l) => sum + (STATION_SEED_TIMES_SEC.competitive[l.station] ?? 0) * (l.teamRatio ?? 1),
     0,
@@ -85,62 +82,63 @@ function populationFloorSec(prediction: HyroxPrediction): number {
   return HYROX_RUN_PACE_MIN_SEC_KM * 8 + stationFloor + prediction.roxzoneSec;
 }
 
-export function renderResultBody(result: GoalBackCalcResult): string {
-  if (result.feasibility === 'already_on_pace') {
-    return `
-      <div style="font-size:13px;color:var(--c-black);line-height:1.5;padding:14px;background:rgba(122,132,92,0.08);border-radius:10px;margin-bottom:14px">
-        Your current forecast already beats this target. No changes to per-station targets needed.
-      </div>
-    `;
-  }
-
-  const headerCopy = result.feasibility === 'unrealistic'
-    ? `<div style="font-size:13px;color:var(--c-black);line-height:1.5;padding:14px;background:rgba(0,0,0,0.04);border-radius:10px;margin-bottom:14px"><div style="font-weight:600;margin-bottom:4px">About ${fmtApproxDuration(result.shortfallSec)} faster than realistic.</div><div style="color:var(--c-muted);font-size:12px">${result.caveat ?? ''}</div></div>`
-    : result.feasibility === 'stretch'
-    ? `<div style="font-size:13px;color:var(--c-black);line-height:1.5;padding:14px;background:rgba(0,0,0,0.04);border-radius:10px;margin-bottom:14px"><div style="font-weight:600;margin-bottom:4px">Stretch target.</div><div style="color:var(--c-muted);font-size:12px">${result.caveat ?? ''}</div></div>`
-    : `<div style="font-size:12px;color:var(--c-muted);margin-bottom:10px;line-height:1.5">Distributed proportional to each component's headroom against the band's competitive floor.</div>`;
-
-  const runRow = result.runPaceTarget.deltaSecKm < -0.5 ? `
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;font-size:13px;border-top:1px solid rgba(0,0,0,0.05)">
-      <span style="color:var(--c-black)">Run pace</span>
-      <span style="display:flex;gap:14px;align-items:baseline">
-        <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${fmtModelPaceKm(result.runPaceTarget.currentSecKm)} → ${fmtModelPaceKm(result.runPaceTarget.targetSecKm)}</span>
-        <span style="font-size:12px;color:#4f5a3b;font-weight:600;font-variant-numeric:tabular-nums;min-width:48px;text-align:right">${result.runPaceTarget.deltaSecKm.toFixed(1)}s/km</span>
-      </span>
-    </div>
-  ` : '';
-
-  const stationRows = result.stationTargets
-    .filter(t => t.deltaSec < -0.5) // hide rows that don't need to change
-    .sort((a, b) => a.deltaSec - b.deltaSec) // biggest gain first
-    .map((t, i) => {
-      const display = STATION_DISPLAY[t.station];
-      return `
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;font-size:13px;border-top:${i === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'}">
-          <span style="color:var(--c-black)">${display.name}</span>
-          <span style="display:flex;gap:14px;align-items:baseline">
-            <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${ftRounded(t.currentSec)} → ${ftRounded(t.targetSec)}</span>
-            <span style="font-size:12px;color:#4f5a3b;font-weight:600;font-variant-numeric:tabular-nums;min-width:48px;text-align:right">${Math.round(t.deltaSec)}s</span>
-          </span>
-        </div>
-      `;
-    }).join('');
-
-  return `
-    ${headerCopy}
-    <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Run + station targets</div>
-    ${runRow}
-    ${stationRows || (runRow === '' ? '<div style="font-size:12px;color:var(--c-faint);padding:10px 0">All components already at floor.</div>' : '')}
-  `;
+/**
+ * The feasibility line under the goal: one plain sentence, the race plan's
+ * own (hyroxGoalFeasibilityLine), no list (the race plan carries the per-leg
+ * splits), no tinted callout.
+ */
+export function renderResultBody(
+  result: Pick<GoalBackCalcResult, 'feasibility' | 'likelyRangeSec'>,
+  ctx: { goalSec: number; forecastSec: number; cohort: HyroxResultsCohort },
+): string {
+  const line = hyroxGoalFeasibilityLine({ feasibility: result.feasibility, likelyRangeSec: result.likelyRangeSec, ...ctx });
+  return `<div data-goal-feasibility="${result.feasibility}" style="font-size:13px;color:var(--c-black);line-height:1.5">${line}</div>`;
 }
 
-export function openHyroxGoalModal(prediction: HyroxPrediction): void {
+/**
+ * The echo under the input: the resolved goal, only when it reads
+ * differently from what was typed ("1:00" read as 1:00:00, "75:00" as
+ * 1:15:00). '' when the input already shows it.
+ */
+export function goalEchoText(input: string, sec: number): string {
+  const resolved = ftRounded(sec);
+  return input.trim() === resolved ? '' : `Goal: ${resolved}`;
+}
+
+/** The button's no-save state (no goal on file, input at the forecast). */
+export interface HyroxKeepForecastAction {
+  label: string;
+  /** After the modal closes; nothing is written. Omitted: just close. */
+  run?: () => void;
+}
+
+/** The save button's label: the keep action's while no goal is on file and
+ *  the input is the forecast, else "Save goal". */
+export function goalSaveLabel(hasGoal: boolean, sec: number | null, forecastSec: number, keepLabel: string): string {
+  return !hasGoal && sec === forecastSec ? keepLabel : 'Save goal';
+}
+
+/**
+ * `opts.onChange` runs after a save or clear, so the view that opened the
+ * modal re-renders (default: the forecast view, which opens it from the
+ * hero; the race plan passes its own). `opts.keepForecast` is the button
+ * while no goal is on file and the input is the forecast (default "Keep
+ * forecast", which closes).
+ */
+export function openHyroxGoalModal(
+  prediction: HyroxPrediction,
+  opts: { onChange?: () => void; keepForecast?: HyroxKeepForecastAction } = {},
+): void {
   const existing = document.getElementById('hx-goal-modal');
   if (existing) existing.remove();
 
   const ms = getMutableState();
-  const initialTarget = ms.hyroxConfig?.targetFinishTimeSec
-    ?? Math.round(prediction.totalSec * 0.95); // default 5% improvement
+  const hasGoal = (ms.hyroxConfig?.targetFinishTimeSec ?? 0) > 0;
+  // No goal yet: the forecast is offered as the goal (the race plan's own
+  // default), never a made-up improvement.
+  const forecastSec = Math.round(prediction.totalSec);
+  const initialTarget = hasGoal ? ms.hyroxConfig!.targetFinishTimeSec! : forecastSec;
+  const keep: HyroxKeepForecastAction = opts.keepForecast ?? { label: 'Keep forecast' };
 
   const overlay = document.createElement('div');
   overlay.id = 'hx-goal-modal';
@@ -148,22 +146,22 @@ export function openHyroxGoalModal(prediction: HyroxPrediction): void {
   overlay.innerHTML = `
     <div style="background:#fff;border-radius:20px;padding:24px;max-width:420px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,0.18)">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
-        <div style="font-size:17px;font-weight:700;color:#0F172A">Set a target finish</div>
+        <div style="font-size:17px;font-weight:700;color:#0F172A">${hasGoal ? 'Change goal' : 'Set a goal'}</div>
         <button id="hx-goal-close" style="background:none;border:none;cursor:pointer;color:var(--c-faint);font-size:20px;line-height:1;padding:0">×</button>
       </div>
-      <div style="font-size:12px;color:var(--c-muted);margin-bottom:14px;line-height:1.5">Current forecast: ${ftRounded(prediction.totalSec)}. Enter a target and we'll back-calculate the per-station times you'd need.</div>
-      <label style="display:block;font-size:12px;font-weight:600;color:#0F172A;margin-bottom:6px">Target time (mm:ss or h:mm:ss)</label>
+      <div style="font-size:12px;color:var(--c-muted);margin-bottom:14px;line-height:1.5">Current forecast: ${ftRounded(prediction.totalSec)}. The race plan paces every leg to your goal.</div>
+      <label style="display:block;font-size:12px;font-weight:600;color:#0F172A;margin-bottom:6px">Goal time (mm:ss or h:mm:ss)</label>
       <input
         id="hx-goal-input"
         type="text"
         value="${ftRounded(initialTarget)}"
         style="width:100%;box-sizing:border-box;border:1.5px solid rgba(0,0,0,0.15);border-radius:10px;padding:10px 12px;font-size:16px;font-family:var(--f);color:#0F172A;outline:none;margin-bottom:6px"
       />
-      <div id="hx-goal-echo" style="font-size:12px;color:var(--c-muted);min-height:16px;margin-bottom:14px"></div>
-      <div id="hx-goal-result"></div>
+      <div id="hx-goal-echo" style="display:none;font-size:12px;color:var(--c-muted);margin:2px 0 4px"></div>
+      <div id="hx-goal-result" style="margin-top:10px"></div>
       <div style="display:flex;gap:10px;margin-top:14px">
-        <button id="hx-goal-clear" style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">Clear target</button>
-        <button id="hx-goal-save" style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">Save target</button>
+        ${hasGoal ? '<button id="hx-goal-clear" style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">Clear goal</button>' : ''}
+        <button id="hx-goal-save" style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">${goalSaveLabel(hasGoal, initialTarget, forecastSec, keep.label)}</button>
       </div>
     </div>
   `;
@@ -177,16 +175,23 @@ export function openHyroxGoalModal(prediction: HyroxPrediction): void {
     const echoEl = document.getElementById('hx-goal-echo');
     if (!inputEl || !resultEl) return;
     const sec = parseHhMmSs(inputEl.value, floorSec);
+    const saveEl = document.getElementById('hx-goal-save');
+    if (saveEl) saveEl.textContent = goalSaveLabel(hasGoal, sec, forecastSec, keep.label);
     if (sec == null) {
-      if (echoEl) echoEl.textContent = '';
+      if (echoEl) { echoEl.textContent = ''; echoEl.style.display = 'none'; }
       resultEl.innerHTML = `<div style="font-size:12px;color:#ef4444;padding:8px 0">Enter time as mm:ss (e.g. 75:00) or h:mm:ss (e.g. 1:15:00).</div>`;
       return;
     }
-    // Always echo the resolved interpretation so an ambiguous entry like "1:00"
-    // (read as 1 hour) is visible and correctable.
-    if (echoEl) echoEl.textContent = `Target: ${ftRounded(sec)}`;
-    const result = computeGoalBackCalc(prediction, sec);
-    resultEl.innerHTML = renderResultBody(result);
+    // Echo the resolved interpretation when it reads differently from the
+    // input, so an ambiguous entry like "1:00" (read as 1 hour) is visible
+    // and correctable; an input that already shows it is not repeated.
+    if (echoEl) {
+      echoEl.textContent = goalEchoText(inputEl.value, sec);
+      echoEl.style.display = echoEl.textContent ? 'block' : 'none';
+    }
+    const st = getState();
+    const result = computeGoalBackCalc(prediction, sec, hyroxGoalBackCalcOptions(st, prediction, sec));
+    resultEl.innerHTML = renderResultBody(result, { goalSec: sec, forecastSec: prediction.totalSec, cohort: hyroxCohortForState(st) });
   };
   computeAndRender();
 
@@ -199,8 +204,10 @@ export function openHyroxGoalModal(prediction: HyroxPrediction): void {
   // after save/clear or the chip stays stale until the user navigates away.
   // Dynamic import: forecast-view imports this modal, so a static import here
   // would be circular.
-  const refreshForecast = () =>
+  const refreshForecast = () => {
+    if (opts.onChange) { opts.onChange(); return; }
     import('./forecast-view').then(({ renderHyroxForecastView }) => renderHyroxForecastView());
+  };
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   document.getElementById('hx-goal-close')?.addEventListener('click', close);
 
@@ -208,6 +215,13 @@ export function openHyroxGoalModal(prediction: HyroxPrediction): void {
     const inputEl = document.getElementById('hx-goal-input') as HTMLInputElement | null;
     const sec = inputEl ? parseHhMmSs(inputEl.value, floorSec) : null;
     if (sec == null) return;
+    if (!hasGoal && sec === forecastSec) {
+      // The forecast, with no goal on file: the button reads the keep
+      // action's label, and nothing is written.
+      close();
+      keep.run?.();
+      return;
+    }
     const ms2 = getMutableState();
     if (ms2.hyroxConfig) ms2.hyroxConfig.targetFinishTimeSec = sec;
     saveState();

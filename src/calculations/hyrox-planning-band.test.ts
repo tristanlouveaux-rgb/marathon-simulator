@@ -131,6 +131,39 @@ describe('planning band', () => {
   });
 });
 
+describe('a past doubles result raced in another division (raceDivision)', () => {
+  it('omitted, the band is unchanged', () => {
+    for (const c of CASES) {
+      for (const t of TIMES.filter((_, i) => i % 9 === 0)) {
+        expect(hyroxPlanningBandFor(t, c.format, c.sex, c.division, undefined)).toBe(hyroxPlanningBandFor(t, c.format, c.sex, c.division));
+      }
+    }
+  });
+
+  it('the finish decomposes in the past race\'s field: a woman now in Women\'s doubles whose race was Mixed', () => {
+    for (const t of TIMES) {
+      expect(hyroxPlanningBandFor(t, 'open_doubles', 'female', 'women', 'mixed')).toBe(hyroxPlanningBandFor(t, 'open_doubles', 'female', 'mixed'));
+    }
+    // The two fields band some finishes differently, so the division matters.
+    expect(TIMES.some(t => hyroxPlanningBandFor(t, 'open_doubles', 'female', 'women') !== hyroxPlanningBandFor(t, 'open_doubles', 'female', 'mixed'))).toBe(true);
+  });
+
+  it('a sex-unset singles athlete (Women pick) whose past race was Mixed keeps the Open Singles women field', () => {
+    for (const t of TIMES) {
+      expect(hyroxPlanningBandFor(t, 'open_doubles', null, 'women', 'mixed'))
+        .toBe(hyroxBandFor(hyroxOpenSinglesTermsSec(t, 'open_doubles', null, 'mixed', 'women'), 'open_singles', 'female'));
+    }
+    // The past division alone would have read the pooled field.
+    expect(hyroxPlanningField(null, 'mixed').sex).toBe('pooled');
+  });
+
+  it('a sex-unset athlete whose past race was a women\'s pair: the race says her sex', () => {
+    for (const t of TIMES.filter((_, i) => i % 5 === 0)) {
+      expect(hyroxPlanningBandFor(t, 'open_doubles', null, undefined, 'women')).toBe(hyroxPlanningBandFor(t, 'open_doubles', null, 'women'));
+    }
+  });
+});
+
 describe('seeds behind a back-computed race read the planning field', () => {
   it('a Pro Singles race: the Open medians at Pro weights', () => {
     const tables = hyroxDoublesTables('pro_singles', 'male', undefined);
