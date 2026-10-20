@@ -14,6 +14,15 @@
  *      redistribute the excess to remaining components.
  *   5. If total headroom can't cover the gain, flag as 'unrealistic'.
  *
+ * Feasibility of a reachable goal is graded against the forecast's likely
+ * range (opts.likelyRangeSec, the Forecast hero's "Likely X–Y",
+ * hyroxLikelyRangeSec): at or slower than its fast end, 'achievable'; faster,
+ * 'stretch'. No threshold of its own: the range is the one the athlete
+ * already sees. (Before: a stretch past 70% of headroom, with an unsourced
+ * "6+ months of training" caveat; a 1:29:45 man read "achievable" for a
+ * goal 20 minutes faster, outside his own forecast's range.) Without a range
+ * every reachable goal is 'achievable'.
+ *
  * Floors (opts.floors): the athlete's own field, per format and sex or
  * doubles division (hyroxCompetitiveFloors in hyrox-results.ts; the pair's
  * times for doubles), passed by hyroxGoalBackCalcOptions (hyrox-race-plan.ts).
@@ -43,6 +52,7 @@
 import type { HyroxPrediction } from './race-prediction.hyrox';
 import type { HyroxStation } from '@/types/triathlon';
 import { STATION_SEED_TIMES_SEC, HYROX_RUN_PACE_MIN_SEC_KM } from '@/constants/hyrox-benchmarks';
+import { ftRounded } from '@/utils/format';
 
 export interface GoalStationTarget {
   station: HyroxStation;
@@ -74,6 +84,9 @@ export interface GoalBackCalcOptions {
   floors?: GoalBackCalcFloors;
   /** Roxzone at the goal. Default: held at the forecast's. */
   roxzoneTargetSec?: number;
+  /** The forecast's likely range [fast, slow] (hyroxLikelyRangeSec). A
+   *  reachable goal faster than its fast end is a stretch. */
+  likelyRangeSec?: [number, number];
 }
 
 export interface GoalBackCalcResult {
@@ -90,8 +103,11 @@ export interface GoalBackCalcResult {
   achievedSec: number;
   /** Remaining gap when the gain is unachievable from headroom alone. */
   shortfallSec: number;
-  /** Caveat copy if any (e.g. "this is a stretch goal, most athletes..."). */
+  /** Caveat copy: a stretch goal names the likely range it is faster than;
+   *  an unrealistic one says what the floors are. */
   caveat: string | null;
+  /** opts.likelyRangeSec, or null. */
+  likelyRangeSec: [number, number] | null;
   /** 'cohort': floors from the athlete's own field (opts.floors); 'legacy':
    *  the pooled Open competitive seed and the run-pace minimum. */
   floorSource: 'cohort' | 'legacy';
@@ -113,6 +129,7 @@ export function computeGoalBackCalc(
   const currentRunSec = prediction.runSec; // post-venue, post-fatigue
   const floors = opts.floors;
   const floorSource: GoalBackCalcResult['floorSource'] = floors ? 'cohort' : 'legacy';
+  const likelyRangeSec = opts.likelyRangeSec ?? null;
   const totalGain = prediction.totalSec - targetTotalSec;
   // The run's venue seconds: runSec less the pre-venue run (rawSec is the
   // pre-venue run + stations + Roxzone; the Roxzone takes no venue factor).
@@ -184,6 +201,7 @@ export function computeGoalBackCalc(
       achievedSec: prediction.totalSec,
       shortfallSec: 0,
       caveat: null,
+      likelyRangeSec,
       floorSource,
     };
   }
@@ -282,11 +300,11 @@ export function computeGoalBackCalc(
   if (shortfallSec > 0) {
     feasibility = 'unrealistic';
     caveat = floors
-      ? `No realistic combination of station and run gains reaches this time. Every station${floors.roxzoneSec != null ? ', the run and the Roxzone' : ' and the run'} would have to be faster than top-1% level in your field. Pick a more achievable goal or extend training time.`
-      : `No realistic combination of station and run-pace gains reaches this time. The estimate uses the competitive population floor across all stations and run pace. Pick a more achievable goal or extend training time.`;
-  } else if (gainNeeded > totalHeadroom * 0.7) {
+      ? `Every station${floors.roxzoneSec != null ? ', the run and the Roxzone' : ' and the run'} would have to be faster than top-1% level in your field.`
+      : 'Every station and the run would have to be faster than the pooled competitive floor.';
+  } else if (likelyRangeSec && targetTotalSec < likelyRangeSec[0]) {
     feasibility = 'stretch';
-    caveat = 'Most athletes would need 6+ months of focused training to hit a goal this aggressive.';
+    caveat = `Faster than your forecast's likely range, ${ftRounded(likelyRangeSec[0])} to ${ftRounded(likelyRangeSec[1])}.`;
   } else {
     feasibility = 'achievable';
   }
@@ -301,6 +319,7 @@ export function computeGoalBackCalc(
     achievedSec,
     shortfallSec,
     caveat,
+    likelyRangeSec,
     floorSource,
   };
 }

@@ -32,6 +32,8 @@ import { topWeakestLinks } from '@/calculations/hyrox-weakest-link';
 import { renderHyroxRacePlanView, renderRacePlanBody, buildRacePlanEntryCard, racePlanFeasibilityLine } from './race-plan-view';
 import { renderHyroxLoseTimeView, renderLoseTimeBody, buildLoseTimeCard, fmtLostSigned } from './lose-time-view';
 import { renderHyroxForecastView } from './forecast-view';
+import { openHyroxGoalModal } from './goal-modal';
+import { ftRounded } from '@/utils/format';
 import type { SimulatorState } from '@/types/state';
 import type { HyroxStation } from '@/types/triathlon';
 
@@ -171,6 +173,32 @@ describe('race plan page', () => {
       expectVisualConstraints(renderRacePlanBody(buildHyroxRacePlan(s, predictHyroxRace(s)!)));
     }
     expectVisualConstraints(buildRacePlanEntryCard(hyroxState({})));
+  });
+});
+
+describe('goal modal', () => {
+  it('no goal yet: the forecast is offered, and the line says so', () => {
+    const s = hyroxState({});
+    setState(s);
+    const p = predictHyroxRace(s)!;
+    openHyroxGoalModal(p);
+    expect((document.getElementById('hx-goal-input') as HTMLInputElement).value).toBe(ftRounded(p.totalSec));
+    expect(document.querySelector('[data-goal-feasibility]')!.textContent!.trim()).toBe('Matches your forecast.');
+  });
+
+  it('an unrealistic goal reads the race plan\'s one sentence', () => {
+    const s = hyroxState({});
+    setState(s);
+    const p = predictHyroxRace(s)!;
+    openHyroxGoalModal(p);
+    const input = document.getElementById('hx-goal-input') as HTMLInputElement;
+    input.value = '1:00:00';
+    input.dispatchEvent(new Event('input'));
+    const line = document.querySelector('[data-goal-feasibility]')!.textContent!.trim();
+    expect(line).toBe('1:00:00 is out of reach even with every leg at top-1% level for Open Singles women.');
+    const plan = buildHyroxRacePlan(hyroxState({ targetFinishTimeSec: 3600 }), p);
+    expect(racePlanFeasibilityLine(plan).startsWith(line)).toBe(true);
+    expectVisualConstraints(document.getElementById('hx-goal-modal')!.outerHTML.replace(/rgba\(0,0,0,0\.5\)/, ''));
   });
 });
 

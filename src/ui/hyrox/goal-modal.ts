@@ -4,11 +4,12 @@
  * Opened from the Forecast hero ("Set a target finish ›") and the race plan
  * ("Change goal ›", openRacePlanGoalModal). The athlete enters a target
  * finish; the modal shows one feasibility line from the goal
- * back-calculation and a save lands on the race plan, which carries the
- * per-leg splits (the modal's own list of run and station targets repeated
- * them one tap earlier, rounded differently). Reads the existing
- * `targetFinishTimeSec` on `hyroxConfig` if set; otherwise defaults to a 5%
- * improvement on the current prediction.
+ * back-calculation (the race plan's own sentence, graded against the
+ * Forecast hero's likely range) and a save lands on the race plan, which
+ * carries the per-leg splits (the modal's own list of run and station targets
+ * repeated them one tap earlier, rounded differently). Reads the existing
+ * `targetFinishTimeSec` on `hyroxConfig` if set; otherwise offers the
+ * forecast.
  *
  * Per CLAUDE.md UI rules:
  *   - Vertically centered overlay (`flex items-center justify-center`)
@@ -21,18 +22,10 @@ import { getMutableState, getState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import type { HyroxPrediction } from '@/calculations/race-prediction.hyrox';
 import { computeGoalBackCalc, type GoalBackCalcResult } from '@/calculations/hyrox-goal-back-calc';
-import { hyroxGoalBackCalcOptions } from '@/calculations/hyrox-race-plan';
+import { hyroxGoalBackCalcOptions, hyroxGoalFeasibilityLine } from '@/calculations/hyrox-race-plan';
+import { hyroxCohortForState, type HyroxResultsCohort } from '@/calculations/hyrox-results';
 import { STATION_SEED_TIMES_SEC, HYROX_RUN_PACE_MIN_SEC_KM } from '@/constants/hyrox-benchmarks';
 import { ftRounded } from '@/utils/format';
-
-/** "56 min" / "1 min 20 sec" / "40 sec" — readable duration, never raw seconds. */
-function fmtApproxDuration(sec: number): string {
-  const total = Math.round(sec);
-  if (total < 60) return `${total} sec`;
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return s === 0 ? `${m} min` : `${m} min ${s} sec`;
-}
 
 /**
  * Parse a target finish. Accepts mm:ss or h:mm:ss.
@@ -85,20 +78,16 @@ function populationFloorSec(prediction: HyroxPrediction): number {
 }
 
 /**
- * The feasibility line under the target: plain text, no list (the race plan
- * carries the per-leg splits), no tinted callout.
+ * The feasibility line under the goal: one plain sentence, the race plan's
+ * own (hyroxGoalFeasibilityLine), no list (the race plan carries the per-leg
+ * splits), no tinted callout.
  */
-export function renderResultBody(result: GoalBackCalcResult): string {
-  const line = (head: string, detail?: string | null) => `
-    <div data-goal-feasibility="${result.feasibility}" style="font-size:13px;color:var(--c-black);line-height:1.5">
-      <div style="font-weight:600">${head}</div>
-      ${detail ? `<div style="color:var(--c-muted);font-size:12px;margin-top:2px">${detail}</div>` : ''}
-    </div>
-  `;
-  if (result.feasibility === 'already_on_pace') return line('Your forecast already beats this target.');
-  if (result.feasibility === 'unrealistic') return line(`About ${fmtApproxDuration(result.shortfallSec)} faster than realistic.`, result.caveat);
-  if (result.feasibility === 'stretch') return line('Stretch target.', result.caveat);
-  return line('Achievable on your current headroom.');
+export function renderResultBody(
+  result: Pick<GoalBackCalcResult, 'feasibility' | 'likelyRangeSec'>,
+  ctx: { goalSec: number; forecastSec: number; cohort: HyroxResultsCohort },
+): string {
+  const line = hyroxGoalFeasibilityLine({ feasibility: result.feasibility, likelyRangeSec: result.likelyRangeSec, ...ctx });
+  return `<div data-goal-feasibility="${result.feasibility}" style="font-size:13px;color:var(--c-black);line-height:1.5">${line}</div>`;
 }
 
 /**
@@ -111,8 +100,9 @@ export function openHyroxGoalModal(prediction: HyroxPrediction, opts: { onChange
   if (existing) existing.remove();
 
   const ms = getMutableState();
-  const initialTarget = ms.hyroxConfig?.targetFinishTimeSec
-    ?? Math.round(prediction.totalSec * 0.95); // default 5% improvement
+  // No goal yet: the forecast is offered as the goal (the race plan's own
+  // default), never a made-up improvement.
+  const initialTarget = ms.hyroxConfig?.targetFinishTimeSec ?? Math.round(prediction.totalSec);
 
   const overlay = document.createElement('div');
   overlay.id = 'hx-goal-modal';
@@ -157,8 +147,9 @@ export function openHyroxGoalModal(prediction: HyroxPrediction, opts: { onChange
     // Always echo the resolved interpretation so an ambiguous entry like "1:00"
     // (read as 1 hour) is visible and correctable.
     if (echoEl) echoEl.textContent = `Target: ${ftRounded(sec)}`;
-    const result = computeGoalBackCalc(prediction, sec, hyroxGoalBackCalcOptions(getState(), prediction, sec));
-    resultEl.innerHTML = renderResultBody(result);
+    const st = getState();
+    const result = computeGoalBackCalc(prediction, sec, hyroxGoalBackCalcOptions(st, prediction, sec));
+    resultEl.innerHTML = renderResultBody(result, { goalSec: sec, forecastSec: prediction.totalSec, cohort: hyroxCohortForState(st) });
   };
   computeAndRender();
 

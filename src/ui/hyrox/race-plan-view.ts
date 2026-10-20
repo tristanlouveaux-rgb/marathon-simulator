@@ -19,8 +19,7 @@ import type { SimulatorState } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '@/ui/tab-bar';
 import { atmosphereGradient, buildSunGlint, buildRingBackground } from '@/ui/page-flair';
 import { predictHyroxRace, type HyroxPrediction } from '@/calculations/race-prediction.hyrox';
-import { buildHyroxRacePlan, type HyroxRacePlan, type HyroxRacePlanLeg } from '@/calculations/hyrox-race-plan';
-import { hyroxPlacementWho } from '@/calculations/hyrox-results';
+import { buildHyroxRacePlan, hyroxGoalFeasibilityLine, type HyroxRacePlan, type HyroxRacePlanLeg } from '@/calculations/hyrox-race-plan';
 import { isHyroxDoublesFormat } from '@/calculations/hyrox-division';
 import { ftRounded } from '@/utils/format';
 
@@ -39,16 +38,15 @@ function fmt(sec: number): string {
 }
 
 /**
- * The one plain line above the splits: an unrealistic goal (the splits fall
- * back to the forecast's own) or a stretch goal (the goal modal's own line,
- * the back-calculation's caveat). '' otherwise.
+ * The one plain line above the splits, the goal modal's own sentence
+ * (hyroxGoalFeasibilityLine): an unrealistic goal (the splits fall back to
+ * the forecast's own, which the line says) or a stretch goal (faster than the
+ * Forecast hero's likely range). '' otherwise.
  */
-export function racePlanFeasibilityLine(plan: Pick<HyroxRacePlan, 'feasibility' | 'goalSec' | 'cohort' | 'caveat'>): string {
-  if (plan.feasibility === 'unrealistic' && plan.goalSec != null) {
-    return `${fmt(plan.goalSec)} is out of reach even with every leg at top-1% level for ${hyroxPlacementWho({ cohort: plan.cohort, ageGroup: null })}. Splits below are at your forecast.`;
-  }
-  if (plan.feasibility === 'stretch' && plan.caveat) return `Stretch target. ${plan.caveat}`;
-  return '';
+export function racePlanFeasibilityLine(plan: Pick<HyroxRacePlan, 'feasibility' | 'goalSec' | 'cohort' | 'forecastSec' | 'likelyRangeSec'>): string {
+  if (plan.feasibility !== 'unrealistic' && plan.feasibility !== 'stretch') return '';
+  const line = hyroxGoalFeasibilityLine(plan);
+  return plan.feasibility === 'unrealistic' ? `${line} Splits below are at your forecast.` : line;
 }
 
 /** Subhead under the title. Names only the time the splits sum to; a goal

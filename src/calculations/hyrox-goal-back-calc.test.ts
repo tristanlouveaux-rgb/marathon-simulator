@@ -87,16 +87,22 @@ describe('computeGoalBackCalc', () => {
     expect(r.caveat).not.toBeNull();
   });
 
-  it('stretch goal flagged when gain > 70% of total headroom', () => {
+  it('a reachable goal is graded against the forecast\'s likely range: inside is achievable, faster is a stretch', () => {
     const p = buildPrediction();
-    // First, get the total headroom to make a defensible test target.
-    const easyTarget = computeGoalBackCalc(p, p.totalSec - 50);
-    const headroom = easyTarget.totalHeadroomSec;
-    // Pick a target that demands 75% of headroom.
-    const stretchTarget = p.totalSec - Math.round(headroom * 0.75);
-    const r = computeGoalBackCalc(p, stretchTarget);
-    expect(r.feasibility).toBe('stretch');
-    expect(r.caveat).not.toBeNull();
+    const likelyRangeSec: [number, number] = [p.totalSec - 200, p.totalSec + 200];
+    const inside = computeGoalBackCalc(p, p.totalSec - 200, { likelyRangeSec });
+    expect(inside.feasibility).toBe('achievable');
+    expect(inside.caveat).toBeNull();
+    expect(inside.likelyRangeSec).toEqual(likelyRangeSec);
+    const faster = computeGoalBackCalc(p, p.totalSec - 201, { likelyRangeSec });
+    expect(faster.feasibility).toBe('stretch');
+    const ft = (x: number) => `${Math.floor(x / 3600)}:${String(Math.floor((x % 3600) / 60)).padStart(2, '0')}:${String(x % 60).padStart(2, '0')}`;
+    expect(faster.caveat).toBe(`Faster than your forecast's likely range, ${ft(likelyRangeSec[0])} to ${ft(likelyRangeSec[1])}.`);
+    // No headroom share threshold and no training-time claim any more.
+    const deep = computeGoalBackCalc(p, p.totalSec - Math.round(inside.totalHeadroomSec * 0.9), {});
+    expect(deep.feasibility).toBe('achievable');
+    expect(deep.caveat).toBeNull();
+    expect(faster.caveat).not.toMatch(/months/);
   });
 
   it('achievedSec sums to targetTotalSec for achievable targets', () => {
@@ -236,8 +242,9 @@ describe('computeGoalBackCalc options: cohort floors and the Roxzone at the goal
       expect(r.roxzoneSec).toBe(250);
       expect(r.achievedSec).toBeCloseTo(p.totalSec - 50, 6);
     }
-    // 30 s faster: inside what the Roxzone can give, so a stretch.
-    const r3 = computeGoalBackCalc(p, p.totalSec - 30, { floors, roxzoneTargetSec: 290 });
+    // 30 s faster: inside what the Roxzone can give, so reachable (graded
+    // against the likely range: a stretch when faster than its fast end).
+    const r3 = computeGoalBackCalc(p, p.totalSec - 30, { floors, roxzoneTargetSec: 290, likelyRangeSec: [p.totalSec - 20, p.totalSec + 20] });
     expect(r3.feasibility).toBe('stretch');
     expect(r3.roxzoneSec).toBeCloseTo(270, 6);
     expect(r3.achievedSec).toBeCloseTo(p.totalSec - 30, 6);

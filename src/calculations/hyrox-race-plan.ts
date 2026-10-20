@@ -55,11 +55,14 @@ import {
   hyroxCohortForState,
   hyroxCompetitiveFloors,
   hyroxPeerSplitsAt,
+  hyroxPlacementWho,
   type HyroxResultsCohort,
   type HyroxPeerSegment,
 } from './hyrox-results';
 import { isHyroxDoublesFormat } from './hyrox-division';
+import { hyroxLikelyRangeSec } from './race-projection.hyrox';
 import { HYROX_STATION_ORDER, STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
+import { ftRounded } from '@/utils/format';
 
 export interface HyroxRaceClockLeg {
   kind: 'run' | 'station';
@@ -110,6 +113,9 @@ export interface HyroxRacePlan {
   shortfallSec: number;
   /** The back-calculation's caveat (stretch and unrealistic goals). */
   caveat: string | null;
+  /** The forecast's likely range (the Forecast hero's), null without a goal
+   *  faster than the forecast. */
+  likelyRangeSec: [number, number] | null;
   /** 16 legs in race order. */
   legs: HyroxRacePlanLeg[];
   /** forecastSec is the forecast's own Roxzone (prediction.roxzoneSec,
@@ -125,24 +131,59 @@ export interface HyroxRacePlan {
 
 /**
  * The options computeGoalBackCalc reads for this athlete: floors from the
- * athlete's own field (run, stations and Roxzone) and the Roxzone at the
- * goal. The one source for the race plan and the goal modal, so both show
- * the same targets.
+ * athlete's own field (run, stations and Roxzone), the Roxzone at the goal
+ * and the forecast's likely range (feasibility). The one source for the race
+ * plan and the goal modal, so both grade and split a goal the same way.
  */
 export function hyroxGoalBackCalcOptions(
   state: SimulatorState,
-  prediction: Pick<HyroxPrediction, 'totalSec' | 'roxzoneSec'>,
+  prediction: Pick<HyroxPrediction, 'totalSec' | 'roxzoneSec' | 'confidence'>,
   goalSec: number,
 ): GoalBackCalcOptions {
   const cohort = hyroxCohortForState(state);
   const floors = hyroxCompetitiveFloors(cohort);
   const roxzoneTargetSec = hyroxRoxzoneAtGoalSec(cohort, prediction, goalSec);
   return {
+    // A reachable goal is a stretch when it is faster than the Forecast
+    // hero's likely range.
+    likelyRangeSec: hyroxLikelyRangeSec(state, prediction),
     // One floor per component, the cohort's fast end (min of the top-1%
     // median and the p1 split), the same for every athlete in the field.
     ...(floors ? { floors: { stationSec: floors.fastest.stationSec, runSec: floors.fastest.runSec, roxzoneSec: floors.fastest.roxzoneSec } } : {}),
     ...(roxzoneTargetSec != null ? { roxzoneTargetSec } : {}),
   };
+}
+
+/**
+ * The goal's feasibility in one plain sentence, the same on the goal modal
+ * and the race plan:
+ *  - unrealistic: "1:00:00 is out of reach even with every leg at top-1%
+ *    level for Open Singles women."
+ *  - stretch: "Faster than your forecast's likely range, 1:23:28 to 1:36:02."
+ *    (the Forecast hero's "Likely" range)
+ *  - achievable: "Inside your forecast's likely range."
+ *  - at or slower than the forecast: "Matches your forecast." / "Your
+ *    forecast already beats this goal."
+ * '' without a goal.
+ */
+export function hyroxGoalFeasibilityLine(f: {
+  feasibility: GoalBackCalcResult['feasibility'] | null;
+  goalSec: number | null;
+  forecastSec: number;
+  likelyRangeSec: [number, number] | null;
+  cohort: HyroxResultsCohort;
+}): string {
+  if (f.goalSec == null || f.feasibility == null) return '';
+  if (f.feasibility === 'unrealistic') {
+    return `${ftRounded(f.goalSec)} is out of reach even with every leg at top-1% level for ${hyroxPlacementWho({ cohort: f.cohort, ageGroup: null })}.`;
+  }
+  if (f.feasibility === 'stretch') {
+    return f.likelyRangeSec
+      ? `Faster than your forecast's likely range, ${ftRounded(f.likelyRangeSec[0])} to ${ftRounded(f.likelyRangeSec[1])}.`
+      : 'Faster than your forecast.';
+  }
+  if (f.feasibility === 'achievable') return 'Inside your forecast\'s likely range.';
+  return Math.round(f.goalSec) === Math.round(f.forecastSec) ? 'Matches your forecast.' : 'Your forecast already beats this goal.';
 }
 
 /** The forecast's Roxzone scaled to the goal by the real results: forecast x
@@ -313,11 +354,13 @@ export function buildHyroxRacePlan(state: SimulatorState, prediction: HyroxPredi
   let feasibility: HyroxRacePlan['feasibility'] = null;
   let shortfallSec = 0;
   let caveat: string | null = null;
+  let likelyRangeSec: [number, number] | null = null;
   if (goalSec != null && goalSec < prediction.totalSec) {
     const back = computeGoalBackCalc(prediction, goalSec, hyroxGoalBackCalcOptions(state, prediction, goalSec));
     feasibility = back.feasibility;
     shortfallSec = back.shortfallSec;
     caveat = back.caveat;
+    likelyRangeSec = back.likelyRangeSec;
     if (back.feasibility !== 'unrealistic') {
       const stationSec = {} as Record<HyroxStation, number>;
       for (const st of HYROX_STATION_ORDER) {
@@ -347,6 +390,7 @@ export function buildHyroxRacePlan(state: SimulatorState, prediction: HyroxPredi
     feasibility,
     shortfallSec,
     caveat,
+    likelyRangeSec,
     legs,
     roxzone: { splitSec: basis === 'forecast' ? forecastRoxzoneSec : clock.roxzoneSec, forecastSec: forecastRoxzoneSec },
     checkpoints: clock.checkpoints,

@@ -4,10 +4,13 @@ import {
   buildHyroxRacePlan,
   hyroxForecastRaceClock,
   hyroxGoalBackCalcOptions,
+  hyroxGoalFeasibilityLine,
   hyroxRoxzoneAtGoalSec,
   roundToTotal,
 } from './hyrox-race-plan';
 import { computeGoalBackCalc } from './hyrox-goal-back-calc';
+import { hyroxLikelyRangeSec } from './race-projection.hyrox';
+import { ftRounded } from '@/utils/format';
 import { hyroxCompetitiveFloors, hyroxCohortForState } from './hyrox-results';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import type { SimulatorState } from '@/types/state';
@@ -424,6 +427,52 @@ describe('stretch goals', () => {
     expect(plan.caveat).toBeTruthy();
     expect(plan.basis).toBe('goal');
     expect(plan.legs[15].clockSec).toBe(f.totalSec + 120);
+  });
+});
+
+describe('feasibility against the forecast\'s likely range (review 4: goals 20 min faster read achievable)', () => {
+  const raceDate = new Date(Date.now() + 84 * 86400000).toISOString().slice(0, 10);
+  const cases: Array<[string, SimulatorState, number[]]> = [
+    ['intermediate Open Singles man', buildState({ raceDate }, { biologicalSex: 'male' }), [600, 900, 1200]],
+    ['first-timer (total_beginner)', buildState({ raceDate, athleteBand: 'total_beginner' }), [1680]],
+  ];
+
+  it('goals well under the forecast read stretch, naming the hero\'s own likely range; the race plan says the same', () => {
+    for (const [name, base, gains] of cases) {
+      const p = predictHyroxRace(base)!;
+      const range = hyroxLikelyRangeSec(base, p);
+      for (const gain of gains) {
+        const goal = p.totalSec - gain;
+        const back = computeGoalBackCalc(p, goal, hyroxGoalBackCalcOptions(base, p, goal));
+        expect([name, gain, back.feasibility]).toEqual([name, gain, 'stretch']);
+        expect(back.likelyRangeSec).toEqual(range);
+        expect(back.caveat).toBe(`Faster than your forecast's likely range, ${ftRounded(range[0])} to ${ftRounded(range[1])}.`);
+        const plan = buildHyroxRacePlan({ ...base, hyroxConfig: { ...base.hyroxConfig!, targetFinishTimeSec: goal } } as SimulatorState, p);
+        expect(plan.feasibility).toBe('stretch');
+        expect(hyroxGoalFeasibilityLine(plan)).toBe(back.caveat);
+      }
+    }
+  });
+
+  it('a stretch goal near the men\'s top-1% finish reads the range, not a training-time claim', () => {
+    const base = buildState({ raceDate }, { biologicalSex: 'male' });
+    const f = hyroxCompetitiveFloors(hyroxCohortForState(base))!;
+    const p = predictHyroxRace(base)!;
+    const goal = f.totalSec + 120;
+    const plan = buildHyroxRacePlan({ ...base, hyroxConfig: { ...base.hyroxConfig!, targetFinishTimeSec: goal } } as SimulatorState, p);
+    expect(plan.feasibility).toBe('stretch');
+    expect(plan.caveat).toMatch(/^Faster than your forecast's likely range, /);
+    expect(plan.caveat).not.toMatch(/months|headroom/);
+  });
+
+  it('inside the range: achievable; at its fast end still achievable, a second faster a stretch', () => {
+    const base = buildState({ raceDate }, { biologicalSex: 'male' });
+    const p = predictHyroxRace(base)!;
+    const [lo] = hyroxLikelyRangeSec(base, p);
+    const at = computeGoalBackCalc(p, lo, hyroxGoalBackCalcOptions(base, p, lo));
+    expect(at.feasibility).toBe('achievable');
+    expect(hyroxGoalFeasibilityLine({ ...at, goalSec: lo, forecastSec: p.totalSec, cohort: hyroxCohortForState(base) })).toBe('Inside your forecast\'s likely range.');
+    expect(computeGoalBackCalc(p, lo - 1, hyroxGoalBackCalcOptions(base, p, lo - 1)).feasibility).toBe('stretch');
   });
 });
 

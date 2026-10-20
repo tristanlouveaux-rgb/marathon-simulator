@@ -12,7 +12,7 @@ import { buildRingBackground, atmosphereGradient, buildSunGlint, shouldPlayEntra
 import { renderTabBar, wireTabBarHandlers, type TabId } from '@/ui/tab-bar';
 import { buildHyroxTrademarkFooter } from './trademark-footer';
 import { predictHyroxRace, hyroxStationSeedsForState, type HyroxStationLine, type HyroxRunLeg, type HyroxProjectionMarkers, type HyroxPrediction, type HyroxStationProjection } from '@/calculations/race-prediction.hyrox';
-import { buildHyroxProjection, hyroxForecastBandPct } from '@/calculations/race-projection.hyrox';
+import { buildHyroxProjection, hyroxLikelyRangeSec } from '@/calculations/race-projection.hyrox';
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { getHyroxVenueById, rescaleTimeAcrossVenues } from '@/data/hyrox-venues';
 import { getHyroxEventById, getVenueIdForEvent } from '@/data/hyrox-events';
@@ -806,13 +806,11 @@ function buildHyroxHero(
   const courseFactorPct = ((prediction.totalSec - prediction.rawSec) / rawForPct) * 100;
 
   // Likely range — the factor-based confidence band centred on the displayed
-  // forecast number. Same band-width helper feeds the projection's
-  // confidenceRangeSec, so the two surfaces never disagree. Communicates "how
-  // sure are we about this number" without a Monte Carlo sim.
-  const bandPct = hyroxForecastBandPct(prediction.confidence, proj.weeksRemaining);
-  const bandHalf = prediction.totalSec * bandPct;
-  const rangeLow = Math.round(prediction.totalSec - bandHalf);
-  const rangeHigh = Math.round(prediction.totalSec + bandHalf);
+  // forecast number (hyroxLikelyRangeSec, hyroxForecastBandPct wide). The goal
+  // feasibility grading reads the same helper, so "inside your forecast's
+  // likely range" always means this range. Communicates "how sure are we
+  // about this number" without a Monte Carlo sim.
+  const [rangeLow, rangeHigh] = hyroxLikelyRangeSec(s, prediction);
   const rangeLine = prediction.totalSec > 0
     ? `<div style="font-size:12px;color:var(--c-muted);margin-top:8px;font-variant-numeric:tabular-nums">Likely ${fmtMmSs(rangeLow)}–${fmtMmSs(rangeHigh)}</div>`
     : '';

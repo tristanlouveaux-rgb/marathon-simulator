@@ -93,6 +93,23 @@ export function hyroxForecastBandPct(
   return pct;
 }
 
+/**
+ * The forecast's likely range, exactly as the Forecast hero shows it
+ * ("Likely X–Y"): the forecast ± hyroxForecastBandPct of it (the band widens
+ * with weeks to race day and with lower calibration). One source for the
+ * hero and the goal feasibility grading (hyroxGoalBackCalcOptions), so a goal
+ * reads "inside your forecast's likely range" only when the hero's range
+ * contains it.
+ */
+export function hyroxLikelyRangeSec(
+  state: SimulatorState,
+  prediction: Pick<HyroxPrediction, 'totalSec' | 'confidence'>,
+): [number, number] {
+  const pct = hyroxForecastBandPct(prediction.confidence, computeWeeksRemaining(state));
+  const half = prediction.totalSec * pct;
+  return [Math.round(prediction.totalSec - half), Math.round(prediction.totalSec + half)];
+}
+
 /** Days between two ISO dates. Negative if `to` is before `from`. */
 function daysBetween(fromISO: string, toISO: string): number {
   const a = new Date(fromISO).getTime();
