@@ -40,10 +40,8 @@ describe('parseHhMmSs — target finish parsing', () => {
   });
 });
 
-describe('goal back-calculation rows: fractional times never print ":60"', () => {
-  // The back-calculation distributes the gain proportionally, so targets are
-  // fractional. Rounding only the seconds part printed 119.6 s as "1:60".
-  const result: GoalBackCalcResult = {
+describe('goal modal body: one feasibility line, the race plan carries the splits', () => {
+  const base: GoalBackCalcResult = {
     feasibility: 'achievable',
     gainNeededSec: 120,
     totalHeadroomSec: 600,
@@ -56,17 +54,33 @@ describe('goal back-calculation rows: fractional times never print ":60"', () =>
     achievedSec: 4500,
     shortfallSec: 0,
     caveat: null,
-    floorSource: 'legacy',
+    floorSource: 'cohort',
   };
-  const html = renderResultBody(result);
 
-  it('station times round before the minute split, like the forecast rows', () => {
-    expect(html).toContain('5:00 → 2:00');
-    expect(html).toContain('5:00 → 4:40');
-    expect(html).not.toMatch(/\d:60/);
+  it('no run or station rows (the race plan lists every leg one tap later)', () => {
+    const html = renderResultBody(base);
+    expect(html).not.toContain('SkiErg');
+    expect(html).not.toContain('Run pace');
+    expect(html).not.toMatch(/\d:\d\d/);
+    expect(html).toContain('Achievable on your current headroom.');
   });
 
-  it('run pace carries the minute, like the forecast average run pace', () => {
-    expect(html).toContain('6:00 → 5:00');
+  it('stretch and unrealistic carry the back-calculation\'s caveat; on pace says so', () => {
+    expect(renderResultBody({ ...base, feasibility: 'stretch', caveat: 'Most athletes would need 6+ months of focused training to hit a goal this aggressive.' }))
+      .toContain('Stretch target.');
+    const unrealistic = renderResultBody({ ...base, feasibility: 'unrealistic', shortfallSec: 90, caveat: 'No realistic combination.' });
+    expect(unrealistic).toContain('About 1 min 30 sec faster than realistic.');
+    expect(unrealistic).toContain('No realistic combination.');
+    expect(renderResultBody({ ...base, feasibility: 'already_on_pace' })).toContain('Your forecast already beats this target.');
+  });
+
+  it('visual constraints: sentence case, no tinted callout, no olive figures, no em dash', () => {
+    for (const feasibility of ['achievable', 'stretch', 'unrealistic', 'already_on_pace'] as const) {
+      const html = renderResultBody({ ...base, feasibility, shortfallSec: 60, caveat: 'Caveat.' });
+      expect(html).not.toMatch(/text-transform:\s*uppercase/i);
+      expect(html).not.toMatch(/background:\s*rgba\(/);
+      expect(html).not.toContain('#4f5a3b');
+      expect(html).not.toContain('\u2014');
+    }
   });
 });

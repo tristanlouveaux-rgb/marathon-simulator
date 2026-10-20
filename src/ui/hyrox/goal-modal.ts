@@ -1,10 +1,14 @@
 /**
- * HYROX goal-back-calculation modal.
+ * HYROX goal modal: the race plan's goal step.
  *
- * Triggered from the forecast hero. Lets the user enter a target finish time
- * and shows the per-station + run-pace targets they'd need to hit. Reads from
- * the existing `targetFinishTimeSec` on `hyroxConfig` if set; otherwise
- * defaults to a 5% improvement on current prediction.
+ * Opened from the Forecast hero ("Set a target finish ›") and the race plan
+ * ("Change goal ›", openRacePlanGoalModal). The athlete enters a target
+ * finish; the modal shows one feasibility line from the goal
+ * back-calculation and a save lands on the race plan, which carries the
+ * per-leg splits (the modal's own list of run and station targets repeated
+ * them one tap earlier, rounded differently). Reads the existing
+ * `targetFinishTimeSec` on `hyroxConfig` if set; otherwise defaults to a 5%
+ * improvement on the current prediction.
  *
  * Per CLAUDE.md UI rules:
  *   - Vertically centered overlay (`flex items-center justify-center`)
@@ -18,14 +22,8 @@ import { saveState } from '@/state/persistence';
 import type { HyroxPrediction } from '@/calculations/race-prediction.hyrox';
 import { computeGoalBackCalc, type GoalBackCalcResult } from '@/calculations/hyrox-goal-back-calc';
 import { hyroxGoalBackCalcOptions } from '@/calculations/hyrox-race-plan';
-import { STATION_DISPLAY, STATION_SEED_TIMES_SEC, HYROX_RUN_PACE_MIN_SEC_KM } from '@/constants/hyrox-benchmarks';
-import { ftRounded, fmtModelPaceKm } from '@/utils/format';
-
-// Times and paces here are fractional (the back-calculation distributes the
-// gain proportionally), so they round to the whole second before the minute
-// split, the way the forecast shows the same numbers: times through ftRounded
-// (forecast hero and station rows), run pace through fmtModelPaceKm (forecast
-// average run pace). Rounding only the seconds part printed 59.6 s as "0:60".
+import { STATION_SEED_TIMES_SEC, HYROX_RUN_PACE_MIN_SEC_KM } from '@/constants/hyrox-benchmarks';
+import { ftRounded } from '@/utils/format';
 
 /** "56 min" / "1 min 20 sec" / "40 sec" — readable duration, never raw seconds. */
 function fmtApproxDuration(sec: number): string {
@@ -86,55 +84,21 @@ function populationFloorSec(prediction: HyroxPrediction): number {
   return HYROX_RUN_PACE_MIN_SEC_KM * 8 + stationFloor + prediction.roxzoneSec;
 }
 
+/**
+ * The feasibility line under the target: plain text, no list (the race plan
+ * carries the per-leg splits), no tinted callout.
+ */
 export function renderResultBody(result: GoalBackCalcResult): string {
-  if (result.feasibility === 'already_on_pace') {
-    return `
-      <div style="font-size:13px;color:var(--c-black);line-height:1.5;padding:14px;background:rgba(122,132,92,0.08);border-radius:10px;margin-bottom:14px">
-        Your current forecast already beats this target. No changes to per-station targets needed.
-      </div>
-    `;
-  }
-
-  const headerCopy = result.feasibility === 'unrealistic'
-    ? `<div style="font-size:13px;color:var(--c-black);line-height:1.5;padding:14px;background:rgba(0,0,0,0.04);border-radius:10px;margin-bottom:14px"><div style="font-weight:600;margin-bottom:4px">About ${fmtApproxDuration(result.shortfallSec)} faster than realistic.</div><div style="color:var(--c-muted);font-size:12px">${result.caveat ?? ''}</div></div>`
-    : result.feasibility === 'stretch'
-    ? `<div style="font-size:13px;color:var(--c-black);line-height:1.5;padding:14px;background:rgba(0,0,0,0.04);border-radius:10px;margin-bottom:14px"><div style="font-weight:600;margin-bottom:4px">Stretch target.</div><div style="color:var(--c-muted);font-size:12px">${result.caveat ?? ''}</div></div>`
-    : `<div style="font-size:12px;color:var(--c-muted);margin-bottom:10px;line-height:1.5">${result.floorSource === 'cohort'
-      ? "Spread by each component's headroom to the top-1% median of your field."
-      : "Distributed proportional to each component's headroom against the band's competitive floor."}</div>`;
-
-  const runRow = result.runPaceTarget.deltaSecKm < -0.5 ? `
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;font-size:13px;border-top:1px solid rgba(0,0,0,0.05)">
-      <span style="color:var(--c-black)">Run pace</span>
-      <span style="display:flex;gap:14px;align-items:baseline">
-        <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${fmtModelPaceKm(result.runPaceTarget.currentSecKm)} → ${fmtModelPaceKm(result.runPaceTarget.targetSecKm)}</span>
-        <span style="font-size:12px;color:#4f5a3b;font-weight:600;font-variant-numeric:tabular-nums;min-width:48px;text-align:right">${result.runPaceTarget.deltaSecKm.toFixed(1)}s/km</span>
-      </span>
+  const line = (head: string, detail?: string | null) => `
+    <div data-goal-feasibility="${result.feasibility}" style="font-size:13px;color:var(--c-black);line-height:1.5">
+      <div style="font-weight:600">${head}</div>
+      ${detail ? `<div style="color:var(--c-muted);font-size:12px;margin-top:2px">${detail}</div>` : ''}
     </div>
-  ` : '';
-
-  const stationRows = result.stationTargets
-    .filter(t => t.deltaSec < -0.5) // hide rows that don't need to change
-    .sort((a, b) => a.deltaSec - b.deltaSec) // biggest gain first
-    .map((t, i) => {
-      const display = STATION_DISPLAY[t.station];
-      return `
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;font-size:13px;border-top:${i === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'}">
-          <span style="color:var(--c-black)">${display.name}</span>
-          <span style="display:flex;gap:14px;align-items:baseline">
-            <span style="color:var(--c-black);font-variant-numeric:tabular-nums">${ftRounded(t.currentSec)} → ${ftRounded(t.targetSec)}</span>
-            <span style="font-size:12px;color:#4f5a3b;font-weight:600;font-variant-numeric:tabular-nums;min-width:48px;text-align:right">${Math.round(t.deltaSec)}s</span>
-          </span>
-        </div>
-      `;
-    }).join('');
-
-  return `
-    ${headerCopy}
-    <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Run + station targets</div>
-    ${runRow}
-    ${stationRows || (runRow === '' ? '<div style="font-size:12px;color:var(--c-faint);padding:10px 0">All components already at floor.</div>' : '')}
   `;
+  if (result.feasibility === 'already_on_pace') return line('Your forecast already beats this target.');
+  if (result.feasibility === 'unrealistic') return line(`About ${fmtApproxDuration(result.shortfallSec)} faster than realistic.`, result.caveat);
+  if (result.feasibility === 'stretch') return line('Stretch target.', result.caveat);
+  return line('Achievable on your current headroom.');
 }
 
 /**
@@ -159,7 +123,7 @@ export function openHyroxGoalModal(prediction: HyroxPrediction, opts: { onChange
         <div style="font-size:17px;font-weight:700;color:#0F172A">Set a target finish</div>
         <button id="hx-goal-close" style="background:none;border:none;cursor:pointer;color:var(--c-faint);font-size:20px;line-height:1;padding:0">×</button>
       </div>
-      <div style="font-size:12px;color:var(--c-muted);margin-bottom:14px;line-height:1.5">Current forecast: ${ftRounded(prediction.totalSec)}. Enter a target and we'll back-calculate the per-station times you'd need.</div>
+      <div style="font-size:12px;color:var(--c-muted);margin-bottom:14px;line-height:1.5">Current forecast: ${ftRounded(prediction.totalSec)}. The race plan paces every leg to your target.</div>
       <label style="display:block;font-size:12px;font-weight:600;color:#0F172A;margin-bottom:6px">Target time (mm:ss or h:mm:ss)</label>
       <input
         id="hx-goal-input"
