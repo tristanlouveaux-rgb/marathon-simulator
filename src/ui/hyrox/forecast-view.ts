@@ -30,7 +30,8 @@ import { getDisciplineCapacity } from '@/injury/engine';
 import { injuryWithResumeFallback } from '@/calculations/hyrox-injury';
 import { pbAgeCaptionText } from '@/ui/pb-age-caption';
 import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
-import { buildRacePlanEntryCard, renderHyroxRacePlanView } from './race-plan-view';
+import { buildRacePlanEntryCard, buildRacePlanLink, openRacePlanGoalModal, renderHyroxRacePlanView } from './race-plan-view';
+import { hyroxForecastRaceClock } from '@/calculations/hyrox-race-plan';
 import { buildLoseTimeCard, wireLoseTimeCard } from './lose-time-view';
 
 function fmtMmSs(sec: number): string {
@@ -177,26 +178,20 @@ function renderRaceOrderTable(
   const fastestLegPace = Math.min(...legs.map(l => l.paceSecKm));
   const maxLegSlip = Math.max(...legs.map(l => l.paceSecKm - fastestLegPace));
 
-  // Cumulative race-time at the end of each event (run or station), built once
-  // in real-race order. We absorb the gap between summed-displayed-times and
-  // `prediction.totalSec` (course-venue adjustment + RoxZone transitions) as a
-  // uniform per-event overhead, so the last cumulative value lines up with the
-  // headline projected finish. Caption explains it under the card.
-  const sumDisplayed =
-    legs.reduce((s, l) => s + l.paceSecKm, 0) +
-    stations.reduce((s, st) => s + st.baseSec, 0);
-  const overhead = prediction.totalSec - sumDisplayed;
-  const perEventOverhead = overhead / (legs.length + stations.length);
+  // Race clock at the end of each event, in real-race order: the one forecast
+  // clock (hyroxForecastRaceClock, hyrox-race-plan.ts), which the race plan
+  // page reads too. The forecast's own lines, with the Roxzone around each
+  // station, so the clock after Wall Balls is the headline finish. Race order
+  // shows each station's race-day split at the venue (adjustedSec, the line
+  // that clock sums); Station order keeps the test-pace "now" (baseSec).
+  const raceClock = hyroxForecastRaceClock(prediction);
   const cumByKey = new Map<string, number>();
-  let cumSec = 0;
-  for (let i = 0; i < legs.length; i++) {
-    cumSec += legs[i].paceSecKm + perEventOverhead;
-    cumByKey.set(`run-${i}`, Math.round(cumSec));
-    if (i < stations.length) {
-      cumSec += stations[i].baseSec + perEventOverhead;
-      cumByKey.set(`station-${i}`, Math.round(cumSec));
-    }
-  }
+  const splitByKey = new Map<string, number>();
+  raceClock.legs.forEach(l => {
+    const key = l.kind === 'run' ? `run-${l.legNumber - 1}` : `station-${l.legNumber - 1}`;
+    cumByKey.set(key, l.clockSec);
+    splitByKey.set(key, l.splitSec);
+  });
 
   const rows: string[] = [];
   let rowIndex = 0;
@@ -210,7 +205,7 @@ function renderRaceOrderTable(
       if (i < stations.length) {
         const line = stations[i];
         const proj = stationProjByName.get(line.station);
-        rows.push(renderStationOrderRow(line, proj, state, fmt, rowIndex++, cumByKey.get(`station-${i}`) ?? 0, 'race-order'));
+        rows.push(renderStationOrderRow(line, proj, state, fmt, rowIndex++, cumByKey.get(`station-${i}`) ?? 0, 'race-order', splitByKey.get(`station-${i}`)));
       }
     }
   } else {
@@ -263,7 +258,7 @@ function renderRunLegRow(
         </span>
         <span></span>
         <span style="text-align:right;color:var(--c-muted);font-variant-numeric:tabular-nums;font-size:12px">${fmtPace(leg.paceSecKm)}</span>
-        <span style="text-align:right;color:var(--c-black);font-variant-numeric:tabular-nums;font-size:13px;font-weight:600">${fmtMmSs(cumulativeSec)}</span>
+        <span data-hx-race-clock="run-${leg.legNumber}" style="text-align:right;color:var(--c-black);font-variant-numeric:tabular-nums;font-size:13px;font-weight:600">${fmtMmSs(cumulativeSec)}</span>
       </div>
     `;
   }
@@ -298,6 +293,7 @@ function renderStationOrderRow(
   rowIndex: number,
   cumulativeSec: number,
   variant: 'race-order' | 'station-order',
+  raceDaySplitSec?: number,
 ): string {
   const display = STATION_DISPLAY[line.station];
   const sourceTag = line.source === 'calibrated' ? 'Your time' : 'Estimated';
@@ -337,8 +333,8 @@ function renderStationOrderRow(
           </span>
         </span>
         <span></span>
-        <span style="text-align:right;color:var(--c-muted);font-variant-numeric:tabular-nums;font-size:12px">${fmtMmSs(currentSec)}</span>
-        <span style="text-align:right;color:var(--c-black);font-variant-numeric:tabular-nums;font-size:13px;font-weight:600">${fmtMmSs(cumulativeSec)}</span>
+        <span style="text-align:right;color:var(--c-muted);font-variant-numeric:tabular-nums;font-size:12px">${fmtMmSs(raceDaySplitSec ?? currentSec)}</span>
+        <span data-hx-race-clock="${line.station}" style="text-align:right;color:var(--c-black);font-variant-numeric:tabular-nums;font-size:13px;font-weight:600">${fmtMmSs(cumulativeSec)}</span>
       </div>
     `;
   }
@@ -1083,6 +1079,7 @@ export function renderHyroxForecastView(): void {
                 ${raceOrderRows}
               </div>
               <div id="hx-rows-station" style="display:none">${stationOrderRows}</div>
+              ${buildRacePlanLink(s)}
               ${prediction.projection ? renderTrajectoryFooter(prediction.projection) : ''}
             </div>
           `;
@@ -1099,8 +1096,8 @@ export function renderHyroxForecastView(): void {
             </div>
           `}
 
-          <!-- Race plan: goal splits and race clock (drill-down) -->
-          ${buildRacePlanEntryCard(s)}
+          <!-- Race plan (doubles; singles reach it from the Race order card) -->
+          ${(hx.format === 'open_doubles' || hx.format === 'pro_doubles') ? buildRacePlanEntryCard(s) : ''}
 
           <!-- Skills analysis (strengths vs limiters) -->
           ${renderSkillsAnalysis(prediction.stations, hx.athleteBand, s)}
@@ -1217,7 +1214,13 @@ export function renderHyroxForecastView(): void {
     });
   });
 
-  // Race plan entry → race plan sub-page.
+  // Race plan: singles link in the Race order card (no goal: set one first),
+  // doubles entry row.
+  const racePlanLink = document.getElementById('hx-race-plan-link');
+  racePlanLink?.addEventListener('click', () => {
+    if (racePlanLink.getAttribute('data-has-goal') === '1') renderHyroxRacePlanView();
+    else openRacePlanGoalModal();
+  });
   const racePlanEntry = document.getElementById('hx-race-plan-entry');
   racePlanEntry?.addEventListener('click', () => renderHyroxRacePlanView());
   racePlanEntry?.addEventListener('keydown', (e: KeyboardEvent) => {

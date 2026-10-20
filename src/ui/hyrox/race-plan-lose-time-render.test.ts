@@ -136,12 +136,26 @@ describe('race plan page', () => {
     expect(html).toContain('Set a goal');
   });
 
-  it('an unrealistic goal: one plain line', () => {
-    const s = hyroxState({ targetFinishTimeSec: 3000 });
+  it('an unrealistic goal: one plain line, the splits at the forecast, no goal column', () => {
+    const s = hyroxState({ targetFinishTimeSec: 3600 });
     const plan = buildHyroxRacePlan(s, predictHyroxRace(s)!);
     const line = racePlanFeasibilityLine(plan);
-    expect(line).toMatch(/^This goal is about \d+ min out of reach\. With every leg at the top-1% median of your field, the splits reach \d:\d\d:\d\d\.$/);
-    expect(renderRacePlanBody(plan)).toContain(line);
+    expect(line).toBe('1:00:00 is out of reach even with every leg at the typical split of the top 1% of Open Singles women. Splits below are at your forecast.');
+    expect(line).not.toMatch(/\d+ min/);
+    const html = renderRacePlanBody(plan);
+    expect(html).toContain(line);
+    expect(html).not.toContain('>Goal<');
+    expect(html).toContain('Change goal');
+  });
+
+  it('the subhead names the time the Wall Balls clock reaches (goal, no goal, unrealistic)', () => {
+    for (const hx of [{ targetFinishTimeSec: 5300 }, {}, { targetFinishTimeSec: 3600 }]) {
+      setState(hyroxState(hx));
+      renderHyroxRacePlanView();
+      const sub = app().querySelector('[data-rp-subhead]')!.textContent!;
+      const clock = app().querySelector('[data-rp-leg="wall_balls"] [data-rp-clock]')!.textContent!.trim();
+      expect(sub.startsWith(`Splits for your ${clock} `)).toBe(true);
+    }
   });
 
   it('doubles: the pair caption', () => {
@@ -216,18 +230,50 @@ describe('where you lost time', () => {
 });
 
 describe('Forecast tab placement', () => {
-  it('the race plan row and the lose-time card render; lose-time sits right above "Where to gain"', () => {
-    const raceDate = new Date(Date.now() + 70 * 86400000).toISOString().slice(0, 10);
-    setState(hyroxState({ ...pastResult(), raceDate, targetFinishTimeSec: 5000 }));
+  const raceDate = () => new Date(Date.now() + 70 * 86400000).toISOString().slice(0, 10);
+
+  it('singles: the race plan is a link in the Race order card; lose-time sits right above "Where to gain"', () => {
+    setState(hyroxState({ ...pastResult(), raceDate: raceDate(), targetFinishTimeSec: 5000 }));
     renderHyroxForecastView();
-    const entry = document.getElementById('hx-race-plan-entry');
+    expect(document.getElementById('hx-race-plan-entry')).toBeNull();
+    const link = document.getElementById('hx-race-plan-link')!;
+    expect(link.textContent).toBe('Race plan for your goal ›');
     const lose = document.getElementById('hx-lose-time');
-    expect(entry).not.toBeNull();
     expect(lose).not.toBeNull();
-    // The entry row carries no numbers (the goal shows in the hero).
-    expect(entry!.textContent).not.toMatch(/\d/);
     const gain = document.getElementById('hx-where-to-gain');
     expect(gain).not.toBeNull();
     expect(lose!.nextElementSibling).toBe(gain);
+  });
+
+  it('singles without a goal: the link leads with setting one', () => {
+    setState(hyroxState({ raceDate: raceDate() }));
+    renderHyroxForecastView();
+    expect(document.getElementById('hx-race-plan-link')!.textContent).toBe('Set a goal for a race plan ›');
+  });
+
+  it('doubles (no Race order card): the entry row, with no numbers', () => {
+    setState(hyroxState({ format: 'open_doubles', division: 'mixed', raceDate: raceDate(), targetFinishTimeSec: 4600 }));
+    renderHyroxForecastView();
+    const entry = document.getElementById('hx-race-plan-entry');
+    expect(entry).not.toBeNull();
+    expect(entry!.textContent).not.toMatch(/\d/);
+  });
+
+  it('one forecast clock: the Race order card\'s clock after every leg is the race plan\'s', () => {
+    for (const hx of [{}, { venueId: 'mexico-city-exh' }]) {
+      const s = hyroxState({ ...hx, raceDate: raceDate() });
+      setState(s);
+      renderHyroxForecastView();
+      const plan = buildHyroxRacePlan(s, predictHyroxRace(s)!);
+      const fmtClock = (sec: number) => {
+        const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), x = sec % 60;
+        return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}` : `${m}:${String(x).padStart(2, '0')}`;
+      };
+      for (const leg of plan.legs) {
+        const key = leg.kind === 'run' ? `run-${leg.legNumber}` : leg.station!;
+        const cell = document.querySelector(`#hx-rows-race [data-hx-race-clock="${key}"]`)!;
+        expect(cell.textContent).toBe(fmtClock(leg.clockSec));
+      }
+    }
   });
 });
