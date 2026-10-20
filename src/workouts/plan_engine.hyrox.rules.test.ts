@@ -638,6 +638,34 @@ describe('HYROX plan rules: plan lengths 8 to 24, every band, the hours range', 
     }
     expect(found.slice(0, 10)).toEqual([]);
   });
+
+  it('doubles and pro plans: the long run is the week\'s longest run, taper weeks included (review round 2: the taper trim cut a doubles long run to 20 min beside a 25-min tempo run, 20 configurations)', () => {
+    const variants: Array<[string, Partial<OnboardingState>]> = [
+      ['open doubles mixed', { hyroxFormat: 'open_doubles', hyroxDivision: 'mixed' } as Partial<OnboardingState>],
+      ['pro doubles men', { hyroxFormat: 'pro_doubles', hyroxDivision: 'men', biologicalSex: 'male' } as Partial<OnboardingState>],
+      ['7-session open doubles women', { hyroxFormat: 'open_doubles', hyroxDivision: 'women', biologicalSex: 'female', hyroxWeeklySessionCount: 7 } as Partial<OnboardingState>],
+    ];
+    const found: string[] = [];
+    let longRuns = 0;
+    for (const [name, over] of variants) {
+      for (const band of BANDS) {
+        const r = HYROX_HOURS_RANGE[band];
+        for (let hrs = r.min; hrs <= Math.min(r.max, 8); hrs++) {
+          for (const len of [2, 8, 10, 12, 14, 15, 16, 20]) {
+            const s = build(band, hrs, len, over);
+            for (const wk of s.wks) {
+              const long = prescribed(wk).find(isHyroxLongRun);
+              if (!long) continue;
+              longRuns++;
+              for (const x of runs(wk)) if (x !== long && hyroxRunLengthKm(x) > hyroxRunLengthKm(long) + EPS) found.push(`${name} ${band} ${hrs}h ${len}w W${wk.w}: ${x.n} ${x.estimatedDurationMin} min longer than the ${long.estimatedDurationMin}-min long run`);
+            }
+          }
+        }
+      }
+    }
+    expect(longRuns).toBeGreaterThan(5000);
+    expect(found.slice(0, 10)).toEqual([]);
+  }, 300000);
 });
 
 describe('HYROX weekly structure and session counts', () => {
@@ -1659,8 +1687,11 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     // With the 15-min station floor (review round 2: a cut stops at the
     // last round or station that keeps a station session at 15 min): 20,
     // the new ones open doubles novice and intermediate, the worst 13 min.
+    // With the taper's light block from running above its floors and race
+    // week's circuit warm-up exempt (review round 2): 16, the worst 23 min
+    // (7 sessions, intermediate 8 weeks, 9 to 10 h), 10 of them 7 min or less.
     // A change that makes one more hour hold less again shows here first.
-    expect(fell.length).toBeLessThanOrEqual(20);
+    expect(fell.length).toBeLessThanOrEqual(16);
   }, 900000);
 
   it('C: a training week under the chosen hours says so plainly, with what holds it', () => {

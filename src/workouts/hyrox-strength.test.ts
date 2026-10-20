@@ -43,7 +43,7 @@ import {
 } from '@/constants/hyrox-constants';
 import { isHyroxDeloadWeek } from './plan_engine';
 import { generateHyroxPlanDetailed, regenerateHyroxWeeksFrom, applyHyroxInjuryGates } from './plan_engine.hyrox';
-import { hyroxSessionWorkMin, withHyroxRounds } from './hyrox-generators';
+import { hyroxSessionWorkMin, withHyroxRounds, hyroxRunLengthKm } from './hyrox-generators';
 import type { InjuryState } from '@/types/injury';
 import { planTrainingWeeks } from './race-week-layout';
 import { isHyroxLongRun, isHyroxStrengthSession } from './scheduler.hyrox';
@@ -181,6 +181,69 @@ describe('strength counts and sessions', () => {
     }
     expect(held).toBeGreaterThan(500);
     expect(over.slice(0, 10)).toEqual([]);
+  }, 120000);
+
+  it('the week before race week holds its light block, from the spare minutes, the finishers and running above its floors, inside 0.55 (review round 2: 12 of 96 no-race plans held it, 3 of 24 at the default hours)', () => {
+    // Sheet strength.sessions and taper.content: one light strength session
+    // in the week before race week. Left out only when its station session
+    // is missing, the 48 h rule forbids it, or every easy run is at the run
+    // floor and the long run no longer than the week's longest other run
+    // (the light block outranks easy running above its floors).
+    let plans = 0;
+    let held = 0;
+    let heldDefault = 0;
+    let plansDefault = 0;
+    const wrong: string[] = [];
+    for (const band of BANDS) {
+      const r = HYROX_HOURS_RANGE[band];
+      for (const h of [r.min, Math.round((r.min + r.default) / 2), r.default, r.max].filter((x, i, a) => a.indexOf(x) === i)) {
+        for (const len of [12, 16, 20, 24]) {
+          const s = build(band, h, len);
+          const tw = planTrainingWeeks(s);
+          const wk = s.wks[tw - 2];
+          const ws = prescribed(wk);
+          plans++;
+          if (h === r.default) plansDefault++;
+          const label = `${band} ${h}h ${len}w W${tw - 1}`;
+          if (blocksOf(ws).some(w => !!w.hyroxSpec?.strength?.light)) {
+            held++;
+            if (h === r.default) heldDefault++;
+            continue;
+          }
+          const note = (wk.hyroxPlanNotes ?? []).find(n => /light strength block left out/.test(n));
+          const circuit = ws.some(w => w.t === 'hyrox_station_technique' || w.t === 'hyrox_station_density');
+          if (!circuit) continue;
+          if (!note) { wrong.push(`${label}: no light block and no note`); continue; }
+          if (/48 h rule/.test(note)) continue;
+          // Left out for the fraction: the fraction's spare, the finishers and
+          // running above its floors hold less than the block (the week then
+          // keeps its runs as they were).
+          const d = generateHyroxPlanDetailed(s).detail[tw - 2];
+          const exempt = ws.filter(w => (w.t === 'hyrox_station_technique' || w.t === 'hyrox_station_density') && (w.hyroxRounds ?? 0) <= 2
+            && (w.hyroxComponents ?? []).filter(c => c.type !== 'run').length <= 2)
+            .reduce<Workout | undefined>((m, w) => (!m || (w.estimatedDurationMin ?? 0) < (m.estimatedDurationMin ?? 0) ? w : m), undefined);
+          const counted = ws.reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0) - (exempt ? hyroxSessionWorkMin(exempt) : 0);
+          const finishers = ws.reduce((a, w) => a + (w.hyroxSpec?.finisher?.min ?? 0), 0);
+          const easyAbove = ws.filter(w => w.t === 'hyrox_run_easy' && !isHyroxLongRun(w)).reduce((a, w) => a + Math.max(0, (w.estimatedDurationMin ?? 0) - HYROX_RUN_FLOOR_MIN), 0);
+          const long = ws.find(isHyroxLongRun);
+          const otherKm = Math.max(0, ...ws.filter(w => w.discipline === 'run' && w !== long).map(hyroxRunLengthKm));
+          const kmPerMin = long && (long.estimatedDurationMin ?? 0) > 0 ? hyroxRunLengthKm(long) / (long.estimatedDurationMin ?? 1) : 0;
+          const longFloor = kmPerMin > 0 ? Math.max(HYROX_RUN_FLOOR_MIN, Math.ceil(otherKm / kmPerMin - 1e-9)) : 0;
+          const longAbove = long ? Math.max(0, (long.estimatedDurationMin ?? 0) - longFloor) : 0;
+          const room = Math.max(0, d.budgetMin - counted) + finishers + easyAbove + longAbove;
+          if (room >= HYROX_STRENGTH_BLOCK_MIN + 1) wrong.push(`${label}: left out with ${room.toFixed(0)} min to give (${note})`);
+        }
+      }
+    }
+    expect(plans).toBe(96);
+    expect(wrong.slice(0, 10)).toEqual([]);
+    // Measured 2026-10-20 (review round 2): 73 of 96, 16 of 24 at the
+    // default hours; the rest beginner-tier weeks at 3 h or more, whose
+    // tempo (25 min, its shortest), circuit, mini brick and long run leave
+    // no 20 min inside 0.55.
+    expect(held).toBeGreaterThanOrEqual(70);
+    expect(heldDefault).toBeGreaterThanOrEqual(16);
+    expect(plansDefault).toBe(24);
   }, 120000);
 
   it('the standalone session takes its own day, never repeats its week\'s block, and a template session runs its 20 min (review: 66 base weeks repeated the block, booked at 45 min)', () => {

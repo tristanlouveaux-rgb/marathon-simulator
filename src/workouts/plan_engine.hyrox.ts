@@ -4265,12 +4265,40 @@ export function buildHyroxTrainingWeeks(
       if (demand > 0) base.adjustments.push(`W${w}: no strength block or session (strength takes the minutes the week's size leaves after its runs and station work)`);
       return base;
     };
-    // The week before race week's light block (sheet strength.sessions: 1
-    // light; the first station session's): added to its station session when
-    // the taper's limits hold it, the minutes from the week's spare, then from
-    // its finishers (taper weeks are shed after they are sized, so this edits
-    // the week in place rather than building it again). Its exercises carry
-    // jumps, so it is eccentric: none when that breaks the 48 h rule.
+    // A taper week's easy run (or long run) at a new length, on its day and
+    // slot (the taper edits weeks in place after they are sized).
+    const remakeTaperRun = (x: Workout, m: number): Workout => ({
+      ...generateHyroxRun({ kind: 'run_easy', targetMinutes: m, longRun: isHyroxLongRun(x), band: hx.athleteBand, phase, slotIndex: w, bodyWeightKg: state.bodyWeightKg, runPaceSecKm: hx.hyroxRunPaceSecKm, seed: state }),
+      id: x.id, dayOfWeek: x.dayOfWeek, dayName: x.dayName,
+    });
+    // The shortest the week's long run may run (minutes at easy pace): the
+    // run floor, and never shorter than the week's longest other run (the
+    // long run is the week's longest run, by distance, sheet long_run.cap).
+    // Lane H2b part 2 review, round 2: the taper trim cut a doubles long run
+    // to 20 min beside a 25-min tempo run (20 configurations).
+    const longFloorOf = (ws: readonly Workout[], long: Workout): number => {
+      const otherKm = Math.max(0, ...prescribed(ws).filter(x => x !== long && x.discipline === 'run').map(hyroxRunLengthKm));
+      let m = Math.max(runFloorMin, Math.ceil((otherKm * easyPace) / 60));
+      while (m < (long.estimatedDurationMin ?? m) && hyroxRunLengthKm(remakeTaperRun(long, m)) < otherKm - 1e-9) m++;
+      return m;
+    };
+    // The week before race week's light block (sheet strength.sessions and
+    // taper.content: one light strength session in the week before race
+    // week; the first station session's), inside the taper fraction. Its
+    // minutes come from the fraction's spare, then the finishers, then the
+    // easy runs above the run floor and the long run above its floor
+    // (longFloorOf): the light block outranks easy running above its floors,
+    // and the week keeps its run count (taper.content), as the taper shed
+    // shortens the long run before it leaves (lane H2b part 2 review, round
+    // 2: with the block counted inside the fraction and no running giving way
+    // to it, 12 of 96 no-race-date plans held it, against 120 of 124 when it
+    // sat outside the fraction). The per-session cap of the reference week
+    // (sessionCaps) holds the session's station work, warm-up and finisher;
+    // the light block, bodyweight activation, sits outside it, inside the
+    // week's fraction (before, 27 of the 96 lost it there). Taper weeks are
+    // shed after they are sized, so this edits the week in place rather than
+    // building it again. Its exercises carry jumps, so it is eccentric: none
+    // when that breaks the 48 h rule.
     const addTaperBlock = (base: Attempt): Attempt => {
       if (phase !== 'taper' || raceWeek) return base;
       if (w >= (state.w ?? 1) && injuryKind !== 'normal') return base;
@@ -4279,13 +4307,7 @@ export function buildHyroxTrainingWeeks(
       if (at < 0) return base;
       const c = hyroxStrengthContent(hx.athleteBand, 'taper', w, { minutes: HYROX_STRENGTH_BLOCK_MIN, light: true });
       const block: HyroxStrengthBlock = { name: c.name, lines: c.lines, min: HYROX_STRENGTH_BLOCK_MIN, rpe: c.rpe, light: true, eccentric: c.eccentric };
-      // No longer than its counterpart in the reference week (sessionCaps).
-      const refCap = sessionCapFor(sessionCaps, ws[at].t);
       const ownMin = (ws[at].estimatedDurationMin ?? 0) - (ws[at].hyroxSpec?.finisher?.min ?? 0);
-      if (refCap && ownMin + block.min > refCap.totalMin + 1e-6) {
-        base.adjustments.push(`W${w}: light strength block left out (taper: no session longer than the reference week's)`);
-        return base;
-      }
       const day = ws[at].dayOfWeek;
       if (block.eccentric && !isEccentricSession(ws[at]) && day != null) {
         const near = ws.some(x => x !== ws[at] && x.commute !== true && x.dayOfWeek != null && Math.abs(x.dayOfWeek - day) === 1 && isEccentricSession(x));
@@ -4295,7 +4317,7 @@ export function buildHyroxTrainingWeeks(
         }
       }
       // The minutes: the fraction's spare first, then the finishers (this
-      // session's, then the others').
+      // session's, then the others'), then running above its floors.
       const spare = fractionLimit ? Math.max(0, Math.floor(fractionLimit.cap - fractionLimit.of(base))) : 0;
       let need = Math.max(0, block.min - spare);
       const out = [...ws];
@@ -4308,22 +4330,55 @@ export function buildHyroxTrainingWeeks(
         need -= f - left;
         out[k] = withHyroxFinisher(out[k], left, hx.stationAccess, w + k, state.bodyWeightKg);
       }
-      // The session with its block stays within its counterpart's length.
-      if (refCap) {
-        const f = out[at].hyroxSpec?.finisher?.min ?? 0;
-        const room = Math.max(0, Math.floor(refCap.totalMin - ownMin - block.min + 1e-9));
-        if (f > room) out[at] = withHyroxFinisher(out[at], room < HYROX_FINISHER_MIN_MIN ? 0 : room, hx.stationAccess, w + at, state.bodyWeightKg);
+      // Its finisher keeps the session with its block within the session
+      // cap, as a training week's finisher fills only up to it.
+      const fAt = out[at].hyroxSpec?.finisher?.min ?? 0;
+      const roomAt = Math.max(0, Math.floor(lr.capMin - ownMin - block.min + 1e-9));
+      if (fAt > roomAt) {
+        const left = roomAt < HYROX_FINISHER_MIN_MIN ? 0 : roomAt;
+        need -= fAt - left;
+        out[at] = withHyroxFinisher(out[at], left, hx.stationAccess, w + at, state.bodyWeightKg);
+      }
+      // The easy runs, evenly, down to the run floor; then the long run.
+      const runNotes: string[] = [];
+      for (let i = 0; i < 8 && need > 0; i++) {
+        const open = out.map((x, k) => ({ x, k })).filter(o => isPlainEasyRun(o.x) && (o.x.estimatedDurationMin ?? 0) > HYROX_RUN_FLOOR_MIN);
+        if (open.length === 0) break;
+        const each = Math.ceil(need / open.length);
+        for (const o of open) {
+          const cur = out[o.k].estimatedDurationMin ?? 0;
+          const give = Math.min(each, cur - HYROX_RUN_FLOOR_MIN, need);
+          if (give <= 0) continue;
+          out[o.k] = remakeTaperRun(out[o.k], cur - give);
+          need -= give;
+        }
+      }
+      const easyCut = ws.filter(isPlainEasyRun).reduce((a, x) => a + (x.estimatedDurationMin ?? 0), 0)
+        - out.filter(isPlainEasyRun).reduce((a, x) => a + (x.estimatedDurationMin ?? 0), 0);
+      if (easyCut > 0) runNotes.push(`W${w}: easy runs ${easyCut} min shorter for the light strength block (taper: ${Math.round(budgetMin)} min, ${hyroxTaperFraction(w - taperStart + 1, taperLen)} of the reference week)`);
+      if (need > 0) {
+        const k = out.findIndex(isHyroxLongRun);
+        if (k >= 0) {
+          const cur = out[k].estimatedDurationMin ?? 0;
+          const give = Math.min(need, cur - longFloorOf(out, out[k]));
+          if (give > 0) {
+            out[k] = remakeTaperRun(out[k], cur - give);
+            need -= give;
+            runNotes.push(`W${w}: Long Run cut from ${cur} to ${cur - give} min for the light strength block (taper: ${Math.round(budgetMin)} min, ${hyroxTaperFraction(w - taperStart + 1, taperLen)} of the reference week)`);
+          }
+        }
       }
       out[at] = withHyroxSessionParts(out[at], { strength: block });
       const b = attemptOf(out, [...base.adjustments]);
       const beyond = limits.some(l => l.of(b) > Math.max(l.cap, l.of(base)) + 1e-6);
       if (beyond) {
-        base.adjustments.push(`W${w}: light strength block left out (taper: ${Math.round(budgetMin)} min, ${hyroxTaperFraction(w - taperStart + 1, taperLen)} of the reference week)`);
+        base.adjustments.push(`W${w}: light strength block left out (taper: ${Math.round(budgetMin)} min, ${hyroxTaperFraction(w - taperStart + 1, taperLen)} of the reference week, its runs at their floors)`);
         return base;
       }
       b.adjustments = b.adjustments.filter(n => !/easy erg finisher/.test(n));
       const fins = out.filter(x => (x.hyroxSpec?.finisher?.min ?? 0) > 0).map(x => `${x.hyroxSpec!.finisher!.min}-min easy erg finisher on the ${x.n}`);
       if (fins.length > 0) b.adjustments.push(`W${w}: ${fins.join(', ')} (spare minutes)`);
+      b.adjustments.push(...runNotes);
       return b;
     };
     // The week at the chosen hours with the solver reset: fit's first build,
@@ -4647,16 +4702,14 @@ export function buildHyroxTrainingWeeks(
         // (as a training week's ceilings trim it: decision E). Lane H2b part
         // 2 review: with the smallest circuit's warm-up counted inside the
         // fractions, a 2-h taper week 1 was 3 min over and lost its whole
-        // long run, holding 0.16 to 0.22 of the reference week.
-        if (isHyroxLongRun(pick) && (pick.estimatedDurationMin ?? 0) > runFloorMin) {
-          const remake = (m: number): Workout => ({
-            ...generateHyroxRun({ kind: 'run_easy', targetMinutes: m, longRun: true, band: hx.athleteBand, phase, slotIndex: w, bodyWeightKg: state.bodyWeightKg, runPaceSecKm: hx.hyroxRunPaceSecKm, seed: state }),
-            id: pick.id, dayOfWeek: pick.dayOfWeek, dayName: pick.dayName,
-          });
-          const at = (m: number) => withWorkouts(cur, cur.workouts.map(x => (x === pick ? remake(m) : x)));
-          if (!tooHeavy(at(runFloorMin))) {
-            let lo = runFloorMin;
-            let hi = (pick.estimatedDurationMin ?? runFloorMin) - 1;
+        // long run, holding 0.16 to 0.22 of the reference week. It stays the
+        // week's longest run (longFloorOf), or leaves.
+        const longFloor = isHyroxLongRun(pick) ? longFloorOf(cur.workouts, pick) : Infinity;
+        if (isHyroxLongRun(pick) && (pick.estimatedDurationMin ?? 0) > longFloor) {
+          const at = (m: number) => withWorkouts(cur, cur.workouts.map(x => (x === pick ? remakeTaperRun(pick, m) : x)));
+          if (!tooHeavy(at(longFloor))) {
+            let lo = longFloor;
+            let hi = (pick.estimatedDurationMin ?? longFloor) - 1;
             while (lo < hi) {
               const mid = Math.ceil((lo + hi) / 2);
               if (tooHeavy(at(mid))) hi = mid - 1; else lo = mid;
