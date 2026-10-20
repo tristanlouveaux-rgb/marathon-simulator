@@ -1081,12 +1081,19 @@ function generateStationRacePace(p: StationParams): Workout {
 /** The station a cut takes out of a circuit (the MTL cap, the ceilings, the
  *  deload and taper caps): the heaviest by MTL, never a race-pace session's
  *  weakest station while another is left (the sheet's race-pace session
- *  includes the weakest). Null when the session holds no station. */
-export function hyroxStationToCut(w: Workout): HyroxStation | null {
+ *  includes the weakest). Null when the session holds no station.
+ *  `rank` (the injury cut, applyHyroxInjuryGates): stations of the lowest
+ *  rank go first, the restricted side's under a one-sided restriction; the
+ *  weakest and the MTL order hold within a rank, so a weakest station on the
+ *  restricted side leaves before the other side's stations. */
+export function hyroxStationToCut(w: Workout, rank?: (s: HyroxStation) => number): HyroxStation | null {
   const st = (w.hyroxComponents ?? []).filter(c => c.type !== 'run');
   if (st.length === 0) return null;
-  const pool = st.filter(c => c.type !== w.hyroxSpec?.weakest);
-  return (pool.length > 0 ? pool : st).reduce((a, c) => (c.mtl > a.mtl ? c : a)).type as HyroxStation;
+  const rankOf = (c: HyroxComponent) => (rank ? rank(c.type as HyroxStation) : 0);
+  const first = Math.min(...st.map(rankOf));
+  const group = st.filter(c => rankOf(c) === first);
+  const pool = group.filter(c => c.type !== w.hyroxSpec?.weakest);
+  return (pool.length > 0 ? pool : group).reduce((a, c) => (c.mtl > a.mtl ? c : a)).type as HyroxStation;
 }
 
 // ─── Brick session generators ─────────────────────────────────────────────────

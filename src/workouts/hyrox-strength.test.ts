@@ -38,7 +38,7 @@ import { initializeHyroxSimulator } from '@/state/initialization.hyrox';
 import { getMutableState, resetState } from '@/state/store';
 import { defaultOnboardingState, type OnboardingState } from '@/types/onboarding';
 import type { SimulatorState, Week, Workout } from '@/types';
-import type { AbilityBand } from '@/types/triathlon';
+import type { AbilityBand, HyroxStation } from '@/types/triathlon';
 import {
   HYROX_HOURS_RANGE, HYROX_WEEKLY_STRUCTURE, HYROX_STRENGTH_SESSIONS, HYROX_RUN_SHARE, HYROX_RUN_FLOOR_MIN,
   HYROX_STRENGTH_BLOCK_MIN, hyroxTier, hyroxBaseMultiplier,
@@ -46,6 +46,8 @@ import {
 import { isHyroxDeloadWeek } from './plan_engine';
 import { generateHyroxPlanDetailed, regenerateHyroxWeeksFrom, applyHyroxInjuryGates } from './plan_engine.hyrox';
 import { hyroxSessionWorkMin, withHyroxRounds, hyroxRunLengthKm, withoutHyroxStation, hyroxStationToCut } from './hyrox-generators';
+import { hyroxSessionWalk } from './hyrox-session-shape';
+import { HYROX_STATION_REGION } from '@/calculations/hyrox-injury';
 import type { InjuryState } from '@/types/injury';
 import { planTrainingWeeks } from './race-week-layout';
 import { isHyroxLongRun, isHyroxStrengthSession } from './scheduler.hyrox';
@@ -81,6 +83,11 @@ const isQuality = (w: Workout) => w.t === 'hyrox_run_tempo' || w.t === 'hyrox_ru
 const runningMin = (ws: readonly Workout[]) => ws.reduce((a, w) => a + (w.discipline === 'run'
   ? (w.estimatedDurationMin ?? 0)
   : (w.hyroxComponents ?? []).filter(c => c.type === 'run').reduce((b, c) => b + ((c.durationSec ?? 0) * (w.hyroxRounds ?? 1)) / 60, 0)), 0);
+/** One station's work in `g` as a share of its work in `u` (work seconds). */
+const sideShareOf = (u: Workout, g: Workout, st: HyroxStation) => {
+  const sec = (w: Workout) => hyroxSessionWalk(w).filter(x => x.component.type === st).reduce((a, x) => a + (x.component.durationSec ?? 0), 0);
+  return sec(u) > 0 ? sec(g) / sec(u) : 0;
+};
 const blocksOf = (ws: readonly Workout[]) => ws.filter(w => !!w.hyroxSpec?.strength);
 const standaloneOf = (ws: readonly Workout[]) => ws.filter(w => isHyroxStrengthSession(w));
 /** The bands' hours grid: the lowest, 3 to 6 h and the default. */
@@ -309,73 +316,124 @@ describe('a station session under a partial station capacity', () => {
     expect(short).toEqual([]);
   }, 120000);
 
-  it('keeps the most station work within the capacity\'s share of its own, cutting stations as well as rounds, singles and doubles, at 30, 50 and 70 (review round 3: whole rounds alone kept a median 43 to 45% at every capacity, and a one-round doubles session all of it)', () => {
+  it('keeps the most station work within the capacity\'s share of its own, cutting stations as well as rounds, the restricted side first, singles and doubles, lower body at 30, 50 and 70 and upper body at 30 and 50 (review round 3: whole rounds alone kept a median 43 to 45% at every capacity, and a one-round doubles session all of it; review round 4: a shoulder restriction cut the sled push and kept the SkiErg)', () => {
     // Every combination of the session's stations (cut in hyroxStationToCut
-    // order, down to MIN_CIRCUIT_STATIONS) and rounds (down to one): the
-    // session keeps the one with the most station work at or under the
-    // capacity's share of its own station work, or the smallest when none
-    // is that small, keeps its warm-up and runs 15 min or more, or leaves the
-    // week. One-round sessions are held to the same rule.
+    // order with the restricted side's stations first, then the full-body
+    // ones, then the other side's, HYROX_STATION_REGION; down to
+    // MIN_CIRCUIT_STATIONS) and rounds (down to one): the session keeps the
+    // one with the most station work at or under the capacity's share of its
+    // own station work, the restricted side's stations also at or under the
+    // share of their own, or the smallest when none is that small, keeps its
+    // warm-up and runs 15 min or more, or leaves the week. One-round sessions
+    // are held to the same rule.
     const variants: Array<[string, Partial<OnboardingState>]> = [
       ['open singles', {}],
       ['open doubles mixed', { hyroxFormat: 'open_doubles', hyroxDivision: 'mixed' } as Partial<OnboardingState>],
       ['pro doubles men', { hyroxFormat: 'pro_doubles', hyroxDivision: 'men', biologicalSex: 'male' } as Partial<OnboardingState>],
     ];
-    const candidates = (u: Workout): Workout[] => {
+    const injuries: Array<['upper' | 'lower', number]> = [['lower', 30], ['lower', 50], ['lower', 70], ['upper', 30], ['upper', 50]];
+    const rankFor = (side: 'upper' | 'lower') => (st: HyroxStation): number => {
+      const region = HYROX_STATION_REGION[st];
+      return region === side ? 0 : region === 'full' ? 1 : 2;
+    };
+    const candidates = (u: Workout, side: 'upper' | 'lower'): Workout[] => {
       const out: Workout[] = [];
       for (let st = u; ;) {
         for (let r = st.hyroxRounds ?? 1; r >= 1; r--) out.push(withHyroxRounds(st, r));
-        const cut = hyroxStationToCut(st);
+        const cut = hyroxStationToCut(st, rankFor(side));
         const next = cut ? withoutHyroxStation(st, cut) : st;
         if (next === st) break;
         st = next;
       }
       return out;
     };
-    let checked = 0; let oneRound = 0; let oneRoundCut = 0;
+    /** Work seconds of a session's stations on one side. */
+    const sideSec = (w: Workout, side: 'upper' | 'lower') => hyroxSessionWalk(w)
+      .filter(x => x.component.type !== 'run' && HYROX_STATION_REGION[x.component.type as HyroxStation] === side)
+      .reduce((a, x) => a + (x.component.durationSec ?? 0), 0);
+    const sig = (w: Workout | undefined) => (w ? `${(w.hyroxComponents ?? []).map(c => c.type).join('+')} x${w.hyroxRounds}` : 'left out');
+    let checked = 0; let oneRound = 0; let oneRoundCut = 0; let sideHeld = 0; let sidesDiffer = 0;
     const off: string[] = [];
     for (const [name, over] of variants) {
-      for (const cap of [30, 50, 70]) {
-        const inj = { active: true, runCapacity: 100, upperLoadCapacity: 100, lowerLoadCapacity: cap, location: 'knee' } as unknown as InjuryState;
-        for (const band of BANDS) {
-          for (const len of [12, 16]) {
-            const s = build(band, HYROX_HOURS_RANGE[band].default, len, over);
-            for (const wk of s.wks) {
-              for (const u of prescribed(wk)) {
-                if (u.t !== 'hyrox_station_technique' && u.t !== 'hyrox_station_density') continue;
-                const label = `${name} ${cap} ${band} ${len}w W${wk.w} ${u.n}`;
-                const own = hyroxSessionWorkMin(u);
-                const share = (cap / 100) * own;
-                const all = candidates(u).map(hyroxSessionWorkMin);
-                const fits = all.filter(x => x <= share + 1e-6);
-                const want = fits.length > 0 ? Math.max(...fits) : Math.min(...all);
-                const [g] = applyHyroxInjuryGates([u], inj);
-                checked++;
-                if ((u.hyroxRounds ?? 1) === 1) oneRound++;
-                if (!g) {
-                  // Left out only when the kept station work and the warm-up
-                  // run under 15 min.
-                  if (Math.round(want + (u.hyroxSpec?.warmup?.min ?? 0)) >= 15) off.push(`${label}: left out with ${want.toFixed(1)} min of station work`);
-                  continue;
-                }
-                const work = hyroxSessionWorkMin(g);
-                if ((u.hyroxRounds ?? 1) === 1 && work < own - 1e-6) oneRoundCut++;
-                if (Math.abs(work - want) > 1e-6) off.push(`${label}: ${work.toFixed(1)} of ${own.toFixed(1)} min, the best within ${share.toFixed(1)} is ${want.toFixed(1)}`);
-                if (fits.length > 0 && work > share + 1e-6) off.push(`${label}: ${work.toFixed(1)} min above the ${share.toFixed(1)}-min share`);
-                expect(g.hyroxSpec?.warmup, label).toBeDefined();
-                expect(g.hyroxSpec?.finisher, label).toBeUndefined();
-                expect(g.estimatedDurationMin ?? 0, label).toBeGreaterThanOrEqual(15);
-              }
+      const sessions: Array<[string, Workout]> = [];
+      for (const band of BANDS) {
+        for (const len of [12, 16]) {
+          const s = build(band, HYROX_HOURS_RANGE[band].default, len, over);
+          for (const wk of s.wks) {
+            for (const u of prescribed(wk)) {
+              if (u.t === 'hyrox_station_technique' || u.t === 'hyrox_station_density') sessions.push([`${name} ${band} ${len}w W${wk.w} ${u.n}`, u]);
             }
           }
         }
       }
+      for (const [side, cap] of injuries) {
+        const inj = {
+          active: true, runCapacity: 100, location: side === 'upper' ? 'shoulder' : 'knee',
+          upperLoadCapacity: side === 'upper' ? cap : 100, lowerLoadCapacity: side === 'lower' ? cap : 100,
+        } as unknown as InjuryState;
+        for (const [where, u] of sessions) {
+          const label = `${side} ${cap} ${where}`;
+          const own = hyroxSessionWorkMin(u);
+          const share = (cap / 100) * own;
+          const sideShare = (cap / 100) * sideSec(u, side);
+          const all = candidates(u, side);
+          const fits = all.filter(c => hyroxSessionWorkMin(c) <= share + 1e-6 && sideSec(c, side) <= sideShare + 1e-6).map(hyroxSessionWorkMin);
+          const want = fits.length > 0 ? Math.max(...fits) : Math.min(...all.map(hyroxSessionWorkMin));
+          const [g] = applyHyroxInjuryGates([u], inj);
+          checked++;
+          if ((u.hyroxRounds ?? 1) === 1) oneRound++;
+          if (!g) {
+            // Left out only when the kept station work and the warm-up
+            // run under 15 min.
+            if (Math.round(want + (u.hyroxSpec?.warmup?.min ?? 0)) >= 15) off.push(`${label}: left out with ${want.toFixed(1)} min of station work`);
+            continue;
+          }
+          const work = hyroxSessionWorkMin(g);
+          if ((u.hyroxRounds ?? 1) === 1 && work < own - 1e-6) oneRoundCut++;
+          if (Math.abs(work - want) > 1e-6) off.push(`${label}: ${work.toFixed(1)} of ${own.toFixed(1)} min, the best within ${share.toFixed(1)} is ${want.toFixed(1)}`);
+          if (fits.length > 0 && work > share + 1e-6) off.push(`${label}: ${work.toFixed(1)} min above the ${share.toFixed(1)}-min share`);
+          // The restricted side's stations stay within the share of their
+          // own whenever a shape allows it.
+          if (fits.length > 0 && sideSec(u, side) > 0) {
+            sideHeld++;
+            if (sideSec(g, side) > sideShare + 1e-6) off.push(`${label}: ${side} body ${sideSec(g, side)} s above the ${sideShare.toFixed(0)}-s share (${sig(u)} to ${sig(g)})`);
+          }
+          expect(g.hyroxSpec?.warmup, label).toBeDefined();
+          expect(g.hyroxSpec?.finisher, label).toBeUndefined();
+          expect(g.estimatedDurationMin ?? 0, label).toBeGreaterThanOrEqual(15);
+        }
+      }
+      // An upper and a lower restriction at the same capacity cut different
+      // stations.
+      for (const cap of [30, 50]) {
+        const up = { active: true, runCapacity: 100, upperLoadCapacity: cap, lowerLoadCapacity: 100, location: 'shoulder' } as unknown as InjuryState;
+        const lo = { active: true, runCapacity: 100, upperLoadCapacity: 100, lowerLoadCapacity: cap, location: 'knee' } as unknown as InjuryState;
+        for (const [, u] of sessions) if (sig(applyHyroxInjuryGates([u], up)[0]) !== sig(applyHyroxInjuryGates([u], lo)[0])) sidesDiffer++;
+      }
     }
     expect(checked).toBeGreaterThan(1000);
+    expect(sideHeld).toBeGreaterThan(300);
+    expect(sidesDiffer).toBeGreaterThan(100);
     // One-round sessions (the doubles station floor's shape) lose station
     // work too.
     expect(oneRound).toBeGreaterThan(100);
     expect(oneRoundCut).toBeGreaterThan(0);
     expect(off.slice(0, 10)).toEqual([]);
   }, 300000);
+
+  it('a shoulder restriction cuts the SkiErg before the sled push, a knee restriction the sled push before the SkiErg (review round 4: total_beginner 12 w W2 went from row, farmers carry, SkiErg and sled push x4 to row and SkiErg x2 under upper body 50)', () => {
+    const s = build('total_beginner', HYROX_HOURS_RANGE.total_beginner.default, 12);
+    const u = prescribed(s.wks[1]).find(w => w.t === 'hyrox_station_technique' || w.t === 'hyrox_station_density');
+    expect(u).toBeDefined();
+    const types = (w: Workout | undefined) => (w?.hyroxComponents ?? []).map(c => c.type);
+    expect(types(u)).toEqual(expect.arrayContaining(['ski_erg', 'sled_push']));
+    for (const cap of [30, 50, 70]) {
+      const [up] = applyHyroxInjuryGates([u!], { active: true, runCapacity: 100, upperLoadCapacity: cap, lowerLoadCapacity: 100 } as unknown as InjuryState);
+      const [lo] = applyHyroxInjuryGates([u!], { active: true, runCapacity: 100, upperLoadCapacity: 100, lowerLoadCapacity: cap } as unknown as InjuryState);
+      if (up && !types(up).includes('sled_push')) expect(types(up), `upper ${cap}`).not.toContain('ski_erg');
+      if (lo && !types(lo).includes('ski_erg')) expect(types(lo), `lower ${cap}`).not.toContain('sled_push');
+      if (up) expect(sideShareOf(u!, up, 'ski_erg'), `upper ${cap}`).toBeLessThanOrEqual(cap / 100 + 1e-6);
+      if (lo) expect(sideShareOf(u!, lo, 'sled_push'), `lower ${cap}`).toBeLessThanOrEqual(cap / 100 + 1e-6);
+    }
+  }, 60000);
 });

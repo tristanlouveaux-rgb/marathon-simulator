@@ -143,6 +143,7 @@ import { hyroxPlanningStationBenchmarks, predictHyroxRace } from '@/calculations
 import { topWeakestLinks } from '@/calculations/hyrox-weakest-link';
 import { injuryStrengthDecision } from './injury-strength';
 import { getDisciplineCapacity } from '@/injury/engine';
+import { HYROX_STATION_REGION } from '@/calculations/hyrox-injury';
 import { hyroxEffortMultiplier } from '@/calculations/effort-multiplier.hyrox';
 import { hasRealRunningFitnessSignal } from '@/calculations/physiological-vdot';
 import {
@@ -152,7 +153,7 @@ import {
 import { loggedRuns, longestRunMinBetween, RECENT_LONGEST_WINDOW_DAYS } from './sharpening-block';
 import { stampTriWorkoutIds } from './plan_engine.triathlon';
 import { STATION_DISPLAY, HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
-import { fmtAmount, hyroxSessionPlannedTss } from './hyrox-session-shape';
+import { fmtAmount, hyroxSessionPlannedTss, hyroxSessionWalk } from './hyrox-session-shape';
 import { athleteRatedRpe } from '@/calculations/athlete-rating';
 import {
   hyroxRacePaceSets, hyroxTechniqueSets, hyroxBeginnerStationLoadKg, hyroxBeginnerRaceWeightWeek, HYROX_LOADED_STATIONS,
@@ -2576,7 +2577,8 @@ function generateWeekSessions(
  *   station). 0 drops stations + assessment, 100 leaves them, in-between
  *   scales duration linearly (a lane H2b station session: the combination
  *   of its rounds and stations with the most station work within the
- *   capacity's share, scaleStationSession). Exported for its tests.
+ *   capacity's share, its stations cut from the more restricted side
+ *   first, scaleStationSession). Exported for its tests.
  * - Brick = stations + runs stacked → dropped whenever either input
  *   capacity is below 100 (any restriction risks aggravation under
  *   stacked-intensity).
@@ -2618,6 +2620,31 @@ export function applyHyroxInjuryGates(
   const lowerCap = getDisciplineCapacity(injuryState, 'lowerLoad');
   // Stations mix both halves. The more restrictive side wins.
   const stationCap = Math.min(upperCap, lowerCap);
+  // The station cut's order under a one-sided restriction (review round 4):
+  // the restricted side's stations first, then the full-body ones, then the
+  // other side's (HYROX_STATION_REGION, anatomical), the MTL order within
+  // each. Equal sides keep the MTL order. Before, the cut ran in MTL order
+  // (STATION_MTL_FACTORS: lower-limb tendon load), so a shoulder
+  // restriction lost the sled push and kept the SkiErg (under upper body 50,
+  // the SkiErg stayed in 84 of 84 singles sessions holding it, above the
+  // share in 27).
+  const restricted = upperCap < lowerCap ? 'upper' : lowerCap < upperCap ? 'lower' : null;
+  const cutRank = restricted == null ? undefined : (st: HyroxStation): number => {
+    const region = HYROX_STATION_REGION[st];
+    return region === restricted ? 0 : region === 'full' ? 1 : 2;
+  };
+  // The restricted side under a one-sided restriction (review round 4): its
+  // own stations' work (HYROX_STATION_REGION, the sets' work seconds) holds
+  // the station capacity's share of the ungated session's too, as the
+  // session's station work does. A beginner session's sleds take 4 rounds
+  // against 2 for the other stations, so a round cut takes sled lanes alone
+  // and the cut order by itself left the SkiErg whole under upper body 90
+  // in 9 singles sessions. Full-body stations, the other side's and equal
+  // restrictions count in the session's share only (the MTL order holds:
+  // a side share there took singles at 90 from a median 64% to 45%).
+  const sides = restricted == null ? [] : [[restricted, stationCap] as const];
+  const sideSec = (x: Workout, region: 'upper' | 'lower'): number => hyroxSessionWalk(x).reduce((a, set) =>
+    a + (set.component.type !== 'run' && HYROX_STATION_REGION[set.component.type as HyroxStation] === region ? (set.component.durationSec ?? 0) : 0), 0);
   // Brick stacks stations + runs; ANY restriction drops it.
   const brickSafe = runCap >= 100 && stationCap >= 100;
 
@@ -2643,10 +2670,12 @@ export function applyHyroxInjuryGates(
   // 2026-10-20): its station work holds the capacity's share of the ungated
   // session's station work, as a run keeps the capacity's share of its
   // duration (scaleWorkout). Every combination of its stations (cut in
-  // hyroxStationToCut order, down to MIN_CIRCUIT_STATIONS) and its rounds
+  // hyroxStationToCut order by cutRank, the restricted side first, down to
+  // MIN_CIRCUIT_STATIONS) and its rounds
   // (down to one) is a candidate: the session keeps the one with the most
-  // station work at or under the share, or, when none is that small, the
-  // smallest. Its warm-up stays, its finisher goes (none is planned under an
+  // station work at or under the share (under a one-sided restriction, the
+  // restricted side's stations at or under the share of their own too), or,
+  // when none is that small, the smallest. Its warm-up stays, its finisher goes (none is planned under an
   // injury) and the strength decision below takes its block. A session that
   // then runs under HYROX_MIN_STATION_SESSION_MIN leaves the week. Before,
   // the duration alone was scaled (an 11-min session kept its 10-min warm-up
@@ -2659,6 +2688,9 @@ export function applyHyroxInjuryGates(
   // all of it (review round 3: 213 of 359 open doubles station sessions).
   const scaleStationSession = (w: Workout, cap: number): Workout | null => {
     const target = (hyroxSessionWorkMin(w) * cap) / 100;
+    const sideMax = sides.map(([region, c]) => [region, (sideSec(w, region) * c) / 100] as const);
+    const fits = (c: Workout, work: number): boolean =>
+      work <= target + 1e-9 && sideMax.every(([region, max]) => sideSec(c, region) <= max + 1e-6);
     let s0 = w;
     if (s0.hyroxSpec?.finisher) {
       const { finisher: _f, ...spec } = s0.hyroxSpec;
@@ -2670,10 +2702,10 @@ export function applyHyroxInjuryGates(
       for (let r = st.hyroxRounds ?? 1; r >= 1; r--) {
         const c = withHyroxRounds(st, r);
         const work = hyroxSessionWorkMin(c);
-        if (work <= target + 1e-9 && (!best || work > hyroxSessionWorkMin(best) + 1e-9)) best = c;
+        if (fits(c, work) && (!best || work > hyroxSessionWorkMin(best) + 1e-9)) best = c;
         if (work < hyroxSessionWorkMin(smallest) - 1e-9) smallest = c;
       }
-      const cut = hyroxStationToCut(st);
+      const cut = hyroxStationToCut(st, cutRank);
       const next = cut ? withoutHyroxStation(st, cut) : st;
       if (next === st) break;
       st = next;
