@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   analyzeHyroxLoseTime,
   compareWithPeers,
-  fmtFinishShort,
   fmtLostTime,
   hyroxLoseTimeHeadline,
+  hyroxLoseTimeKeyLeg,
   hyroxPastRaceSplits,
+  hyroxTopLostStation,
+  HYROX_LOSE_TIME_MATERIAL_SEC,
+  type HyroxLoseTimeSegment,
   type HyroxPastRaceSplits,
 } from './hyrox-lose-time';
 import {
@@ -37,8 +40,12 @@ function peerResult(cohort: HyroxResultsCohort, totalSec: number): HyroxPastRace
 describe('compareWithPeers: quantile-free peer comparison', () => {
   it('a result exactly at the field\'s profile for its finish loses 0 everywhere', () => {
     const segs = compareWithPeers(OS_W, 5816, peerResult(OS_W, 5816));
-    expect(segs).toHaveLength(17);
+    // 8 stations, Running (the 8 legs together) and the Roxzone.
+    expect(segs).toHaveLength(10);
     for (const s of segs) expect(Math.abs(s.lostSec)).toBeLessThan(1e-6);
+    const run = segs.find(s => s.key === 'run_total')!;
+    expect(run.legs!.map(l => l.leg)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    for (const l of run.legs!) expect(Math.abs(l.lostSec)).toBeLessThan(1e-6);
   });
 
   it('a result at every table\'s median (finish = their sum) loses under 10 s on any segment', () => {
@@ -68,6 +75,41 @@ describe('compareWithPeers: quantile-free peer comparison', () => {
     expect(segs[segs.length - 1].key).toBe('roxzone');
     expect(segs[segs.length - 1].lostSec).toBeCloseTo(-113, 6);
   });
+
+  it('running is ranked whole: a uniformly slower runner\'s headline names Running', () => {
+    // Every leg +22 s (176 s in all), one station +60 s, the Roxzone gives the
+    // rest back so the finish holds.
+    const total = 5400;
+    const base = peerResult(OS_W, total);
+    const r: HyroxPastRaceSplits = {
+      stations: { ...base.stations, sled_push: base.stations.sled_push! + 60 },
+      runLegsSec: base.runLegsSec!.map(v => v! + 22),
+      roxzoneSec: base.roxzoneSec! - 236,
+    };
+    const segs = compareWithPeers(OS_W, total, r);
+    expect(segs.filter(s => s.key === 'run_total')).toHaveLength(1);
+    expect(segs.some(s => /^Run \d/.test(s.label))).toBe(false);
+    expect(segs[0].key).toBe('run_total');
+    expect(segs[0].lostSec).toBeCloseTo(176, 6);
+    const lt = analyzeHyroxLoseTime(stateWith({
+      previousHyroxTimeSec: total, hyroxPreviousTimeFormat: 'open_singles',
+      hyroxPreviousStationSplits: r.stations, hyroxPreviousRunSplitsSec: r.runLegsSec, hyroxPreviousRoxzoneSec: r.roxzoneSec,
+    }));
+    expect(lt.headline).toBe('Most time lost on Running: 2:56 slower than athletes finishing in 1:30:00');
+  });
+
+  it('the Running segment keeps its legs in race order; the key leg is the one that lost the most', () => {
+    const base = peerResult(OS_W, 5400);
+    const legs = base.runLegsSec!.map((v, i) => v! + (i === 6 ? 40 : 5));
+    const segs = compareWithPeers(OS_W, 5400, { ...base, runLegsSec: legs, roxzoneSec: base.roxzoneSec! - 75 });
+    const run = segs.find(s => s.key === 'run_total')!;
+    expect(run.legs!.map(l => l.leg)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(hyroxLoseTimeKeyLeg(run)!.leg).toBe(7);
+    expect(hyroxLoseTimeKeyLeg(run)!.lostSec).toBeCloseTo(40, 6);
+    // A gain on Running names the leg with the most gained.
+    const fast = compareWithPeers(OS_W, 5400, { ...base, runLegsSec: base.runLegsSec!.map((v, i) => v! - (i === 0 ? 30 : 4)), roxzoneSec: base.roxzoneSec! + 58 });
+    expect(hyroxLoseTimeKeyLeg(fast.find(s => s.key === 'run_total')!)!.leg).toBe(1);
+  });
 });
 
 describe('segments from what was pasted', () => {
@@ -87,11 +129,32 @@ describe('segments from what was pasted', () => {
     expect(segs.find(s => s.key === 'run_total')!.implied).toBe(false);
   });
 
-  it('some legs only: each is compared, nothing implied', () => {
-    const legs: Array<number | null> = [full.runLegsSec![0], null, full.runLegsSec![2], null, null, null, null, null];
+  it('some legs only: one Running segment over those legs against the same peer legs, nothing implied', () => {
+    const legs: Array<number | null> = [full.runLegsSec![0]! + 10, null, full.runLegsSec![2]! + 10, null, null, null, null, null];
     const segs = compareWithPeers(OS_W, 6000, { stations: full.stations, runLegsSec: legs });
-    expect(segs.filter(s => s.key.startsWith('run_')).map(s => s.key).sort()).toEqual(['run_1', 'run_3']);
+    const run = segs.filter(s => s.key === 'run_total');
+    expect(run).toHaveLength(1);
+    expect(run[0].partialLegs).toBe(2);
+    expect(run[0].legs!.map(l => l.leg)).toEqual([1, 3]);
+    expect(run[0].lostSec).toBeCloseTo(20, 6);
     expect(segs.some(s => s.implied)).toBe(false);
+  });
+
+  it('some legs, the Roxzone and all 8 stations: Running is implied from the finish, the legs stay as detail', () => {
+    const legs: Array<number | null> = [full.runLegsSec![0], null, null, null, null, null, null, full.runLegsSec![7]];
+    const segs = compareWithPeers(OS_W, 6000, { stations: full.stations, runLegsSec: legs, roxzoneSec: full.roxzoneSec });
+    const run = segs.find(s => s.key === 'run_total')!;
+    expect(run.implied).toBe(true);
+    expect(run.partialLegs).toBeUndefined();
+    expect(run.legs!.map(l => l.leg)).toEqual([1, 8]);
+    expect(Math.abs(run.lostSec)).toBeLessThan(1e-6);
+  });
+
+  it('the run total and the Roxzone: no leg detail', () => {
+    const runTotalSec = full.runLegsSec!.reduce((a, b) => a! + b!, 0)!;
+    const segs = compareWithPeers(OS_W, 6000, { stations: full.stations, runTotalSec, roxzoneSec: full.roxzoneSec });
+    expect(segs).toHaveLength(10);
+    expect(segs.find(s => s.key === 'run_total')!.legs).toBeUndefined();
   });
 
   it('a few stations only: just those', () => {
@@ -107,37 +170,67 @@ describe('segments from what was pasted', () => {
 });
 
 describe('headline copy', () => {
-  it('names the segment, the seconds and the finish', () => {
+  const seg = (key: HyroxLoseTimeSegment['key'], label: string, lostSec: number): HyroxLoseTimeSegment =>
+    ({ key, label, athleteSec: 300 + lostSec, peerSec: 300, lostSec, implied: false });
+
+  it('names the segment, the seconds and the finish in full', () => {
     const base = peerResult(OS_W, 5070);
     const segs = compareWithPeers(OS_W, 5070, {
       ...base,
       stations: { ...base.stations, wall_balls: base.stations.wall_balls! + 72 },
       roxzoneSec: base.roxzoneSec! - 72,
     });
-    const losses = segs.filter(s => Math.round(s.lostSec) >= 1);
-    expect(hyroxLoseTimeHeadline(losses, 'open_singles', 5070))
-      .toBe('Most time lost on Wall Balls: 1:12 slower than athletes finishing in 1:24');
+    const losses = segs.filter(s => Math.round(s.lostSec) >= HYROX_LOSE_TIME_MATERIAL_SEC);
+    expect(hyroxLoseTimeHeadline(losses, [], 'open_singles', 5070))
+      .toBe('Most time lost on Wall Balls: 1:12 slower than athletes finishing in 1:24:30');
   });
 
   it('doubles compare with pairs; under a minute reads in seconds', () => {
-    const seg = { key: 'sled_push' as const, label: 'Sled Push', athleteSec: 140, peerSec: 100, lostSec: 40, implied: false };
-    expect(hyroxLoseTimeHeadline([seg], 'open_doubles', 4400)).toBe('Most time lost on Sled Push: 40 sec slower than pairs finishing in 1:13');
+    expect(hyroxLoseTimeHeadline([seg('sled_push', 'Sled Push', 40)], [], 'open_doubles', 4400))
+      .toBe('Most time lost on Sled Push: 40 sec slower than pairs finishing in 1:13:20');
   });
 
-  it('no loss anywhere', () => {
-    expect(hyroxLoseTimeHeadline([], 'pro_singles', 3480)).toBe('No segment slower than athletes finishing in 58 min');
+  it('no material loss: the most gained, else level everywhere', () => {
+    expect(hyroxLoseTimeHeadline([], [seg('run_total', 'Running', -29)], 'open_singles', 5400))
+      .toBe('Most time gained on Running: 29 sec faster than athletes finishing in 1:30:00');
+    expect(hyroxLoseTimeHeadline([], [], 'pro_singles', 3480))
+      .toBe('Within 15 sec of athletes finishing in 58:00 on every segment');
   });
 
   it('formats', () => {
     expect(fmtLostTime(72.4)).toBe('1:12');
     expect(fmtLostTime(-40)).toBe('40 sec');
-    expect(fmtFinishShort(5079)).toBe('1:24');
-    expect(fmtFinishShort(3540)).toBe('59 min');
   });
 
-  it('no em dash and no capitals-only words', () => {
-    const h = hyroxLoseTimeHeadline([{ key: 'roxzone', label: 'Roxzone', athleteSec: 600, peerSec: 500, lostSec: 100, implied: false }], 'open_singles', 6000);
-    expect(h).not.toMatch(/—/);
+  it('no em dash', () => {
+    const h = hyroxLoseTimeHeadline([seg('roxzone', 'Roxzone', 100)], [], 'open_singles', 6000);
+    expect(h).not.toMatch(/\u2014/);
+  });
+});
+
+describe('materiality', () => {
+  it('a segment inside the band is level, neither lost nor gained', () => {
+    const base = peerResult(OS_W, 5400);
+    const lt = analyzeHyroxLoseTime(stateWith({
+      previousHyroxTimeSec: 5400, hyroxPreviousTimeFormat: 'open_singles',
+      hyroxPreviousStationSplits: { ...base.stations, ski_erg: base.stations.ski_erg! + 40, burpee_broad_jumps: base.stations.burpee_broad_jumps! + 6, row_erg: base.stations.row_erg! - 46 } as Record<HyroxStation, number>,
+      hyroxPreviousRunSplitsSec: base.runLegsSec,
+      hyroxPreviousRoxzoneSec: base.roxzoneSec,
+    }));
+    expect(lt.losses.map(s => s.key)).toEqual(['ski_erg']);
+    expect(lt.gains.map(s => s.key)).toEqual(['row_erg']);
+    expect(lt.level.map(s => s.key)).toContain('burpee_broad_jumps');
+    expect(lt.losses.length + lt.gains.length + lt.level.length).toBe(lt.segments.length);
+  });
+
+  it('the band is the method\'s measured uncertainty, 15 s', () => {
+    expect(HYROX_LOSE_TIME_MATERIAL_SEC).toBe(15);
+  });
+
+  it('the top lost station skips Running and the Roxzone', () => {
+    const l = (key: HyroxLoseTimeSegment['key'], lostSec: number) => ({ key, label: String(key), athleteSec: 1, peerSec: 1, lostSec, implied: false });
+    expect(hyroxTopLostStation({ losses: [l('run_total', 90), l('roxzone', 50), l('wall_balls', 30)] })).toBe('wall_balls');
+    expect(hyroxTopLostStation({ losses: [l('run_total', 90)] })).toBeNull();
   });
 });
 
@@ -175,17 +268,23 @@ describe('analyzeHyroxLoseTime: empty states and cohort', () => {
     expect(r.cohort).toEqual({ format: 'pro_singles', sex: 'male' });
   });
 
-  it('losses and gains split at a whole second', () => {
-    const base = peerResult(OS_W, 5400);
-    const r = analyzeHyroxLoseTime(stateWith({
-      previousHyroxTimeSec: 5400, hyroxPreviousTimeFormat: 'open_singles',
-      hyroxPreviousStationSplits: { ...base.stations, ski_erg: base.stations.ski_erg! + 30, row_erg: base.stations.row_erg! - 30 } as Record<HyroxStation, number>,
-      hyroxPreviousRunSplitsSec: base.runLegsSec,
-      hyroxPreviousRoxzoneSec: base.roxzoneSec,
-    }));
-    expect(r.losses.map(s => s.key)).toEqual(['ski_erg']);
-    expect(r.gains.map(s => s.key)).toEqual(['row_erg']);
-    expect(r.segments).toHaveLength(17);
+  it('a doubles result reads the division it was raced in; without one, the current division, flagged', () => {
+    const splits = { hyroxPreviousStationSplits: { sled_push: 200, wall_balls: 300 } };
+    // Raced Mixed Doubles, now trains singles.
+    const recorded = analyzeHyroxLoseTime(stateWith({
+      previousHyroxTimeSec: 4800, hyroxPreviousTimeFormat: 'open_doubles', hyroxPreviousTimeDivision: 'mixed', ...splits,
+    }, 'male'));
+    expect(recorded.cohort).toEqual({ format: 'open_doubles', sex: 'mixed' });
+    expect(recorded.divisionAssumed).toBe(false);
+    const assumed = analyzeHyroxLoseTime(stateWith({
+      previousHyroxTimeSec: 4800, hyroxPreviousTimeFormat: 'open_doubles', ...splits,
+    }, 'male'));
+    expect(assumed.cohort).toEqual({ format: 'open_doubles', sex: 'male' });
+    expect(assumed.divisionAssumed).toBe(true);
+    // Singles results never carry the flag.
+    expect(analyzeHyroxLoseTime(stateWith({
+      previousHyroxTimeSec: 5400, hyroxPreviousTimeFormat: 'open_singles', hyroxPreviousStationSplits: { sled_push: 200 },
+    })).divisionAssumed).toBe(false);
   });
 });
 

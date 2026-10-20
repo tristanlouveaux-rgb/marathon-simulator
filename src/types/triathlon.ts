@@ -175,6 +175,11 @@ export interface HyroxConfig {
   }>>>;
   /** Which format the user's previous HYROX time was set in. */
   hyroxPreviousTimeFormat?: 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
+  /** The division a doubles previous result was raced in (the pair's
+   *  category; "Log a previous HYROX" asks for it). Unset for singles, and for
+   *  doubles results logged before it was asked, which then read the current
+   *  `division`. "Where you lost time" and the planning band read it. */
+  hyroxPreviousTimeDivision?: HyroxDivision;
   /** Which past race the previous time was set at (id from HYROX_WORLD_SERIES). */
   hyroxPreviousTimeRaceId?: string;
   /** ISO date (YYYY-MM-DD) of the previous HYROX time. Either picked directly

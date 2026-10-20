@@ -15,16 +15,26 @@
  * the athlete's split minus the peers'. When all 17 segments are known, time
  * lost and time gained balance to zero; the ranking shows where the time went.
  *
- * Segments: the 8 stations; the 8 run legs (peer legs split by the field's
- * median leg shape) when all 8 were pasted, else the run total; the Roxzone,
- * pasted or implied (finish minus the 16 timed segments, the ingest's own rule
- * for an untimed Roxzone). With the 8 stations and no run data the rest of the
- * race is one segment, "Running and Roxzone".
+ * Segments: the 8 stations; Running, one segment (the 8 legs together
+ * against the peers' run total, or the pasted run total, or the legs that
+ * were pasted against the same peer legs); the Roxzone, pasted or implied
+ * (finish minus the 16 timed segments, the ingest's own rule for an untimed
+ * Roxzone). Running is ranked whole: eight 1 km legs ranked one by one against
+ * whole stations split one loss into eight small ones and named the wrong
+ * segment for the common profile (strong stations, slower runs). The legs stay
+ * on the Running segment as detail, in race order (peer legs split by the
+ * field's median leg shape). With the 8 stations and no run data the rest of
+ * the race is one segment, "Running and Roxzone".
+ *
+ * Materiality: a segment within HYROX_LOSE_TIME_MATERIAL_SEC of its peers is
+ * level, neither lost nor gained.
  *
  * Limits: the peers are cohort medians, not the same athletes; venues differ
  * (sled surface and lane, run course length, Roxzone layout), so a segment
  * can read slow at a slow venue; the run-leg shape is one shape for every
- * finish time.
+ * finish time; the scaling of the peers to the finish puts about half of the
+ * medians' additivity gap on the run total, so a typical athlete reads 20 to
+ * 30 s gained on Running (SCIENCE_LOG §DO).
  */
 
 import type { SimulatorState } from '@/types/state';
@@ -32,6 +42,16 @@ import type { HyroxConfig, HyroxStation } from '@/types/triathlon';
 import { HYROX_STATION_ORDER, STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { hyroxPeerSplitsAt, hyroxResultsCohort, type HyroxResultsCohort, type HyroxFormat } from './hyrox-results';
 import { isHyroxDoublesFormat } from './hyrox-division';
+import { ftRounded } from '@/utils/format';
+
+/**
+ * Seconds inside which a segment is level with its peers. The method's own
+ * measured uncertainty: linear interpolation of the band medians and a
+ * quantile-plus-residual hybrid place the same peer split 0 to 15 s apart
+ * (SCIENCE_LOG §DO, lane rp probe over the 14 published cells). A smaller
+ * difference is below what the comparison can resolve; venues vary more.
+ */
+export const HYROX_LOSE_TIME_MATERIAL_SEC = 15;
 
 /** The splits of the athlete's previous result, as far as they are known. */
 export interface HyroxPastRaceSplits {
@@ -84,13 +104,20 @@ export function hyroxPastRaceSplits(hx: Partial<HyroxConfig> | null | undefined)
   };
 }
 
-export type HyroxLoseTimeKey =
-  | HyroxStation | 'run_total' | 'roxzone' | 'run_roxzone'
-  | 'run_1' | 'run_2' | 'run_3' | 'run_4' | 'run_5' | 'run_6' | 'run_7' | 'run_8';
+export type HyroxLoseTimeKey = HyroxStation | 'run_total' | 'roxzone' | 'run_roxzone';
+
+/** One run leg behind the Running segment. */
+export interface HyroxLoseTimeLeg {
+  /** 1 to 8. */
+  leg: number;
+  athleteSec: number;
+  peerSec: number;
+  lostSec: number;
+}
 
 export interface HyroxLoseTimeSegment {
   key: HyroxLoseTimeKey;
-  /** "Wall Balls", "Run 8", "Roxzone", "Running and Roxzone". */
+  /** "Wall Balls", "Running", "Roxzone", "Running and Roxzone". */
   label: string;
   athleteSec: number;
   peerSec: number;
@@ -98,6 +125,10 @@ export interface HyroxLoseTimeSegment {
   lostSec: number;
   /** The athlete's time is the finish minus the timed segments. */
   implied: boolean;
+  /** Running: the pasted legs against the peer legs, in race order. */
+  legs?: HyroxLoseTimeLeg[];
+  /** Running compared over some of the 8 legs only: how many. */
+  partialLegs?: number;
 }
 
 export interface HyroxLoseTime {
@@ -107,13 +138,20 @@ export interface HyroxLoseTime {
   totalSec?: number;
   format?: HyroxFormat;
   cohort?: HyroxResultsCohort;
+  /** The comparison field is the athlete's current division, not one
+   *  recorded with the result (a doubles result logged before the past
+   *  race's division was stored). */
+  divisionAssumed?: boolean;
   /** Every compared segment, most time lost first. */
   segments: HyroxLoseTimeSegment[];
-  /** Segments at least 1 s slower than the peers, most lost first. */
+  /** Segments at least HYROX_LOSE_TIME_MATERIAL_SEC slower than the peers,
+   *  most lost first. */
   losses: HyroxLoseTimeSegment[];
-  /** Segments at least 1 s faster, most gained first. */
+  /** Segments at least HYROX_LOSE_TIME_MATERIAL_SEC faster, most gained first. */
   gains: HyroxLoseTimeSegment[];
-  /** "Most time lost on Wall Balls: 1:12 slower than athletes finishing in 1:24". */
+  /** Inside the band either way: level with the peers, in ranked order. */
+  level: HyroxLoseTimeSegment[];
+  /** "Most time lost on Wall Balls: 1:12 slower than athletes finishing in 1:24:31". */
   headline: string | null;
 }
 
@@ -124,28 +162,36 @@ export function fmtLostTime(sec: number): string {
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
 }
 
-/** A finish as runners say it: "1:24" (hours and whole minutes), "58 min". */
-export function fmtFinishShort(sec: number): string {
-  const totalMin = Math.floor(Math.round(sec) / 60);
-  if (totalMin < 60) return `${totalMin} min`;
-  return `${Math.floor(totalMin / 60)}:${String(totalMin % 60).padStart(2, '0')}`;
-}
-
 /** Who finished in the same time: athletes (singles) or pairs (doubles). */
 export function hyroxPeerNoun(format: HyroxFormat): string {
   return isHyroxDoublesFormat(format) ? 'pairs' : 'athletes';
 }
 
-/** The one-line headline for a ranked comparison. */
+/**
+ * The one-line headline: the segment with the most time lost, else the one
+ * with the most gained, else level everywhere. The finish in full (h:mm:ss)
+ * so it never reads like the m:ss of the time lost.
+ */
 export function hyroxLoseTimeHeadline(
   losses: HyroxLoseTimeSegment[],
+  gains: HyroxLoseTimeSegment[],
   format: HyroxFormat,
   totalSec: number,
 ): string {
-  const who = `${hyroxPeerNoun(format)} finishing in ${fmtFinishShort(totalSec)}`;
-  const top = losses[0];
-  if (!top) return `No segment slower than ${who}`;
-  return `Most time lost on ${top.label}: ${fmtLostTime(top.lostSec)} slower than ${who}`;
+  const who = `${hyroxPeerNoun(format)} finishing in ${ftRounded(totalSec)}`;
+  if (losses[0]) return `Most time lost on ${losses[0].label}: ${fmtLostTime(losses[0].lostSec)} slower than ${who}`;
+  if (gains[0]) return `Most time gained on ${gains[0].label}: ${fmtLostTime(gains[0].lostSec)} faster than ${who}`;
+  return `Within ${HYROX_LOSE_TIME_MATERIAL_SEC} sec of ${who} on every segment`;
+}
+
+/**
+ * The run leg with the most time lost (or, when Running is a gain, the most
+ * gained). Null without at least two legs.
+ */
+export function hyroxLoseTimeKeyLeg(seg: Pick<HyroxLoseTimeSegment, 'legs' | 'lostSec'>): HyroxLoseTimeLeg | null {
+  const legs = seg.legs ?? [];
+  if (legs.length < 2) return null;
+  return legs.reduce((best, l) => (seg.lostSec >= 0 ? l.lostSec > best.lostSec : l.lostSec < best.lostSec) ? l : best);
 }
 
 /**
@@ -160,9 +206,9 @@ export function compareWithPeers(
   const peers = hyroxPeerSplitsAt(cohort, totalSec);
   if (!peers) return [];
   const out: HyroxLoseTimeSegment[] = [];
-  const add = (key: HyroxLoseTimeKey, label: string, athleteSec: number, peerSec: number, implied = false) => {
+  const add = (key: HyroxLoseTimeKey, label: string, athleteSec: number, peerSec: number, implied = false, extra: Partial<HyroxLoseTimeSegment> = {}) => {
     if (!(athleteSec > 0) || !(peerSec > 0)) return;
-    out.push({ key, label, athleteSec, peerSec, lostSec: athleteSec - peerSec, implied });
+    out.push({ key, label, athleteSec, peerSec, lostSec: athleteSec - peerSec, implied, ...extra });
   };
 
   const known = HYROX_STATION_ORDER.filter(st => (splits.stations[st] ?? 0) > 0);
@@ -170,58 +216,80 @@ export function compareWithPeers(
   const allStations = known.length === 8;
   const stationSum = known.reduce((a, st) => a + splits.stations[st]!, 0);
 
-  const legs = splits.runLegsSec ?? [];
-  const legsKnown = legs.filter((v): v is number => typeof v === 'number' && v > 0);
-  const allLegs = legs.length === 8 && legsKnown.length === 8;
+  // The pasted legs against the peer legs, in race order.
+  const legs: HyroxLoseTimeLeg[] = [];
+  (splits.runLegsSec ?? []).slice(0, 8).forEach((v, i) => {
+    if (typeof v === 'number' && v > 0) legs.push({ leg: i + 1, athleteSec: v, peerSec: peers.runLegsSec[i], lostSec: v - peers.runLegsSec[i] });
+  });
+  const legDetail = legs.length > 0 ? { legs } : {};
   let runTotal: number | undefined;
-  if (allLegs) {
-    legs.forEach((v, i) => add(`run_${i + 1}` as HyroxLoseTimeKey, `Run ${i + 1}`, v as number, peers.runLegsSec[i]));
-    runTotal = legsKnown.reduce((a, b) => a + b, 0);
-  } else if (splits.runTotalSec) {
-    runTotal = splits.runTotalSec;
-    add('run_total', 'Running', runTotal, peers.segments.run_total);
-  } else {
-    legs.forEach((v, i) => {
-      if (typeof v === 'number' && v > 0) add(`run_${i + 1}` as HyroxLoseTimeKey, `Run ${i + 1}`, v, peers.runLegsSec[i]);
-    });
+  if (legs.length === 8) runTotal = legs.reduce((a, l) => a + l.athleteSec, 0);
+  else if (splits.runTotalSec) runTotal = splits.runTotalSec;
+
+  if (runTotal != null) {
+    add('run_total', 'Running', runTotal, peers.segments.run_total, false, legDetail);
+    if (splits.roxzoneSec) add('roxzone', 'Roxzone', splits.roxzoneSec, peers.segments.roxzone);
+    else if (allStations) add('roxzone', 'Roxzone', totalSec - stationSum - runTotal, peers.segments.roxzone, true);
+  } else if (splits.roxzoneSec) {
+    add('roxzone', 'Roxzone', splits.roxzoneSec, peers.segments.roxzone);
+    if (allStations) {
+      // The rest of a complete result is the running; pasted legs stay as
+      // detail.
+      add('run_total', 'Running', totalSec - stationSum - splits.roxzoneSec, peers.segments.run_total, true, legDetail);
+    }
+  } else if (allStations && legs.length === 0) {
+    add('run_roxzone', 'Running and Roxzone', totalSec - stationSum, peers.segments.run_total + peers.segments.roxzone, true);
   }
 
-  if (splits.roxzoneSec) {
-    add('roxzone', 'Roxzone', splits.roxzoneSec, peers.segments.roxzone);
-    if (allStations && runTotal == null && legsKnown.length === 0) {
-      add('run_total', 'Running', totalSec - stationSum - splits.roxzoneSec, peers.segments.run_total, true);
-    }
-  } else if (allStations && runTotal != null) {
-    add('roxzone', 'Roxzone', totalSec - stationSum - runTotal, peers.segments.roxzone, true);
-  } else if (allStations && legsKnown.length === 0) {
-    add('run_roxzone', 'Running and Roxzone', totalSec - stationSum, peers.segments.run_total + peers.segments.roxzone, true);
+  // Some legs only, and no way to complete the running: those legs against
+  // the same peer legs, still one Running segment.
+  if (legs.length > 0 && !out.some(seg => seg.key === 'run_total')) {
+    add('run_total', 'Running', legs.reduce((a, l) => a + l.athleteSec, 0), legs.reduce((a, l) => a + l.peerSec, 0), false,
+      { legs, partialLegs: legs.length });
   }
 
   return out.sort((a, b) => b.lostSec - a.lostSec);
 }
 
+/** The station with the most time lost (a material loss), or null. "Where to
+ *  gain" names it too, so the past race and training read as one story. */
+export function hyroxTopLostStation(lt: Pick<HyroxLoseTime, 'losses'>): HyroxStation | null {
+  const seg = lt.losses.find(l => (HYROX_STATION_ORDER as readonly string[]).includes(l.key));
+  return seg ? (seg.key as HyroxStation) : null;
+}
+
 /** "Where you lost time" for the athlete's previous result. */
 export function analyzeHyroxLoseTime(state: Pick<SimulatorState, 'hyroxConfig' | 'biologicalSex'>): HyroxLoseTime {
   const hx = state.hyroxConfig;
-  const empty = { segments: [], losses: [], gains: [], headline: null };
+  const empty = { segments: [], losses: [], gains: [], level: [], headline: null };
   const totalSec = hx?.previousHyroxTimeSec;
   const format = hx?.hyroxPreviousTimeFormat;
   if (!hx || !totalSec || totalSec <= 0 || !format || !FORMATS.includes(format)) {
     return { status: 'no_result', ...empty };
   }
-  const cohort = hyroxResultsCohort(format, state.biologicalSex, hx.division);
+  // The field the race was run in: a doubles result's own division when it
+  // was recorded with it, else the athlete's current one (named in the
+  // provenance caption).
+  const isDoubles = isHyroxDoublesFormat(format);
+  const pastDivision = isDoubles ? hx.hyroxPreviousTimeDivision : undefined;
+  const divisionAssumed = isDoubles && pastDivision == null;
+  const cohort = hyroxResultsCohort(format, state.biologicalSex, pastDivision ?? hx.division);
   const segments = compareWithPeers(cohort, totalSec, hyroxPastRaceSplits(hx));
-  if (segments.length === 0) return { status: 'no_splits', totalSec, format, cohort, ...empty };
-  const losses = segments.filter(s => Math.round(s.lostSec) >= 1);
-  const gains = segments.filter(s => Math.round(s.lostSec) <= -1).sort((a, b) => a.lostSec - b.lostSec);
+  if (segments.length === 0) return { status: 'no_splits', totalSec, format, cohort, divisionAssumed, ...empty };
+  const m = HYROX_LOSE_TIME_MATERIAL_SEC;
+  const losses = segments.filter(s => Math.round(s.lostSec) >= m);
+  const gains = segments.filter(s => Math.round(s.lostSec) <= -m).sort((a, b) => a.lostSec - b.lostSec);
+  const level = segments.filter(s => !losses.includes(s) && !gains.includes(s));
   return {
     status: 'ok',
     totalSec,
     format,
     cohort,
+    divisionAssumed,
     segments,
     losses,
     gains,
-    headline: hyroxLoseTimeHeadline(losses, format, totalSec),
+    level,
+    headline: hyroxLoseTimeHeadline(losses, gains, format, totalSec),
   };
 }
