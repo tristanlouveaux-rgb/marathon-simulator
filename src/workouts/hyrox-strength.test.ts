@@ -14,9 +14,11 @@
  *     block, race week none, a deload no standalone session;
  *   - the standalone session takes its own day, never repeats its week's
  *     block, and a template session runs its content's 20 min;
- *   - under a partial station capacity a station session loses rounds until
- *     its station work holds the capacity's share of its own, keeps its
- *     warm-up and runs 15 min or more.
+ *   - under a partial station capacity a station session keeps the
+ *     combination of its rounds and stations with the most station work
+ *     within the capacity's share of its own (the smallest when none is
+ *     that small), keeps its warm-up and runs 15 min or more, singles and
+ *     doubles (review round 3).
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 
@@ -43,7 +45,7 @@ import {
 } from '@/constants/hyrox-constants';
 import { isHyroxDeloadWeek } from './plan_engine';
 import { generateHyroxPlanDetailed, regenerateHyroxWeeksFrom, applyHyroxInjuryGates } from './plan_engine.hyrox';
-import { hyroxSessionWorkMin, withHyroxRounds, hyroxRunLengthKm } from './hyrox-generators';
+import { hyroxSessionWorkMin, withHyroxRounds, hyroxRunLengthKm, withoutHyroxStation, hyroxStationToCut } from './hyrox-generators';
 import type { InjuryState } from '@/types/injury';
 import { planTrainingWeeks } from './race-week-layout';
 import { isHyroxLongRun, isHyroxStrengthSession } from './scheduler.hyrox';
@@ -273,7 +275,7 @@ describe('strength counts and sessions', () => {
 });
 
 describe('a station session under a partial station capacity', () => {
-  it('loses rounds, keeps its warm-up and runs 15 min or more (review: 491 sessions under 15 min at a lower-body capacity of 50)', () => {
+  it('loses station work, keeps its warm-up and runs 15 min or more (review: 491 sessions under 15 min at a lower-body capacity of 50)', () => {
     let sessions = 0;
     const short: string[] = [];
     for (const band of BANDS) {
@@ -285,7 +287,6 @@ describe('a station session under a partial station capacity', () => {
           (inj as unknown as { injuryState: unknown }).injuryState = { active: true, runCapacity: 50, upperLoadCapacity: 100, lowerLoadCapacity: 50, location: 'knee' };
           const wks = regenerateHyroxWeeksFrom(inj, w0);
           wks.forEach((wk, k) => {
-            const ungated = s.wks[w0 - 1 + k];
             for (const w of prescribed(wk ?? undefined)) {
               if (w.t !== 'hyrox_station_technique' && w.t !== 'hyrox_station_density') continue;
               sessions++;
@@ -293,8 +294,11 @@ describe('a station session under a partial station capacity', () => {
               if ((w.estimatedDurationMin ?? 0) < 15) short.push(`${label} ${w.estimatedDurationMin}`);
               expect(w.hyroxSpec?.warmup, label).toBeDefined();
               expect(w.hyroxSpec?.finisher, label).toBeUndefined();
-              const same = prescribed(ungated).find(x => x.t === w.t);
-              if (same) expect(w.hyroxRounds ?? 0, label).toBeLessThanOrEqual(same.hyroxRounds ?? 0);
+              // The gate cut it (the rebuilt week is not the ungated week: a
+              // gated week's lower load moves the guard for later weeks, so
+              // its sessions are compared with their own ungated shape in the
+              // test below).
+              expect(w.modReason ?? '', label).toMatch(/^Capacity 50%/);
               expect(w.d, label).toMatch(new RegExp(`^Warm-up`));
             }
           });
@@ -305,38 +309,73 @@ describe('a station session under a partial station capacity', () => {
     expect(short).toEqual([]);
   }, 120000);
 
-  it('keeps the capacity\'s share of its own station work, as a run keeps the capacity\'s share of its duration (review round 2: the warm-up counted in the target, so at 50 the station work kept a median 31%, minimum 13%)', () => {
-    // The largest round count whose station work is at most the capacity's
-    // share of the ungated session's station work; one round more is above
-    // it. The warm-up stays outside the share.
-    const inj = { active: true, runCapacity: 100, upperLoadCapacity: 100, lowerLoadCapacity: 50, location: 'knee' } as unknown as InjuryState;
-    let checked = 0;
+  it('keeps the most station work within the capacity\'s share of its own, cutting stations as well as rounds, singles and doubles, at 30, 50 and 70 (review round 3: whole rounds alone kept a median 43 to 45% at every capacity, and a one-round doubles session all of it)', () => {
+    // Every combination of the session's stations (cut in hyroxStationToCut
+    // order, down to MIN_CIRCUIT_STATIONS) and rounds (down to one): the
+    // session keeps the one with the most station work at or under the
+    // capacity's share of its own station work, or the smallest when none
+    // is that small, keeps its warm-up and runs 15 min or more, or leaves the
+    // week. One-round sessions are held to the same rule.
+    const variants: Array<[string, Partial<OnboardingState>]> = [
+      ['open singles', {}],
+      ['open doubles mixed', { hyroxFormat: 'open_doubles', hyroxDivision: 'mixed' } as Partial<OnboardingState>],
+      ['pro doubles men', { hyroxFormat: 'pro_doubles', hyroxDivision: 'men', biologicalSex: 'male' } as Partial<OnboardingState>],
+    ];
+    const candidates = (u: Workout): Workout[] => {
+      const out: Workout[] = [];
+      for (let st = u; ;) {
+        for (let r = st.hyroxRounds ?? 1; r >= 1; r--) out.push(withHyroxRounds(st, r));
+        const cut = hyroxStationToCut(st);
+        const next = cut ? withoutHyroxStation(st, cut) : st;
+        if (next === st) break;
+        st = next;
+      }
+      return out;
+    };
+    let checked = 0; let oneRound = 0; let oneRoundCut = 0;
     const off: string[] = [];
-    for (const band of BANDS) {
-      for (const len of [12, 16]) {
-        const s = build(band, HYROX_HOURS_RANGE[band].default, len);
-        for (const wk of s.wks) {
-          for (const u of prescribed(wk)) {
-            if (u.t !== 'hyrox_station_technique' && u.t !== 'hyrox_station_density') continue;
-            const [g] = applyHyroxInjuryGates([u], inj);
-            const label = `${band} ${len}w W${wk.w} ${u.n}`;
-            const share = 0.5 * hyroxSessionWorkMin(u);
-            if (!g) {
-              // Left out: under 15 min at the round count the share allows.
-              continue;
+    for (const [name, over] of variants) {
+      for (const cap of [30, 50, 70]) {
+        const inj = { active: true, runCapacity: 100, upperLoadCapacity: 100, lowerLoadCapacity: cap, location: 'knee' } as unknown as InjuryState;
+        for (const band of BANDS) {
+          for (const len of [12, 16]) {
+            const s = build(band, HYROX_HOURS_RANGE[band].default, len, over);
+            for (const wk of s.wks) {
+              for (const u of prescribed(wk)) {
+                if (u.t !== 'hyrox_station_technique' && u.t !== 'hyrox_station_density') continue;
+                const label = `${name} ${cap} ${band} ${len}w W${wk.w} ${u.n}`;
+                const own = hyroxSessionWorkMin(u);
+                const share = (cap / 100) * own;
+                const all = candidates(u).map(hyroxSessionWorkMin);
+                const fits = all.filter(x => x <= share + 1e-6);
+                const want = fits.length > 0 ? Math.max(...fits) : Math.min(...all);
+                const [g] = applyHyroxInjuryGates([u], inj);
+                checked++;
+                if ((u.hyroxRounds ?? 1) === 1) oneRound++;
+                if (!g) {
+                  // Left out only when the kept station work and the warm-up
+                  // run under 15 min.
+                  if (Math.round(want + (u.hyroxSpec?.warmup?.min ?? 0)) >= 15) off.push(`${label}: left out with ${want.toFixed(1)} min of station work`);
+                  continue;
+                }
+                const work = hyroxSessionWorkMin(g);
+                if ((u.hyroxRounds ?? 1) === 1 && work < own - 1e-6) oneRoundCut++;
+                if (Math.abs(work - want) > 1e-6) off.push(`${label}: ${work.toFixed(1)} of ${own.toFixed(1)} min, the best within ${share.toFixed(1)} is ${want.toFixed(1)}`);
+                if (fits.length > 0 && work > share + 1e-6) off.push(`${label}: ${work.toFixed(1)} min above the ${share.toFixed(1)}-min share`);
+                expect(g.hyroxSpec?.warmup, label).toBeDefined();
+                expect(g.hyroxSpec?.finisher, label).toBeUndefined();
+                expect(g.estimatedDurationMin ?? 0, label).toBeGreaterThanOrEqual(15);
+              }
             }
-            checked++;
-            const work = hyroxSessionWorkMin(g);
-            if (work > share + 1e-6 && (g.hyroxRounds ?? 1) > 1) off.push(`${label}: ${work.toFixed(1)} of ${hyroxSessionWorkMin(u).toFixed(1)} min`);
-            const more = withHyroxRounds(u, (g.hyroxRounds ?? 1) + 1);
-            if ((g.hyroxRounds ?? 1) + 1 <= (u.hyroxRounds ?? 1) && hyroxSessionWorkMin(more) <= share + 1e-6) off.push(`${label}: one round more (${hyroxSessionWorkMin(more).toFixed(1)} min) still within ${share.toFixed(1)}`);
-            expect(g.hyroxSpec?.warmup, label).toBeDefined();
-            expect(g.estimatedDurationMin ?? 0, label).toBeGreaterThanOrEqual(15);
           }
         }
       }
     }
-    expect(checked).toBeGreaterThan(100);
+    expect(checked).toBeGreaterThan(1000);
+    // One-round sessions (the doubles station floor's shape) lose station
+    // work too.
+    expect(oneRound).toBeGreaterThan(100);
+    expect(oneRoundCut).toBeGreaterThan(0);
     expect(off.slice(0, 10)).toEqual([]);
-  }, 120000);
+  }, 300000);
 });

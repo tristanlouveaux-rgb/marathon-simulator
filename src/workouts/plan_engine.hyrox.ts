@@ -2565,9 +2565,9 @@ function generateWeekSessions(
  * - Station capacity = MIN(upperLoad, lowerLoad) since HYROX stations are
  *   mixed-modality (any restriction on either side limits the whole
  *   station). 0 drops stations + assessment, 100 leaves them, in-between
- *   scales duration linearly (a lane H2b station session: rounds of its
- *   station work off until that work holds the capacity's share,
- *   scaleStationSession). Exported for its tests.
+ *   scales duration linearly (a lane H2b station session: the combination
+ *   of its rounds and stations with the most station work within the
+ *   capacity's share, scaleStationSession). Exported for its tests.
  * - Brick = stations + runs stacked → dropped whenever either input
  *   capacity is below 100 (any restriction risks aggravation under
  *   stacked-intensity).
@@ -2631,17 +2631,23 @@ export function applyHyroxInjuryGates(
   };
 
   // A lane H2b station session under a partial station capacity (review
-  // 2026-10-20): fewer rounds of its station work, down to one, until its
-  // station work holds the capacity's share of the ungated session's station
-  // work, as a run keeps the capacity's share of its duration (scaleWorkout);
-  // its warm-up stays, its finisher goes (none is planned under an injury)
-  // and the strength decision below takes its block. A session that still
-  // runs under HYROX_MIN_STATION_SESSION_MIN leaves the week. Before, the
-  // duration alone was scaled (an 11-min session kept its 10-min warm-up and
-  // full sets in its description, and its planned load priced 1 min of
-  // station work); round 2 then sized the whole session, warm-up included,
-  // to the capacity's share, so at a lower-body capacity of 50 the station
-  // work kept a median 31% of the ungated session's (minimum 13%).
+  // 2026-10-20): its station work holds the capacity's share of the ungated
+  // session's station work, as a run keeps the capacity's share of its
+  // duration (scaleWorkout). Every combination of its stations (cut in
+  // hyroxStationToCut order, down to MIN_CIRCUIT_STATIONS) and its rounds
+  // (down to one) is a candidate: the session keeps the one with the most
+  // station work at or under the share, or, when none is that small, the
+  // smallest. Its warm-up stays, its finisher goes (none is planned under an
+  // injury) and the strength decision below takes its block. A session that
+  // then runs under HYROX_MIN_STATION_SESSION_MIN leaves the week. Before,
+  // the duration alone was scaled (an 11-min session kept its 10-min warm-up
+  // and full sets in its description); round 2 sized the whole session,
+  // warm-up included, to the share (at a lower-body capacity of 50 the
+  // station work kept a median 31% of the ungated session's, minimum 13%);
+  // round 3 cut whole rounds only, down to one, so a session of 2 to 4
+  // rounds kept about half its station work at any capacity under 100
+  // (median 44 to 47% at 60, 75 and 90) and a one-round doubles session kept
+  // all of it (review round 3: 213 of 359 open doubles station sessions).
   const scaleStationSession = (w: Workout, cap: number): Workout | null => {
     const target = (hyroxSessionWorkMin(w) * cap) / 100;
     let s0 = w;
@@ -2649,11 +2655,23 @@ export function applyHyroxInjuryGates(
       const { finisher: _f, ...spec } = s0.hyroxSpec;
       s0 = withHyroxSessionParts({ ...s0, hyroxSpec: spec }, {});
     }
-    while ((s0.hyroxRounds ?? 1) > 1 && hyroxSessionWorkMin(s0) > target + 1e-9) {
-      s0 = withHyroxRounds(s0, (s0.hyroxRounds ?? 1) - 1);
+    let best: Workout | null = null;
+    let smallest = s0;
+    for (let st = s0; ;) {
+      for (let r = st.hyroxRounds ?? 1; r >= 1; r--) {
+        const c = withHyroxRounds(st, r);
+        const work = hyroxSessionWorkMin(c);
+        if (work <= target + 1e-9 && (!best || work > hyroxSessionWorkMin(best) + 1e-9)) best = c;
+        if (work < hyroxSessionWorkMin(smallest) - 1e-9) smallest = c;
+      }
+      const cut = hyroxStationToCut(st);
+      const next = cut ? withoutHyroxStation(st, cut) : st;
+      if (next === st) break;
+      st = next;
     }
-    if ((s0.estimatedDurationMin ?? 0) < HYROX_MIN_STATION_SESSION_MIN) return null;
-    return { ...s0, modReason: `Capacity ${cap}%: fewer station rounds to match your reported ability` };
+    const kept = best ?? smallest;
+    if ((kept.estimatedDurationMin ?? 0) < HYROX_MIN_STATION_SESSION_MIN) return null;
+    return { ...kept, modReason: `Capacity ${cap}%: less station work to match your reported ability` };
   };
 
   // Strength (lane H2b part 2): the injury's strength decision, as gym.ts
