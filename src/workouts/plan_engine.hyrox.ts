@@ -51,10 +51,13 @@
  *      the primer's day when that is its only one (a Thursday race). The week
  *      before race week re-places station work its race window drops on a
  *      free day 7 or more days out (placeWorkOutsideRaceWindow).
- *   7. Easy erg work (discipline 'erg'): what the sessions leave of the
- *      week's size becomes easy SkiErg or row work, up to the athlete's
- *      chosen session total, in the MTL the week leaves under the cap, each
- *      session up to the tier long-run cap. An easy run's slot (or its MTL)
+ *   7. Spare minutes (lane H2b part 2): what the sessions leave of the
+ *      week's size goes first to the station sessions' easy erg finishers
+ *      (each session up to the tier long-run cap), then to easy erg sessions
+ *      (discipline 'erg') in free slots, up to the athlete's chosen session
+ *      total, in the MTL the week leaves under the cap, each session up to
+ *      the tier long-run cap; in a run slot the running share leaves
+ *      unfunded, only at the shortest easy session. An easy run's slot (or its MTL)
  *      goes to it when the week then holds more minutes (round 7) and its
  *      running stays at or above HYROX_RUN_SHARE of the chosen weekly
  *      minutes, never in a deload (2026-10-14).
@@ -334,6 +337,30 @@ import {
 //   a stored plan on the planning band (rebandStoredHyroxPlan) with the
 //   initializer's staleness rule, as log-a-race and the format fix do
 //   (hyroxStoredRaceBand).
+// Still v19 (unreleased; lane H2b part 2, 2026-10-20). The same bump carries:
+// - complete station sessions: a 10-min warm-up (the run warm-up), a 20-min
+//   strength block from gym.ts by band and phase (light the week before race
+//   week, none in race week), the station work and an easy erg finisher that
+//   takes the week's spare minutes up to the tier long-run cap (60/75/90);
+//   bricks open with a 10-min jog; a block with heavy lower-body lifts or
+//   plyometrics falls under the 48 h rule;
+// - one standalone strength session in beginner and intermediate base weeks
+//   (none in a deload); the injury strength decision pauses or adapts it;
+// - race simulations (a full sim about 4 weeks out for beginners and
+//   intermediates, advanced only after 16 weeks without a race; half sims
+//   every 4th loaded week), with the sheet's sim-week rules, the 110%
+//   single-run rule turning a full sim into a half, and a beginner's race
+//   weight from the week before the full sim;
+// - the race taper at 0.55 then 0.30 of the reference week (hyroxTaperFraction,
+//   matching triathlon), the weekly load target too;
+// - easy erg work stands in a run slot the running share leaves unfunded only
+//   at the shortest easy session, so one more chosen hour never holds fewer
+//   minutes past one easy session (B restored); the race-pace dose rounds to
+//   the nearest quarter; beginner implements step to the next standard size;
+//   a short plan keeps a reduced-load week; a deload or taper copy never takes
+//   a load above its week's own; a beginner's week-1 assessment runs the sleds
+//   unloaded; the long run keeps the tier cap under the effort lever; a load
+//   step shows on the session card.
 export const HYROX_GENERATOR_VERSION = 19;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';

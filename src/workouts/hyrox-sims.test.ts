@@ -34,7 +34,7 @@ import { getMutableState, resetState } from '@/state/store';
 import { defaultOnboardingState, type OnboardingState } from '@/types/onboarding';
 import type { SimulatorState, Week, Workout } from '@/types';
 import type { AbilityBand, HyroxStation } from '@/types/triathlon';
-import { HYROX_FIRST_BRICK_WEEK } from '@/constants/hyrox-constants';
+import { HYROX_FIRST_BRICK_WEEK, HYROX_HOURS_RANGE } from '@/constants/hyrox-constants';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { isHyroxDeloadWeek } from './plan_engine';
 import { generateHyroxPlan, hyroxSimWeeks } from './plan_engine.hyrox';
@@ -230,3 +230,36 @@ describe('the race simulation week', () => {
     }
   });
 });
+
+describe('no standalone station session under 15 min (lane H2b part 2, Q11)', () => {
+  it('every station session, brick, sim and strength session on the sweep runs 15 min or more (part 1: 694 of 2,109 under 15)', () => {
+    // 6 bands x default hours x 12, 16 and 20 weeks x 4 variants (part 1's
+    // sweep). The warm-up and the strength block open every station session,
+    // and a brick opens with a jog, so the shortest is a doubles race-week
+    // circuit at its warm-up and one set of two stations.
+    const variants: Array<Partial<OnboardingState>> = [
+      {}, { biologicalSex: 'female' } as Partial<OnboardingState>,
+      { hyroxFormat: 'open_doubles' } as Partial<OnboardingState>,
+      { hyroxFormat: 'open_doubles', hyroxDivision: 'mixed', biologicalSex: 'female' } as Partial<OnboardingState>,
+    ];
+    const short: string[] = [];
+    let sessions = 0;
+    for (const over of variants) {
+      for (const band of ['total_beginner', 'beginner', 'novice', 'intermediate', 'advanced', 'competitive'] as AbilityBand[]) {
+        for (const len of [12, 16, 20]) {
+          const s = build(band, HYROX_HOURS_RANGE[band].default, len, over);
+          for (const wk of s.wks) {
+            for (const w of prescribed(wk)) {
+              if (!(w.discipline === 'station' || w.discipline === 'brick' || w.t === 'gym') || w.t === 'hyrox_erg_easy') continue;
+              sessions++;
+              if ((w.estimatedDurationMin ?? 0) < 15) short.push(`${band} ${len}w W${wk.w} ${w.n} ${w.estimatedDurationMin}`);
+            }
+          }
+        }
+      }
+    }
+    expect(sessions).toBeGreaterThan(2000);
+    expect(short.slice(0, 10)).toEqual([]);
+  }, 120000);
+});
+
