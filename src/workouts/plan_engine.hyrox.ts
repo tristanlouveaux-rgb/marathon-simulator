@@ -784,9 +784,9 @@ interface HyroxWeekInputs {
    *  week's). */
   maxHardSessions?: number;
   maxQualityRuns?: number;
-  /** Taper weeks: the week before's running minutes. A taper week never runs
-   *  more than the week before (the taper never rises; the existing race-week
-   *  rule). */
+  /** Taper weeks: the week before's running minutes (its standalone runs and
+   *  a race simulation's run legs). A taper week never runs more than the
+   *  week before (the taper never rises; the existing race-week rule). */
   prevRunMin?: number;
   /** Deload and race-taper weeks: per session type (station circuits,
    *  bricks), the longest duration, the most rounds and the most stations
@@ -3790,7 +3790,16 @@ export function buildHyroxTrainingWeeks(
     const taperWork = refWork && floorCircuit
       ? { min: Math.max(refWork.min, floorCircuit.min), mtl: Math.max(refWork.mtl, floorCircuit.mtl) }
       : refWork;
-    const prevRunMin = phase === 'taper' && built[w - 2] ? runMinutesOf(built[w - 2].workouts) : undefined;
+    // The week before's running counts a race simulation's run legs (review
+    // round 4): a sim takes the brick slot and a full sim the long run's, so
+    // its 1 km legs are that week's running. Before, standalone runs alone
+    // counted, and taper week 1 after a sim week held fewer runs than the
+    // reference week (24 of 1,258 open singles and 24 of 1,258 pro singles
+    // men plans, every hour, 8 to 24 weeks: all 10 and 11-week beginner-tier
+    // plans), its easy run 'left out (the taper never rises)'.
+    const prevRunMin = phase === 'taper' && built[w - 2]
+      ? runMinutesOf(built[w - 2].workouts) + runningOf(prescribed(built[w - 2].workouts).filter(isHyroxSim))
+      : undefined;
     const maxCircuitRounds = raceWeek && built[w - 2]
       ? Math.max(MIN_CIRCUIT_ROUNDS, circuitRoundsOf(built[w - 2].workouts))
       : undefined;

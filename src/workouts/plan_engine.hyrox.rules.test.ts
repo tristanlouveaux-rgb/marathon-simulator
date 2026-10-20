@@ -1192,6 +1192,37 @@ describe('HYROX review fixes, round 2 (2026-10-13)', () => {
     expect(off.slice(0, 10)).toEqual([]);
   }, 300000);
 
+  it('taper week 1 after a race simulation week keeps the reference week\'s run count, singles, 9 to 11 weeks, every hour (review round 4: the week before\'s running counted its standalone runs only, so 24 of 1,258 open singles and 24 of 1,258 pro singles men plans, all 10 and 11 weeks and beginner tier, left an easy run out, "the taper never rises")', () => {
+    // A sim takes the brick slot and a full sim the long run's: its 1 km run
+    // legs are the week before's running, so the taper never rises above
+    // them (sheet taper.content: keep the run count).
+    const variants: Array<[string, Partial<OnboardingState>]> = [
+      ['open singles', {}],
+      ['open singles women', { hyroxDivision: 'women', biologicalSex: 'female' } as Partial<OnboardingState>],
+      ['pro singles men', { hyroxFormat: 'pro_singles', hyroxDivision: 'men', biologicalSex: 'male' } as Partial<OnboardingState>],
+    ];
+    let afterSim = 0;
+    const off: string[] = [];
+    for (const [name, over] of variants) {
+      for (const band of BANDS) {
+        for (let hrs = HYROX_HOURS_RANGE[band].min; hrs <= HYROX_HOURS_RANGE[band].max; hrs++) {
+          for (const len of [9, 10, 11]) {
+            const s = build(band, hrs, len, over);
+            const tw = planTrainingWeeks(s);
+            const i = tw - 2;
+            const wk = s.wks[i];
+            if (wk?.ph !== 'taper' || !prescribed(s.wks[i - 1]).some(w => w.t === 'hyrox_sim')) continue;
+            afterSim++;
+            const ref = s.wks[refLoadedWeek(s.wks, i, deloadOf(s.wks.slice(0, tw)))];
+            if (runs(wk).length < runs(ref).length) off.push(`${name} ${band} ${hrs}h ${len}w W${i + 1}: ${runs(wk).length} runs against the reference week's ${runs(ref).length} (${prescribed(wk).map(w => `${w.n} ${w.estimatedDurationMin}`).join(', ')})`);
+          }
+        }
+      }
+    }
+    expect(afterSim).toBeGreaterThan(40);
+    expect(off.slice(0, 10)).toEqual([]);
+  }, 300000);
+
   it('race week keeps the reference week\'s run count whenever 0.30 of the reference week holds an easy run at the run floor beside the primer and the circuit (review round 2: 23 of 168 race weeks held fewer runs, 4 before)', () => {
     // Sheet taper.content: keep the run count. The exempt circuit's warm-up
     // is exempt in race week (a fixed part of the exempt circuit), so a race
