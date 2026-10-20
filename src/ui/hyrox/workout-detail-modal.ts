@@ -17,6 +17,7 @@ import { parseStrengthSession, type GuidedSet, type StrengthSession } from '@/gu
 import { dropInAppActual, recordPlannedSessionDone } from '@/calculations/in-app-activity';
 import { isHyroxEasyErg, hyroxStationRowText, hyroxSessionNotes, hyroxRoundsBreakdown } from '@/workouts/hyrox-generators';
 import { ftRounded } from '@/utils/format';
+import { HYROX_EASY_RPE } from '@/constants/hyrox-constants';
 
 type HyroxDisc = 'run' | 'station' | 'brick' | 'strength' | 'cross';
 
@@ -434,6 +435,34 @@ function fmtRest(sec: number): string {
   return `${sec}s`;
 }
 
+/**
+ * A lane H2b part 2 station session's parts around its stations: the warm-up
+ * and the strength block before them, the easy erg finisher after. Muted
+ * lines and the strength modal's rows; the guided player covers the
+ * stations only, said once.
+ */
+function renderSessionParts(workout: Workout, accent: string): { opening: string; closing: string } {
+  const spec = workout.hyroxSpec;
+  if (!spec) return { opening: '', closing: '' };
+  const muted = (t: string) => `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;margin-bottom:8px">${esc(t)}</div>`;
+  const warm = spec.warmup
+    ? muted(spec.warmup.mode === 'run' ? `Warm-up: ${spec.warmup.min} min easy jog.` : `Warm-up: ${spec.warmup.min} min easy on the ${STATION_DISPLAY[spec.warmup.mode as HyroxStation]?.name ?? 'erg'}.`)
+    : '';
+  let strength = '';
+  if (spec.strength) {
+    const parsed = parseStrengthSession({ t: 'gym', n: spec.strength.name, d: spec.strength.lines.join('\n') } as Workout);
+    strength = `
+      <div style="font-size:13px;font-weight:600;color:#0F172A;margin:6px 0 2px">Strength first, ${spec.strength.min} min, RPE ${spec.strength.rpe}${spec.strength.light ? ', light' : ''}</div>
+      <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">The guided player starts at the stations.</div>
+      ${parsed ? strengthRows(parsed, accent) : ''}
+      <div style="height:10px"></div>`;
+  }
+  const closing = spec.finisher
+    ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;padding-top:10px">Finisher: ${spec.finisher.min} min easy on the ${esc(STATION_DISPLAY[spec.finisher.station]?.name ?? 'erg')}, RPE ${HYROX_EASY_RPE}.</div>`
+    : '';
+  return { opening: warm + strength, closing };
+}
+
 function renderSessionBody(workout: Workout, components: HyroxComponent[] | undefined, accent: string, disc: HyroxDisc): string {
   const t = workout.t ?? '';
   const mtl = workout.musculoTendonLoad;
@@ -471,6 +500,7 @@ function renderSessionBody(workout: Workout, components: HyroxComponent[] | unde
     // Not every station in every round (a beginner session's sleds).
     const breakdown = hyroxRoundsBreakdown(workout);
 
+    const parts = renderSessionParts(workout, accent);
     return `
       <div style="padding:18px 24px 0">
         <div style="padding:12px 14px;border-radius:10px;background:rgba(91,110,160,0.06);border:1px solid rgba(91,110,160,0.12);margin-bottom:16px">
@@ -478,9 +508,11 @@ function renderSessionBody(workout: Workout, components: HyroxComponent[] | unde
           <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${restLine}</div>
           ${breakdown ? `<div style="font-size:11px;color:var(--c-muted);margin-top:2px">${esc(breakdown)}</div>` : ''}
         </div>
+        ${parts.opening}
         <div style="font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--c-faint);margin-bottom:4px">Stations</div>
         ${stationRows}
         ${notes.length > 0 ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;padding-top:10px">${esc(notes.join(' '))}</div>` : ''}
+        ${parts.closing}
         ${runFinishMin ? `
           <div style="padding:12px 14px;border-radius:10px;background:rgba(122,132,92,0.07);border:1px solid rgba(122,132,92,0.15);margin-top:14px">
             <div style="font-size:12px;font-weight:600;color:#4f5a3b">Easy run to finish</div>
@@ -504,15 +536,18 @@ function renderSessionBody(workout: Workout, components: HyroxComponent[] | unde
       : `${fmtRest(interStation)} between stations · ${fmtRest(interRound)} between rounds · Stations only`;
     const notes = hyroxSessionNotes(workout);
 
+    const parts = renderSessionParts(workout, accent);
     return `
       <div style="padding:18px 24px 0">
         <div style="padding:12px 14px;border-radius:10px;background:rgba(184,116,44,0.06);border:1px solid rgba(184,116,44,0.12);margin-bottom:16px">
           <div style="font-size:12px;font-weight:600;color:#8a5820">${rounds} round${rounds === 1 ? '' : 's'} · Race pace</div>
           <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${restLine}</div>
         </div>
+        ${parts.opening}
         <div style="font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--c-faint);margin-bottom:4px">Stations</div>
         ${stationRows}
         ${notes.length > 0 ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;padding-top:10px">${esc(notes.join(' '))}</div>` : ''}
+        ${parts.closing}
       </div>
       ${mtl != null && mtl > 0 ? renderMtlNote(mtl, disc) : ''}`;
   }
@@ -538,10 +573,10 @@ function fmtRestSuffix(sec: number): string {
  * underneath. A neutral summary chip leads, matching the station-circuit modal's
  * shape. The guided player walks the sets one at a time.
  */
-function renderStrengthBreakdown(session: StrengthSession, accent: string, workout: Workout): string {
-  const dur = workout.estimatedDurationMin;
-  const durStr = dur ? (dur >= 60 ? `${Math.floor(dur / 60)}h ${dur % 60 > 0 ? `${dur % 60}m` : ''}`.trim() : `${dur}m`) : null;
-
+/** One row per exercise of a parsed strength session (the first set carries
+ *  the prescription), cue and rest underneath: the strength modal's rows,
+ *  shared with a station session's strength block. */
+function strengthRows(session: StrengthSession, accent: string): string {
   const byExercise = new Map<number, GuidedSet>();
   for (const s of session.sets) {
     if (!byExercise.has(s.exerciseIndex)) byExercise.set(s.exerciseIndex, s);
@@ -563,6 +598,13 @@ function renderStrengthBreakdown(session: StrengthSession, accent: string, worko
         </div>
       </div>`;
   }).join('');
+  return rows;
+}
+
+function renderStrengthBreakdown(session: StrengthSession, accent: string, workout: Workout): string {
+  const dur = workout.estimatedDurationMin;
+  const durStr = dur ? (dur >= 60 ? `${Math.floor(dur / 60)}h ${dur % 60 > 0 ? `${dur % 60}m` : ''}`.trim() : `${dur}m`) : null;
+  const rows = strengthRows(session, accent);
 
   return `
     <div style="padding:18px 24px 0">

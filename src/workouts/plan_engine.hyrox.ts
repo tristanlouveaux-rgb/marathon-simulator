@@ -3151,11 +3151,23 @@ export function buildHyroxTrainingWeeks(
       for (const c of x.hyroxComponents ?? []) if (c.loadKg != null) held.add(c.type as HyroxStation);
     }
     const anchorOf = (st: HyroxStation) => hyroxLoadKgAt(st, planLoadTier, hyroxBeginnerLoadFraction(st, d.week, raceWeightWeek) ?? 1) ?? 0;
+    const steps: Array<{ station: HyroxStation; fromKg: number; toKg: number }> = [];
     for (const st of held) {
       const m = loadMemory.get(st);
       const kg = d.workouts.flatMap(x => x.hyroxComponents ?? []).find(c => c.type === st && c.loadKg != null)?.loadKg;
       if (!m || kg == null || kg <= m.kg + 1e-9 || kg <= anchorOf(st) + 1e-9) continue;
       d.adjustments = [...d.adjustments, `W${d.week}: ${STATION_DISPLAY[st].name} load ${fmtAmount(m.kg)} to ${fmtAmount(kg)} kg (the last session holding it was rated easier than RPE ${m.targetRpe})`];
+      steps.push({ station: st, fromKg: m.kg, toKg: kg });
+    }
+    // Each session holding a stepped station says so in one short note
+    // (lane H2b part 2; adaptation transparency: a small change, a small
+    // note on the session card).
+    if (steps.length > 0) {
+      d.workouts = d.workouts.map(x => {
+        if (!x.hyroxSpec || !isHyroxWork(x)) return x;
+        const own = steps.filter(st => (x.hyroxComponents ?? []).some(c => c.type === st.station && c.loadKg != null));
+        return own.length > 0 ? { ...x, hyroxSpec: { ...x.hyroxSpec, loadSteps: own } } : x;
+      });
     }
   };
   // After a week is built: the load and the rating of each station its

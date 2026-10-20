@@ -784,14 +784,27 @@ export function hyroxStationRowText(c: HyroxComponent, w: Workout, withTarget = 
 }
 
 /** What a lane H2b station session adds below its stations: the weakest
- *  station and the doubles split (the description's closing sentences). */
+ *  station, the doubles split (the description's closing sentences) and a
+ *  load the athlete's rating raised (hyroxLoadStepNote). */
 export function hyroxSessionNotes(w: Workout): string[] {
   const spec = w.hyroxSpec;
   if (!spec) return [];
   const out: string[] = [];
   if (spec.weakest && (w.hyroxComponents ?? []).some(c => c.type === spec.weakest)) out.push(`${STATION_DISPLAY[spec.weakest].name} is the forecast's weakest station.`);
   if (spec.doubles) out.push(DOUBLES_LINE);
+  const step = hyroxLoadStepNote(w);
+  if (step) out.push(step);
   return out;
+}
+
+/** One short note for a load the athlete's rating raised on this session
+ *  (lane H2b part 2; adaptation transparency: a small change, a small note):
+ *  "Load up after an easy rating: Sled Push 50 to 52.5 kg." Null without one. */
+export function hyroxLoadStepNote(w: Workout): string | null {
+  const steps = w.hyroxSpec?.loadSteps ?? [];
+  if (steps.length === 0) return null;
+  const parts = steps.map(s => `${STATION_DISPLAY[s.station].name} ${fmtAmount(s.fromKg)} to ${fmtAmount(s.toKg)} kg`);
+  return `Load up after an easy rating: ${parts.join(', ')}.`;
 }
 
 /** A lane H2b session's MTL, duration and description from its components

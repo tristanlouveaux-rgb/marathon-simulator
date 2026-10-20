@@ -39,7 +39,7 @@ import { HYROX_MTL_CAP, computeDoublesCap, hyroxTier } from '@/constants/hyrox-c
 import { isHyroxDeloadWeek } from './plan_engine';
 import { generateHyroxPlan, hyroxSimWeeks, generateHyroxPlanDetailed, HYROX_GENERATOR_VERSION } from './plan_engine.hyrox';
 import { planTrainingWeeks } from './race-week-layout';
-import { isHyroxEasyErg } from './hyrox-generators';
+import { isHyroxEasyErg, hyroxLoadStepNote } from './hyrox-generators';
 import { hyroxComponentSets } from './hyrox-session-shape';
 import { hyroxBeginnerRaceWeightWeek, hyroxRacePaceSets, hyroxLoadKgAt } from './hyrox-station-dose';
 import { applyHyroxGeneratorRegen } from '@/state/hyrox-plan-regen';
@@ -191,15 +191,20 @@ describe('the beginner load schedule in a plan', () => {
       if (injured) (s as unknown as { injuryState: unknown }).injuryState = { active: true, injuryPhase: 'acute', location: 'knee', runCapacity: 100, upperLoadCapacity: 100, lowerLoadCapacity: 100 };
       const wks = generateHyroxPlan(s);
       notes = wks[5].hyroxPlanNotes ?? [];
+      card = hyroxLoadStepNote(wks[5].triWorkouts!.find(x => x.t === 'hyrox_station_technique')!);
       return loadsOf(wks[5].triWorkouts!.find(x => x.t === 'hyrox_station_technique'));
     };
     let notes: string[] = [];
+    let card: string | null = null;
     expect(run(3)).toMatchObject({ sled_push: 52.5, sled_pull: 40 });
+    // The session says so in one short note on its card (part 2).
+    expect(card).toBe('Load up after an easy rating: Sled Push 50 to 52.5 kg, Sled Pull 37.5 to 40 kg.');
     // The week says why the load moved.
     expect(notes).toContain('W6: Sled Push load 50 to 52.5 kg (the last session holding it was rated easier than RPE 5)');
     expect(notes).toContain('W6: Sled Pull load 37.5 to 40 kg (the last session holding it was rated easier than RPE 5)');
     expect(run(5)).toMatchObject({ sled_push: 50, sled_pull: 37.5 });
     expect(notes.some(n => /load .* kg \(the last session/.test(n))).toBe(false);
+    expect(card).toBeNull();
     expect(run(8)).toMatchObject({ sled_push: 50, sled_pull: 37.5 });
     expect(run(null)).toMatchObject({ sled_push: 50, sled_pull: 37.5 });
     expect(run(3, true)).toMatchObject({ sled_push: 50, sled_pull: 37.5 });

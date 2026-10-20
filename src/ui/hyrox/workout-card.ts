@@ -11,7 +11,7 @@ import type { HyroxComponent, HyroxStation } from '@/types/triathlon';
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { ECCENTRIC_HEAVY_STATIONS } from '@/constants/hyrox-constants';
 import { strengthCardSummary } from '@/guided/strength-model';
-import { isHyroxEasyErg, hyroxStationRowText } from '@/workouts/hyrox-generators';
+import { isHyroxEasyErg, hyroxStationRowText, hyroxLoadStepNote } from '@/workouts/hyrox-generators';
 
 // ─── Discipline colours ───────────────────────────────────────────────────────
 
@@ -59,10 +59,22 @@ function renderComponents(components: HyroxComponent[], w: Workout): string {
     return `<li style="margin-bottom:2px">${display.name}, ${dist}</li>`;
   });
 
+  // Lane H2b part 2: the parts around the stations, one muted line each.
+  const spec = w.hyroxSpec;
+  const before = [
+    ...(spec?.warmup ? [`${spec.warmup.min} min warm-up`] : []),
+    ...(spec?.strength ? [`${spec.strength.min} min strength${spec.strength.light ? ' (light)' : ''}`] : []),
+  ].join(', then ');
+  const after = spec?.finisher ? `Then ${spec.finisher.min} min easy erg.` : '';
+  const step = hyroxLoadStepNote(w);
+  const line = (t: string) => `<div style="font-size:12px;color:var(--c-muted);line-height:1.5;margin-top:6px">${escAttr(t)}</div>`;
   return `
+    ${before ? line(`${before.charAt(0).toUpperCase()}${before.slice(1)}, then:`) : ''}
     <ul style="margin:8px 0 0;padding-left:16px;font-size:12px;color:var(--c-muted);line-height:1.5;list-style:disc">
       ${lines.join('')}
     </ul>
+    ${after ? line(after) : ''}
+    ${step ? line(step) : ''}
   `;
 }
 
