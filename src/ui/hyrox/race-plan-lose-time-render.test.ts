@@ -141,7 +141,7 @@ describe('race plan page', () => {
     const s = hyroxState({ targetFinishTimeSec: 3600 });
     const plan = buildHyroxRacePlan(s, predictHyroxRace(s)!);
     const line = racePlanFeasibilityLine(plan);
-    expect(line).toBe('1:00:00 is out of reach even with every leg at the typical split of the top 1% of Open Singles women. Splits below are at your forecast.');
+    expect(line).toBe('1:00:00 is out of reach even with every leg at top-1% level for Open Singles women. Splits below are at your forecast.');
     expect(line).not.toMatch(/\d+ min/);
     const html = renderRacePlanBody(plan);
     expect(html).toContain(line);

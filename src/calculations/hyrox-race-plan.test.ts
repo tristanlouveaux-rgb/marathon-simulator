@@ -41,6 +41,17 @@ function planFor(state: SimulatorState) {
   return { prediction, plan: buildHyroxRacePlan(state, prediction) };
 }
 
+/** The fastest time the cohort floors allow (venue-neutral state): per
+ *  component the top-1% median while the forecast is slower, else the p1
+ *  split, and never above the forecast's own. */
+function tieredFloorSum(s: SimulatorState, p: ReturnType<typeof predictHyroxRace> & object): number {
+  const f = hyroxCompetitiveFloors(hyroxCohortForState(s))!;
+  const tier = (cur: number, med: number, fast: number) => Math.min(cur, cur > med ? med : fast);
+  return tier(p.runSec, f.runSec, f.fastest.runSec)
+    + HYROX_STATION_ORDER.reduce((a, st) => a + tier(p.stations.find(l => l.station === st)!.adjustedSec, f.stationSec[st], f.fastest.stationSec[st]), 0)
+    + tier(p.roxzoneSec, f.roxzoneSec, f.fastest.roxzoneSec);
+}
+
 const RACE_ORDER = [
   'Run 1', 'SkiErg', 'Run 2', 'Sled Push', 'Run 3', 'Sled Pull', 'Run 4', 'Burpee Broad Jumps',
   'Run 5', 'Row Erg', 'Run 6', 'Farmer Carry', 'Run 7', 'Sandbag Lunges', 'Run 8', 'Wall Balls',
@@ -172,6 +183,70 @@ describe('floors from the real results, per sex and division', () => {
   });
 });
 
+describe('the top band keeps headroom (review 3: every faster goal read unrealistic)', () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const cases: Array<[string, SimulatorState]> = [
+    ['Open Singles man, competitive band (seeds = the top-1% medians)', buildState({ athleteBand: 'competitive' }, { biologicalSex: 'male' })],
+    ['Open Singles woman, competitive band', buildState({ athleteBand: 'competitive' })],
+    ['Open Singles woman whose forecast is under her field\'s top-1% median', buildState({
+      athleteBand: 'competitive', previousHyroxTimeSec: 3900, hyroxPreviousTimeFormat: 'open_singles',
+      personalRunPaceOffsetSec: -37, personalRunPaceOffsetUpdatedAtISO: today,
+    })],
+  ];
+
+  it('the fixtures are what they say: forecast at, or under, the top-1% median finish', () => {
+    const [, man] = cases[0];
+    const [, woman] = cases[1];
+    const [, fast] = cases[2];
+    for (const s of [man, woman]) {
+      const p = predictHyroxRace(s)!;
+      const f = hyroxCompetitiveFloors(hyroxCohortForState(s))!;
+      for (const st of HYROX_STATION_ORDER) expect(p.stations.find(l => l.station === st)!.adjustedSec).toBeCloseTo(f.stationSec[st], 0);
+    }
+    const pf = predictHyroxRace(fast)!;
+    expect(pf.totalSec).toBeLessThan(hyroxCompetitiveFloors({ format: 'open_singles', sex: 'female' })!.totalSec);
+  });
+
+  it('goals 30 to 120 s faster are achievable or a stretch, never unrealistic, in the race plan and the goal modal path', () => {
+    for (const [name, base] of cases) {
+      const p = predictHyroxRace(base)!;
+      for (const gain of [30, 60, 120]) {
+        const goal = p.totalSec - gain;
+        const back = computeGoalBackCalc(p, goal, hyroxGoalBackCalcOptions(base, p, goal));
+        expect([name, gain, back.feasibility]).not.toEqual([name, gain, 'unrealistic']);
+        expect(['achievable', 'stretch']).toContain(back.feasibility);
+        const plan = buildHyroxRacePlan({ ...base, hyroxConfig: { ...base.hyroxConfig!, targetFinishTimeSec: goal } } as SimulatorState, p);
+        expect(plan.basis).toBe('goal');
+        expect(plan.legs[15].clockSec).toBe(goal);
+      }
+    }
+  });
+
+  it('a component at or past its top-1% median is floored at the cohort\'s p1 split, never above it', () => {
+    const [, base] = cases[0];
+    const p = predictHyroxRace(base)!;
+    const f = hyroxCompetitiveFloors(hyroxCohortForState(base))!;
+    const r = computeGoalBackCalc(p, p.totalSec - 5000, hyroxGoalBackCalcOptions(base, p, p.totalSec - 5000));
+    expect(r.feasibility).toBe('unrealistic');
+    for (const t of r.stationTargets) expect(t.targetSec).toBeCloseTo(f.fastest.stationSec[t.station], 0);
+    expect(r.runPaceTarget.targetSecKm * 8).toBeCloseTo(f.fastest.runSec, 0);
+    expect(r.roxzoneSec).toBeCloseTo(f.fastest.roxzoneSec, 0);
+  });
+
+  it('at a venue, the floors carry the forecast line\'s own venue seconds', () => {
+    const s = buildState({ venueId: 'mexico-city-exh' });
+    const p = predictHyroxRace(s)!;
+    const f = hyroxCompetitiveFloors(hyroxCohortForState(s))!;
+    const r = computeGoalBackCalc(p, 3000, hyroxGoalBackCalcOptions(s, p, 3000));
+    expect(r.feasibility).toBe('unrealistic');
+    for (const t of r.stationTargets) {
+      const line = p.stations.find(l => l.station === t.station)!;
+      expect(t.targetSec).toBeCloseTo(f.stationSec[t.station] + (line.adjustedSec - line.baseSec), 6);
+    }
+    expect(r.runPaceTarget.targetSecKm * 8).toBeGreaterThan(f.runSec);
+  });
+});
+
 describe('Roxzone at the goal', () => {
   it('scales with the goal from the real results; equal to the forecast at the forecast', () => {
     const s = buildState();
@@ -182,7 +257,7 @@ describe('Roxzone at the goal', () => {
     expect(hyroxRoxzoneAtGoalSec(cohort, p, p.totalSec + 600)!).toBeGreaterThan(p.roxzoneSec);
   });
 
-  it('never below the cohort\'s competitive Roxzone unless the forecast\'s own is', () => {
+  it('never below the cohort\'s tier Roxzone floor unless the forecast\'s own is', () => {
     const cases: Array<[Partial<NonNullable<SimulatorState['hyroxConfig']>>, Partial<SimulatorState>]> = [
       [{}, {}], [{ athleteBand: 'competitive' }, {}], [{}, { biologicalSex: 'male' }],
       [{ format: 'open_doubles', division: 'mixed' }, {}], [{ format: 'pro_singles' }, { biologicalSex: 'male' }],
@@ -190,7 +265,9 @@ describe('Roxzone at the goal', () => {
     for (const [hx, top] of cases) {
       const base = buildState(hx, top);
       const p = predictHyroxRace(base)!;
-      const floor = hyroxCompetitiveFloors(hyroxCohortForState(base))!.roxzoneSec;
+      const f = hyroxCompetitiveFloors(hyroxCohortForState(base))!;
+      // The tier floor: the median while the forecast is slower, else p1.
+      const floor = p.roxzoneSec > f.roxzoneSec ? f.roxzoneSec : f.fastest.roxzoneSec;
       const lowest = Math.min(floor, p.roxzoneSec);
       for (const goal of [2800, 3300, 3600, 3900, 4200, p.totalSec - 600, p.totalSec - 60]) {
         const r = computeGoalBackCalc(p, goal, hyroxGoalBackCalcOptions(base, p, goal));
@@ -232,10 +309,7 @@ describe('unrealistic goals', () => {
     for (const [hx, top] of [[{}, {}], [{ athleteBand: 'competitive' }, {}], [{}, { biologicalSex: 'male' }]] as const) {
       const s = buildState(hx, top);
       const p = predictHyroxRace(s)!;
-      const f = hyroxCompetitiveFloors(hyroxCohortForState(s))!;
-      const floorSum = Math.min(p.runSec, f.runSec)
-        + HYROX_STATION_ORDER.reduce((a, st) => a + Math.min(p.stations.find(l => l.station === st)!.adjustedSec, f.stationSec[st]), 0)
-        + Math.min(p.roxzoneSec, f.roxzoneSec);
+      const floorSum = tieredFloorSum(s, p);
       for (const goal of [2800, 3000, 3300]) {
         const r = computeGoalBackCalc(p, goal, hyroxGoalBackCalcOptions(s, p, goal));
         expect(r.feasibility).toBe('unrealistic');

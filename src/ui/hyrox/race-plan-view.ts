@@ -42,7 +42,7 @@ function fmt(sec: number): string {
  */
 export function racePlanFeasibilityLine(plan: Pick<HyroxRacePlan, 'feasibility' | 'goalSec' | 'cohort' | 'caveat'>): string {
   if (plan.feasibility === 'unrealistic' && plan.goalSec != null) {
-    return `${fmt(plan.goalSec)} is out of reach even with every leg at the typical split of the top 1% of ${hyroxPlacementWho({ cohort: plan.cohort, ageGroup: null })}. Splits below are at your forecast.`;
+    return `${fmt(plan.goalSec)} is out of reach even with every leg at top-1% level for ${hyroxPlacementWho({ cohort: plan.cohort, ageGroup: null })}. Splits below are at your forecast.`;
   }
   if (plan.feasibility === 'stretch' && plan.caveat) return `Stretch target. ${plan.caveat}`;
   return '';

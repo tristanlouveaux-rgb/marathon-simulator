@@ -907,24 +907,45 @@ export function hyroxPeerSplitsAt(cohort: HyroxResultsCohort, totalSec: number):
 }
 
 /** The competitive anchor of a cohort: the median split of every segment
- *  among the top 1% of its finishers (the competitive band seed). The goal
- *  back-calculation's floors (hyrox-race-plan.ts). Null without a cell. */
+ *  among the top 1% of its finishers (the competitive band seed), and the
+ *  fastest split its S8-S9 table publishes per segment (the p1 row). The goal
+ *  back-calculation's floors (hyrox-race-plan.ts): the median while the
+ *  forecast is slower than it, the p1 split once it is at or past it. Null
+ *  without a cell. */
 export interface HyroxCompetitiveFloors {
   stationSec: Record<HyroxStation, number>;
   runSec: number;
   roxzoneSec: number;
   /** The band's median finish. */
   totalSec: number;
+  /** The fastest published split per segment (the cohort's p1 row; Pro Mixed,
+   *  which does not exist, reads the pooled Pro Doubles table like the band
+   *  seeds). */
+  fastest: { stationSec: Record<HyroxStation, number>; runSec: number; roxzoneSec: number };
+}
+
+/** The fastest split a cohort's S8-S9 table publishes for a segment (its
+ *  first row, the p1 point in every published cell); the format's pooled
+ *  table when the cell is not published. */
+function fastestPublishedSec(seg: HyroxPeerSegment, cohort: HyroxResultsCohort): number | null {
+  const table = hyroxResultsTable(seg, cohort) ?? hyroxResultsTable(seg, { format: cohort.format, sex: 'pooled' });
+  return table && table.length > 0 ? table[0][0] : null;
 }
 
 export function hyroxCompetitiveFloors(cohort: HyroxResultsCohort): HyroxCompetitiveFloors | null {
   const anchors = bandSeedCellsFor(cohort);
   if (!anchors) return null;
   const m = anchors[0].medians;
+  const fast = (seg: HyroxPeerSegment, median: number) => Math.min(median, fastestPublishedSec(seg, cohort) ?? median);
   return {
     stationSec: Object.fromEntries(HYROX_STATION_ORDER.map(st => [st, m[st]])) as Record<HyroxStation, number>,
     runSec: m.run_total,
     roxzoneSec: m.roxzone,
     totalSec: m.total,
+    fastest: {
+      stationSec: Object.fromEntries(HYROX_STATION_ORDER.map(st => [st, fast(st, m[st])])) as Record<HyroxStation, number>,
+      runSec: fast('run_total', m.run_total),
+      roxzoneSec: fast('roxzone', m.roxzone),
+    },
   };
 }

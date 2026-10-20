@@ -139,9 +139,49 @@ describe('computeGoalBackCalc options: cohort floors and the Roxzone at the goal
     expect(r.feasibility).toBe('unrealistic');
     for (const t of r.stationTargets) expect(t.targetSec).toBeCloseTo(floors.stationSec[t.station]!, 6);
     expect(r.runPaceTarget.targetSecKm * 8).toBeCloseTo(floors.runSec, 6);
-    expect(r.caveat).toContain('top 1% of finishers in your field');
+    expect(r.caveat).toContain('faster than top-1% level in your field');
     // Without options the legacy floors stand.
     expect(computeGoalBackCalc(p, p.totalSec - 100).floorSource).toBe('legacy');
+  });
+
+  it('a component already at or past its top-1% median is floored at the fastest published split, never at the forecast', () => {
+    const stations = buildStations();
+    const median = Object.fromEntries(stations.map(l => [l.station, l.adjustedSec])) as Record<string, number>;
+    const fastest = Object.fromEntries(stations.map(l => [l.station, l.adjustedSec - 10])) as Record<string, number>;
+    // Every component sits exactly at its median: the median alone left zero
+    // headroom, so every faster goal read 'unrealistic'.
+    const p = buildPrediction({ stations, roxzoneSec: 250 });
+    const tiered = { stationSec: median, runSec: p.runSec, roxzoneSec: 250, fastest: { stationSec: fastest, runSec: p.runSec - 40, roxzoneSec: 230 } };
+    for (const gain of [30, 60, 100]) {
+      const r = computeGoalBackCalc(p, p.totalSec - gain, { floors: tiered });
+      expect(r.feasibility).not.toBe('unrealistic');
+      expect(r.achievedSec).toBeCloseTo(p.totalSec - gain, 6);
+      for (const t of r.stationTargets) expect(t.targetSec).toBeGreaterThanOrEqual(fastest[t.station] - 1e-6);
+      expect(r.runPaceTarget.targetSecKm * 8).toBeGreaterThanOrEqual(p.runSec - 40 - 1e-6);
+    }
+    // The fastest tier sums to 80 + 40 + 20 = 140 s under the forecast.
+    const out = computeGoalBackCalc(p, p.totalSec - 200, { floors: tiered });
+    expect(out.feasibility).toBe('unrealistic');
+    expect(out.achievedSec).toBeCloseTo(p.totalSec - 140, 6);
+    // A component slower than its median keeps the median as its floor.
+    const slow = buildPrediction({ stations: buildStations({ ski_erg: median.ski_erg + 30 }), roxzoneSec: 250 });
+    const r2 = computeGoalBackCalc(slow, slow.totalSec - 5000, { floors: tiered });
+    expect(r2.stationTargets.find(t => t.station === 'ski_erg')!.targetSec).toBeCloseTo(median.ski_erg, 6);
+  });
+
+  it('floors are venue-neutral: each carries the line\'s own venue seconds (headroom on the venue-neutral line)', () => {
+    const neutral = buildStations();
+    const stations = neutral.map(l => ({ ...l, adjustedSec: l.baseSec + (l.station === 'ski_erg' ? 16 : 0) }));
+    const base = buildPrediction({ stations, runSec: 2440 });
+    // A venue: the run is 40 s slower than its pre-venue time (rawSec holds
+    // the pre-venue run + stations + Roxzone).
+    const rawRun = 2400;
+    const p = { ...base, rawSec: rawRun + neutral.reduce((a, l) => a + l.baseSec, 0) + base.roxzoneSec, courseFactors: [{ kind: 'altitude', label: 'Altitude', value: '2240 m', deltaSec: 56 }] } as HyroxPrediction;
+    const floors = { stationSec: Object.fromEntries(neutral.map(l => [l.station, l.baseSec - 20])), runSec: rawRun - 160 };
+    const r = computeGoalBackCalc(p, p.totalSec - 5000, { floors });
+    expect(r.stationTargets.find(t => t.station === 'ski_erg')!.targetSec).toBeCloseTo(floors.stationSec.ski_erg! + 16, 6);
+    expect(r.stationTargets.find(t => t.station === 'row_erg')!.targetSec).toBeCloseTo(floors.stationSec.row_erg!, 6);
+    expect(r.runPaceTarget.targetSecKm * 8).toBeCloseTo(floors.runSec + 40, 6);
   });
 
   it('a Roxzone target takes its share of the gain; the rest is distributed', () => {
