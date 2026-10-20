@@ -22,7 +22,7 @@
  *      A week the guard or the deload ceiling cannot hold at the chosen hours
  *      is built at the largest size they hold, the same week at every chosen
  *      hours above it.
- *      Taper weeks: taperFraction (0.70 then 0.55) of the reference week's
+ *      Taper weeks: hyroxTaperFraction (0.55 then 0.30) of the reference week's
  *      planned minutes, with the reference week's station and brick sessions,
  *      minutes and MTL as ceilings (never under the taper's smallest
  *      circuit, which the fractions exempt: round 7).
@@ -108,6 +108,7 @@ import {
   hyroxSessionTotal,
   hyroxTier,
   hyroxBaseMultiplier,
+  hyroxTaperFraction,
   computeHyroxPlanPhases,
   type HyroxSessionCounts,
   type HyroxTier,
@@ -135,7 +136,6 @@ import {
   ctlGapMultiplier, isHyroxDeloadWeek, isRaceWeek,
   LONG_RUN_MAX_GROWTH_VS_RECENT_LONGEST, LONG_RUN_LOOKBACK_WEEKS, TAPER_LONG_RUN_FRACTION, LONG_SOFT_FLOOR_MIN,
 } from './plan_engine';
-import { taperFraction } from './phases';
 import { loggedRuns, longestRunMinBetween, RECENT_LONGEST_WINDOW_DAYS } from './sharpening-block';
 import { stampTriWorkoutIds } from './plan_engine.triathlon';
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
@@ -914,8 +914,8 @@ const BRICK_SESSION_FLOOR_MIN = 20;
  * leaves the taper one short circuit (round 6 review, pass 2: once the long
  * run and the quality run came first, a peak week holding a 26-min race-pace
  * block left both taper weeks with no circuit, 106 to 249 of 1,020 race weeks
- * per variant). Round 7 also exempts a circuit of that size from the 0.70 /
- * 0.55 fractions (buildHyroxTrainingWeeks exemptCircuitOf). The injury gates
+ * per variant). Round 7 also exempts a circuit of that size from the taper
+ * fractions (buildHyroxTrainingWeeks exemptCircuitOf). The injury gates
  * apply to it as to the week's own circuit (current and future weeks). Null
  * when the week cannot hold a circuit (race week without enough of the
  * remaining stations, or stations the injury gates drop).
@@ -2508,7 +2508,7 @@ function mergePrevSundays(a: HyroxPrevSunday | null, b: HyroxPrevSunday | null):
  *      sessions, Sunday to Monday included (scheduler.hyrox; a week that
  *      cannot place loses a hard session to its easy sibling, then its
  *      lowest-priority session);
- *    - the race taper at taperFraction (0.70, then 0.55) of the reference
+ *    - the race taper at hyroxTaperFraction (0.55, then 0.30) of the reference
  *      week, with its station and brick work as ceilings (never under the
  *      taper's smallest circuit, hyroxRaceTaperFloorCircuit) and never above
  *      the week before (taperDropRank sheds sessions until they hold). Its
@@ -2870,10 +2870,10 @@ export function buildHyroxTrainingWeeks(
       const taperLong = Math.round(taperRef * TAPER_LONG_RUN_FRACTION);
       longRunMin = raceWeek ? null : taperRef >= runFloorMin ? Math.max(runFloorMin, taperLong) : taperLong;
       if (w >= taperStart) {
-        // Race taper: taperFraction (0.70 then 0.55; SCIENCE_LOG §CV.4) of the
+        // Race taper: hyroxTaperFraction (0.55 then 0.30, Tristan 2026-10-19) of the
         // reference week, the last loaded week before the taper.
         const refMin = refWeek ? refWeek.plannedMin : hoursMin * HYROX_PEAK_MULT;
-        budgetMin = taperFraction(w - taperStart + 1, taperLen) * refMin;
+        budgetMin = hyroxTaperFraction(w - taperStart + 1, taperLen) * refMin;
       } else {
         budgetMin = hoursMin * HYROX_TRANSITION_TAPER_MULT;
       }
@@ -2968,7 +2968,7 @@ export function buildHyroxTrainingWeeks(
     let ceilingName: string | undefined = deloadRef ? 'deload ceiling' : raceTaper ? 'taper' : undefined;
     // The race taper's station and brick ceilings: the reference week's
     // minutes and MTL, never under the taper's smallest circuit
-    // (hyroxRaceTaperFloorCircuit), still inside the 0.70 / 0.55 fractions.
+    // (hyroxRaceTaperFloorCircuit), still inside the taper fractions.
     const refWork = taperRef ? stationWorkOf(taperRef.workouts) : undefined;
     const floorCircuit = refWork ? hyroxRaceTaperFloorCircuit(state, w, raceWeek, stationLoads) : null;
     const taperWork = refWork && floorCircuit
@@ -3020,7 +3020,7 @@ export function buildHyroxTrainingWeeks(
     // The race taper's smallest circuit (round 7, Tristan 2026-10-14): in
     // taper week 1 and race week, the week's shortest station circuit at
     // MIN_CIRCUIT_ROUNDS rounds of MIN_CIRCUIT_STATIONS stations is exempt
-    // from the taperFraction ceiling, as race week's primer is, so no race
+    // from the hyroxTaperFraction ceiling, as race week's primer is, so no race
     // taper week loses all its station work to the fractions. Before (round
     // 6, pass 3), 123 of 2,160 taper weeks at 2 h held no station or brick
     // work and 63 race weeks no circuit: a 2-h peak week holding a 34-min
@@ -3096,7 +3096,7 @@ export function buildHyroxTrainingWeeks(
     // guard (training weeks), the deload ceiling (deload weeks), the chosen
     // weekly hours and the phase budget (training weeks; week 1's assessment
     // exempt from the budget) and, in a taper week, the taper budget
-    // (taperFraction × the reference week), the reference week's station and
+    // (hyroxTaperFraction × the reference week), the reference week's station and
     // brick minutes and MTL, and the week before (the taper never rises;
     // running's rule, SCIENCE_LOG §CV.4). A week the guard or the deload
     // ceiling cannot hold at the chosen hours is first built at the largest
@@ -3719,7 +3719,7 @@ export function buildHyroxTrainingWeeks(
     // rule dropped the circuit when that alone fitted: 3 default-hours race
     // weeks held no circuit). Race week keeps its primer.
     const withWorkouts = (a: Attempt, workouts: Workout[]): Attempt => attemptOf(workouts, a.adjustments);
-    const fraction = raceTaper ? taperFraction(w - taperStart + 1, taperLen) : null;
+    const fraction = raceTaper ? hyroxTaperFraction(w - taperStart + 1, taperLen) : null;
     const whyOf = (a: Attempt): string => (raceTaper && ((fractionLimit?.of(a) ?? a.min) > capMin + 1e-6 || a.workMin > (taperWork?.min ?? Infinity) + 1e-6 || a.workMtl > (taperWork?.mtl ?? Infinity) + 1e-6))
       ? `taper: ${Math.round(budgetMin)} min, ${fraction} of ${taperRef ? 'the reference week' : 'the weekly hours'}`
       : 'the taper never rises';

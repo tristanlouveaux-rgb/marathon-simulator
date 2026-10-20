@@ -17,9 +17,10 @@
  *   - 48 h between eccentric sessions (no two on consecutive days, across
  *     weeks too) and at most the structure's eccentric count (a generator
  *     check, not a sourced cap);
- *   - taper weeks at most taperFraction (0.70, then 0.55) of the reference
- *     week (the last loaded week before the taper), race week tolerated above
- *     0.55 only by its fixed 25-min primer when the primer is all it holds,
+ *   - taper weeks at most hyroxTaperFraction (0.55, then 0.30; Tristan
+ *     2026-10-19, the triathlon shares) of the reference week (the last
+ *     loaded week before the taper), race week tolerated above 0.30 only by
+ *     its fixed 25-min primer when the primer is all it holds,
  *     and the smallest circuit (MIN_CIRCUIT_ROUNDS rounds of
  *     MIN_CIRCUIT_STATIONS stations) exempt in both weeks, week 1's
  *     assessment too when week 1 is the taper (round 7); never above the week
@@ -135,10 +136,9 @@ import {
   HYROX_MAX_HARD_SESSIONS, HYROX_MAX_HARD_RUNS, HYROX_MTL_CAP, HYROX_WEEKLY_SESSIONS,
   HYROX_QUALITY_FORMATS, HYROX_DELOAD_FACTOR, HYROX_RACE_WEEK_PRIMER_MIN, HYROX_WEEKLY_STRUCTURE,
   HYROX_RUN_SHARE, HYROX_RUN_FLOOR_MIN, HYROX_LONG_RUN, HYROX_EASY_RPE,
-  hyroxTier, hyroxSessionTotal,
+  hyroxTier, hyroxSessionTotal, hyroxTaperFraction,
 } from '@/constants/hyrox-constants';
 import { isHyroxDeloadWeek, LONG_RUN_MAX_GROWTH_VS_RECENT_LONGEST, LONG_RUN_LOOKBACK_WEEKS, TAPER_LONG_RUN_FRACTION, LONG_SOFT_FLOOR_MIN } from './plan_engine';
-import { taperFraction } from './phases';
 import { isHighIntensity, isHardRun, isEccentricSession, isHyroxLongRun } from './scheduler.hyrox';
 import {
   hyroxRunLengthKm, generateHyroxRun, generateHyroxStation, withHyroxRounds, withoutHyroxStation,
@@ -214,7 +214,7 @@ const runningMin = (wk: Week | undefined) => prescribed(wk).reduce((a, w) => a +
   ? (w.estimatedDurationMin ?? 0)
   : (w.hyroxComponents ?? []).filter(c => c.type === 'run').reduce((b, c) => b + ((c.durationSec ?? 0) * (w.hyroxRounds ?? 1)) / 60, 0)), 0);
 const brickRunMin = (wk: Week | undefined) => runningMin(wk) - runs(wk).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
-/** The race taper's smallest station work, exempt from the 0.70 / 0.55
+/** The race taper's smallest station work, exempt from the taper
  *  fractions in taper week 1 and race week (round 7): the week's shortest
  *  station circuit of at most MIN_CIRCUIT_ROUNDS rounds and
  *  MIN_CIRCUIT_STATIONS stations, or, in a week holding no circuit, its
@@ -499,14 +499,14 @@ function violations(s: SimulatorState, opts: { defaultHours?: boolean } = {}): s
       const refK = lastLoaded(taperStart - 1);
       const ref: Week | null = refK >= 0 ? wks[refK] : null;
       if (ref) {
-        const ceiling = taperFraction(w - taperStart + 1, taperLen) * minutes(ref);
-        // Race week may sit above 0.55 by its fixed primer when the primer is
+        const ceiling = hyroxTaperFraction(w - taperStart + 1, taperLen) * minutes(ref);
+        // Race week may sit above 0.30 by its fixed primer when the primer is
         // all it holds.
         const allowed = raceWeek ? Math.max(ceiling, HYROX_RACE_WEEK_PRIMER_MIN) : ceiling;
         // The smallest circuit is exempt from the fractions, and so is week
         // 1's assessment when week 1 is the race taper (round 7).
         const exemptMin = taperExemptMin(wk) + (w === 1 ? minutes({ triWorkouts: ws.filter(x => x.t === 'hyrox_assessment') } as Week) : 0);
-        if (minutes(wk) - exemptMin > allowed + EPS) out.push(`W${w}: taper ${minutes(wk)} min (${exemptMin} exempt) above ${taperFraction(w - taperStart + 1, taperLen)} x the reference week (${minutes(ref)})`);
+        if (minutes(wk) - exemptMin > allowed + EPS) out.push(`W${w}: taper ${minutes(wk)} min (${exemptMin} exempt) above ${hyroxTaperFraction(w - taperStart + 1, taperLen)} x the reference week (${minutes(ref)})`);
         // Above the reference week's station and brick work only up to the
         // taper's smallest circuit (round 6 review, pass 2: MIN_CIRCUIT_ROUNDS
         // rounds of MIN_CIRCUIT_STATIONS stations, hyroxRaceTaperFloorCircuit).
@@ -788,8 +788,9 @@ describe('HYROX plan detail', () => {
     }
     const loaded = detail.filter(d => d.phase !== 'taper' && !d.deload);
     const ref = loaded[loaded.length - 1];
-    expect(detail[16].budgetMin).toBe(Math.round(0.70 * ref.plannedMin));
-    expect(detail[17].budgetMin).toBe(Math.round(0.55 * ref.plannedMin));
+    // 0.55 then 0.30 of the reference week (Tristan 2026-10-19).
+    expect(detail[16].budgetMin).toBe(Math.round(0.55 * ref.plannedMin));
+    expect(detail[17].budgetMin).toBe(Math.round(0.30 * ref.plannedMin));
   });
 });
 
@@ -1031,8 +1032,8 @@ describe('HYROX review fixes, round 2 (2026-10-13)', () => {
       // The smallest circuit is exempt from the fractions (round 7), and the
       // reference week's station work caps the taper's unless that circuit is
       // all the taper holds (round 6 review, pass 2).
-      expect(minutes(s.wks[tw - 2]) - taperExemptMin(s.wks[tw - 2])).toBeLessThanOrEqual(0.70 * minutes(refWk) + EPS);
-      expect(minutes(s.wks[tw - 1]) - taperExemptMin(s.wks[tw - 1])).toBeLessThanOrEqual(Math.max(0.55 * minutes(refWk), HYROX_RACE_WEEK_PRIMER_MIN) + EPS);
+      expect(minutes(s.wks[tw - 2]) - taperExemptMin(s.wks[tw - 2])).toBeLessThanOrEqual(0.55 * minutes(refWk) + EPS);
+      expect(minutes(s.wks[tw - 1]) - taperExemptMin(s.wks[tw - 1])).toBeLessThanOrEqual(Math.max(0.30 * minutes(refWk), HYROX_RACE_WEEK_PRIMER_MIN) + EPS);
       for (const wk of [s.wks[tw - 2], s.wks[tw - 1]]) {
         const floor = hyroxRaceTaperFloorCircuit(s, wk.w, wk === s.wks[tw - 1]) ?? { min: 0, mtl: 0 };
         expect(stationWork(wk).min).toBeLessThanOrEqual(Math.max(stationWork(refWk).min, floor.min) + EPS);
@@ -1590,10 +1591,12 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     expect(weekTooFar.slice(0, 10)).toEqual([]);
     expect(qualityFell.slice(0, 10)).toEqual([]);
     // Ratchet while open question 1 is pending (measured 2026-10-20 at the
-    // lane H2b review fixes): no more falling pairs, downstream falls,
-    // downstream quality losses or running-rise week falls than now.
-    expect(fell.length).toBeLessThanOrEqual(164);
-    expect(downstream.length - downstreamQuality).toBeLessThanOrEqual(83);
+    // lane H2b review fixes, then at the 0.55 / 0.30 taper of 2026-10-19,
+    // whose deeper taper weeks move with the reference week: 167 and 92): no
+    // more falling pairs, downstream falls, downstream quality losses or
+    // running-rise week falls than now.
+    expect(fell.length).toBeLessThanOrEqual(167);
+    expect(downstream.length - downstreamQuality).toBeLessThanOrEqual(92);
     expect(downstreamQuality).toBeLessThanOrEqual(9);
     expect(moreRunning.length).toBeLessThanOrEqual(20);
   }, 900000);

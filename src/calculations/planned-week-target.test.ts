@@ -162,10 +162,12 @@ describe('The race taper steps down week by week', () => {
     expect(computePlannedWeekTarget(s, 18, 'A')).toBe(220);
   });
 
-  it('HYROX race tapers read the 1-indexed running ramp; triathlon and cycling read their own taper fractions', () => {
+  it('HYROX, triathlon and cycling race tapers read their own taper fractions (0.55 then 0.30)', () => {
     // Tri and HYROX tapers are 1 to 2 weeks. Weeks 7-8 here.
     const phases: TrainingPhase[] = ['base', 'base', 'build', 'build', 'build', 'peak', 'taper', 'taper'];
-    expect([7, 8].map(w => computePlannedWeekTarget(makeState({ phases, eventType: 'hyrox' }), w))).toEqual([280, 220]);
+    // HYROX matches triathlon since 2026-10-19 (hyroxTaperFraction); it read
+    // the running ramp (0.70 then 0.55: 280, 220) before.
+    expect([7, 8].map(w => computePlannedWeekTarget(makeState({ phases, eventType: 'hyrox' }), w))).toEqual([220, 120]);
     // Triathlon (cycling runs as eventType 'triathlon'): triTaperFraction, the
     // generator's shares: 0.55 then 0.30 (decision 4, 2026-10-14).
     const tri = makeState({ phases, eventType: 'triathlon' });
@@ -202,7 +204,7 @@ describe('The race taper steps down week by week', () => {
     // Triathlon and HYROX: Signal A median 385, cycling 3 x 100 and swimming 2 x 50 raw TSS.
     // Budget 400, running-only median 385 - (300 x 0.55 + 100 x 0.20) = 200.
     const phases: TrainingPhase[] = ['base', 'base', 'build', 'build', 'build', 'peak', 'taper', 'taper'];
-    // HYROX: the running ramp.
+    // HYROX: its own taper fractions (0.55 then 0.30, Tristan 2026-10-19).
     for (const eventType of ['hyrox'] as const) {
       const s = makeState({
         phases,
@@ -215,8 +217,8 @@ describe('The race taper steps down week by week', () => {
         } as any,
       });
       expect(computePlannedWeekTarget(s, 1)).toBe(594); // 200 x 0.97 + 400
-      expect([7, 8].map(w => computePlannedWeekTarget(s, w))).toEqual([540, 510]); // 200 x 0.70 / 0.55 + 400
-      expect(computePlannedWeekTarget(s, 8, 'A')).toBe(Math.round(385 * 0.55));
+      expect([7, 8].map(w => computePlannedWeekTarget(s, w))).toEqual([510, 460]); // 200 x 0.55 / 0.30 + 400
+      expect(computePlannedWeekTarget(s, 8, 'A')).toBe(Math.round(385 * 0.30));
     }
     // Triathlon: its own taper fractions on the running-only term (0.55 then 0.30).
     const tri = makeState({
@@ -234,7 +236,7 @@ describe('The race taper steps down week by week', () => {
     expect(computePlannedWeekTarget(tri, 8, 'A')).toBe(Math.round(385 * 0.30));
   });
 
-  it('triathlon and HYROX race week: the AI Coach context carries the race-week Signal A target (triathlon 0.30, HYROX 0.55), the only place those modes read it', () => {
+  it('triathlon and HYROX race week: the AI Coach context carries the race-week Signal A target (0.30 for both), the only place those modes read it', () => {
     // Tri and HYROX Plan, Load, Stats and debrief views never read the weekly target, so the
     // Signal B figures above appear on no tri or HYROX screen. The coach context is where
     // race week's lower target reaches these users.
@@ -254,9 +256,9 @@ describe('The race taper steps down week by week', () => {
         ...(eventType === 'triathlon' ? { triConfig: { distance: '70.3' } as any } : {}),
       });
       const ctx = buildCoachContext(s) as { fitness_trend: { planned_week_tss: number | null } };
-      // HYROX 385 x 0.55 = 212 (the 0-indexed position gave 385 x 0.70 = 270);
-      // triathlon its own race-week share, 385 x 0.30 = 116.
-      expect(ctx.fitness_trend.planned_week_tss).toBe(Math.round(385 * (eventType === 'triathlon' ? TRI_RACE_WEEK_FRACTION : 0.55)));
+      // Both read their own race-week share, 385 x 0.30 = 116 (HYROX since
+      // 2026-10-19; it read the running ramp's 0.55 before, 212).
+      expect(ctx.fitness_trend.planned_week_tss).toBe(Math.round(385 * TRI_RACE_WEEK_FRACTION));
       expect(ctx.fitness_trend.planned_week_tss).toBe(computePlannedWeekTarget(s, 8, 'A'));
     }
   });

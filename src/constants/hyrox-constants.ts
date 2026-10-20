@@ -12,6 +12,7 @@
 
 import type { AbilityBand, HyroxStation } from '@/types/triathlon';
 import { computePlanPhases, type PhaseConfig, type PlanPhaseWeek } from '@/workouts/phases';
+import { triTaperFraction } from './triathlon-constants';
 
 // Doubles ↔ singles total-time conversion lives in
 // src/calculations/hyrox-doubles.ts (doublesTotalInSinglesTermsSec), a
@@ -530,7 +531,7 @@ export const RACE_WEEK_EXCLUDED_STATIONS: HyroxStation[] = [
  * plan engine caps every week with the acute:chronic guard (planned load at
  * most ACWR_SAFE_HIGH x the mean of the previous 4 planned weeks, Tristan
  * 2026-10-12), which decides how fast short plans climb to these values.
- * Taper: taperFraction (phases.ts) of the reference week, 0.70 then 0.55.
+ * Taper: hyroxTaperFraction of the reference week, 0.55 then 0.30.
  *
  * Deload: every 4th plan week in base, build and peak (isHyroxDeloadWeek: the
  * 4-week cycle, except the week right before the race taper, which never
@@ -550,6 +551,25 @@ export const HYROX_PEAK_MULT  = 1.00;
 /** Base phase: linear ramp 0.55 + 0.30 × (weekInBase / 8), capped at 0.85. */
 export function hyroxBaseMultiplier(weekIndex: number): number {
   return Math.min(0.85, 0.55 + 0.30 * ((weekIndex - 1) / 8));
+}
+
+/**
+ * Share of the reference week (the last loaded week) for race-taper week
+ * `weekInTaper` (1-indexed; `taperWeeks` = race week) of a HYROX plan
+ * (planning side). Tristan's decision of 2026-10-19: HYROX matches triathlon
+ * (triTaperFraction, TRI_TAPER_FIRST_WEEK_FRACTION / TRI_RACE_WEEK_FRACTION):
+ * 0.55 in the week before race week, then 0.30 in race week, a 57.5% mean cut,
+ * inside the 41 to 60% band with the largest effect (Bosquet et al. 2007,
+ * ES 0.72; Wang et al. 2023, SMD -0.77); a race-week-only taper (a 1-week
+ * plan) is 0.55. The one source for the generator's taper weeks and the
+ * weekly load target (planned-week-target.ts). Before 2026-10-19 HYROX ran
+ * running's 0.70 then 0.55 (taperFraction, phases.ts), the parameter sheet's
+ * taper.volume reading. The race taper's smallest circuit or brick, race
+ * week's primer and the closing-week rules sit outside the fraction
+ * (plan_engine.hyrox).
+ */
+export function hyroxTaperFraction(weekInTaper: number, taperWeeks: number): number {
+  return triTaperFraction(weekInTaper, taperWeeks);
 }
 
 /** A taper-labelled week that is not part of the race taper (the inter-cycle

@@ -50,8 +50,10 @@
  *     triathlon-constants.ts: 0.55 then 0.30, or 0.55 when race week is the
  *     whole taper), the shares its generator builds the taper weeks at, so the
  *     AI Coach's Signal A and the unspentLoadItems settle read one source for
- *     one quantity (orchestrator decision 4, 2026-10-14). HYROX keeps the
- *     running ramp.
+ *     one quantity (orchestrator decision 4, 2026-10-14). A HYROX plan reads
+ *     its own (hyroxTaperFraction, hyrox-constants.ts: 0.55 then 0.30, the
+ *     triathlon shares, Tristan 2026-10-19), the shares its generator builds
+ *     the taper weeks at; before 2026-10-19 HYROX kept the running ramp.
  *   - Any other 'taper'-labelled week is a recovery week, not a race taper:
  *     continuous mode labels each block's 4th (deload) week 'taper'
  *     (initialization.ts, events.ts block append) and double-periodization plans
@@ -70,6 +72,7 @@ import { abilityBandFromVdot, isRunningDeloadWeek, isFourWeekCycleDeloadWeek, is
 import { isSharpeningBlock } from '@/workouts/phases';
 import { planTrainingWeeks } from '@/workouts/race-week-layout';
 import { triTaperFraction } from '@/constants/triathlon-constants';
+import { hyroxTaperFraction } from '@/constants/hyrox-constants';
 
 /** The state fields the target reads. Structural so persistence's raw `migrated` object fits. */
 export type PlannedTargetState = Pick<
@@ -187,9 +190,9 @@ export function computePlannedWeekTarget(
   // of a running plan (Tristan, 2026-10-09; triathlon and HYROX keep runs/week x 50).
   // History and the EMA still win when a sync wrote them.
   const typed = typedVolumeWeeklyTSS(s);
-  // A triathlon or cycling race taper takes its generator's fractions; running
-  // and HYROX the running ramp (taperFraction).
-  const taperOf = s.eventType === 'triathlon' ? triTaperFraction : undefined;
+  // A triathlon, cycling or HYROX race taper takes its generator's fractions;
+  // running the running ramp (taperFraction).
+  const taperOf = s.eventType === 'triathlon' ? triTaperFraction : s.eventType === 'hyrox' ? hyroxTaperFraction : undefined;
   const at = (phase: string, weekInPhase?: number, totalPhaseWeeks?: number): number => (
     signal === 'A'
       ? computePlannedWeekTSS(s.historicWeeklyTSS, ctl, phase, tier, s.rw, weekInPhase, totalPhaseWeeks, typed, taperOf)
