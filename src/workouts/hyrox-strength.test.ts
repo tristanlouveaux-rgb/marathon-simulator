@@ -18,7 +18,9 @@
  *     combination of its rounds and stations with the most station work
  *     within the capacity's share of its own (the smallest when none is
  *     that small), keeps its warm-up and runs 15 min or more, singles and
- *     doubles (review round 3).
+ *     doubles (review round 3); under a one-sided restriction it cuts the
+ *     restricted side's stations first and holds that side's share too, and
+ *     a jog warm-up follows the run capacity (review round 4).
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 
