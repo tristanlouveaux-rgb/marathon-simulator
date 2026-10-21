@@ -150,9 +150,12 @@ describe('stations calibrated: forecast, benchmark card, Stats, Account and chip
       // Stats renders the same count.
       expect(statsCount(s)).toBe('8 / 8');
       const html = document.getElementById('app-root')!.innerHTML;
-      // No station row on the seed; the one 'Population est.' left is the
-      // run-pace row (no run pace on file in this state).
-      expect((html.match(/Population est\./g) ?? []).length).toBe(1);
+      // No station row on the seed. The run-pace row reads the forecast's own
+      // derivation (deriveHyroxRunPace: VDOT 50, nothing stored yet), so it is
+      // not a seed either (ISSUE-406 (d): one source for the run pace and its
+      // provenance on Forecast and Stats).
+      expect((html.match(/Population est\./g) ?? []).length).toBe(0);
+      expect(html).toContain('Updated from your runs.');
       expect(accountStations(s)).toBe('8/8');
       expect(chipStations(s)).toBe('8/8');
     });

@@ -267,3 +267,34 @@ describe('deriveHyroxRunPace — full pipeline', () => {
     expect(r.paceSecKm).toBe(Math.round(seed * doublesRunPaceFactor(seed)));
   });
 });
+
+// ─── Provenance: one source for every caption (ISSUE-406 (d)) ────────────────
+// `source` names the branch that won (the marker-bump gate reads it) and is
+// 'user' whenever the stored value is returned. `provenance` keeps the stored
+// value's own provenance, so a pace applyHyroxRunPaceDerivation wrote reads as
+// derived on the Forecast chip, as the Stats caption already said.
+describe('deriveHyroxRunPace — provenance', () => {
+  it('a stored derived pace within the 5 s margin: source user, provenance derived', () => {
+    const fresh = deriveHyroxRunPace(buildState({ band: 'intermediate', vdot: 46 }));
+    const s = buildState({ band: 'intermediate', vdot: 46, userPace: fresh.paceSecKm });
+    s.hyroxConfig!.hyroxRunPaceSource = 'derived';
+    const r = deriveHyroxRunPace(s);
+    expect(r.paceSecKm).toBe(fresh.paceSecKm);
+    expect(r.source).toBe('user');
+    expect(r.provenance).toBe('derived');
+  });
+
+  it('a pace the athlete entered (or pasted, no stored source) stays user', () => {
+    for (const stored of ['user', undefined] as const) {
+      const s = buildState({ band: 'intermediate', vdot: 46, userPace: 278 });
+      s.hyroxConfig!.hyroxRunPaceSource = stored;
+      expect(deriveHyroxRunPace(s).provenance).toBe('user');
+    }
+  });
+
+  it('a fresh derivation and the seed carry their own provenance', () => {
+    expect(deriveHyroxRunPace(buildState({ vdot: 46, userPace: 350 })).provenance).toBe('derived');
+    expect(deriveHyroxRunPace(buildState({ vdot: 46 })).provenance).toBe('derived');
+    expect(deriveHyroxRunPace(buildState({ vdot: null })).provenance).toBe('seed');
+  });
+});

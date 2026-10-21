@@ -795,7 +795,9 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
 
   // Run pace: VDOT-derived when physiology is available, then user-set
   // override (yields to a meaningfully-faster derived value), then seed fallback.
-  const { paceSecKm: runPaceSecKm, source: runPaceSource } = deriveHyroxRunPace(state);
+  // runPaceSource is the pace's provenance (a stored derived pace stays
+  // 'derived'), the field every provenance caption reads.
+  const { paceSecKm: runPaceSecKm, provenance: runPaceSource } = deriveHyroxRunPace(state);
 
   // ── Format-aware benchmark resolution ────────────────────────────────────
   // stationInputs reads hyroxCalibrationCoverage (resolveHyroxBenchmarks,

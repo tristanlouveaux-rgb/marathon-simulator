@@ -29,7 +29,8 @@ import {
 } from '@/calculations/hyrox-results';
 import { latestTestAgeMonths } from '@/calculations/hyrox-station-history';
 import { isHyroxDoublesFormat } from '@/calculations/hyrox-division';
-import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
+import { deriveHyroxRunPace, type HyroxRunPaceResult } from '@/calculations/hyrox-run-pace';
+import { hyroxRunPaceCaption } from './forecast-labels';
 import { renderPlanShapeCard } from '../plan-shape-chart';
 import { getHyroxPartnerCache, refreshHyroxPartnerCache, setHyroxPartnerCacheListener, type HyroxPartnerCache } from '@/data/hyroxPartnerSync';
 import type { SimulatorState } from '@/types/state';
@@ -273,7 +274,7 @@ export function renderHyroxStatsView(): void {
               <div style="font-size:11px;color:var(--c-muted)">${ledger.calibratedCount} / ${ledger.total} stations calibrated</div>
             </div>
             ${ledger.rows.map(row => renderBenchmarkRow(row, seeds[row.station], s)).join('')}
-            ${renderRunPaceRow(hx.hyroxRunPaceSecKm, seedRunPace, hx.hyroxRunPaceSource)}
+            ${renderRunPaceRow(runPaceResult, seedRunPace)}
             ${(format === 'pro_singles' || format === 'pro_doubles') ? `
               <div style="border-top:1px solid rgba(0,0,0,0.05);margin-top:6px;padding:10px 0 0;display:flex;justify-content:space-between;align-items:center;gap:12px">
                 <div>
@@ -406,19 +407,21 @@ function renderAcwrRow(acwr: number): string {
 }
 
 function renderRunPaceRow(
-  userSecKm: number | undefined,
+  runPace: HyroxRunPaceResult,
   seedSecKm: number | undefined,
-  source: 'user' | 'derived' | 'seed' | undefined,
 ): string {
   // Run pace (can be fractional): whole second with the minute carried, the
   // forecast's formatter, never "4:60".
   const fmtPace = (s: number) => fmtModelPaceKm(s);
 
-  const hasUser = userSecKm != null;
-  const sourceCaption =
-    source === 'derived' ? 'Updated from your runs. Beat your last test.' :
-    source === 'user'    ? 'Set manually.' :
-                           'From splits';
+  // The pace and its provenance come from deriveHyroxRunPace, the call the
+  // forecast reads, so this row and the Forecast's Run pace chip name the same
+  // provenance (ISSUE-406 (d): the row read hx.hyroxRunPaceSource, the chip
+  // the derivation's branch, and a stored derived pace read "Set manually" on
+  // the Forecast and "Updated from your runs" here).
+  const hasUser = runPace.provenance !== 'seed';
+  const userSecKm = runPace.paceSecKm;
+  const sourceCaption = hyroxRunPaceCaption(runPace.provenance);
   return `
     <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(0,0,0,0.04)">
       <div>
@@ -431,7 +434,7 @@ function renderRunPaceRow(
           <div style="font-size:10px;color:var(--c-muted)">${sourceCaption}</div>
         ` : `
           <div style="font-size:12px;color:var(--c-faint);font-variant-numeric:tabular-nums">${seedSecKm ? `${fmtPace(seedSecKm)}/km` : '—'}</div>
-          <div style="font-size:10px;color:var(--c-faint)">Population est.</div>
+          <div style="font-size:10px;color:var(--c-faint)">${sourceCaption}</div>
         `}
       </div>
     </div>

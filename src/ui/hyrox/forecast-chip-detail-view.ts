@@ -38,7 +38,7 @@ import {
   buildSportLegend as buildSportLegendShared,
 } from '@/ui/sport-mix-donut';
 import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
-import { hyroxWeekLine } from './forecast-labels';
+import { hyroxWeekLine, hyroxRunPaceSourceLabel } from './forecast-labels';
 
 export type HyroxChipKey = 'you' | 'runpace' | 'stations' | 'training' | 'venue';
 
@@ -323,7 +323,7 @@ function pageRunPace(s: SimulatorState): { title: string; subhead: string; body:
       ${vdotChart}
       ${statRow('Total run time', fmtMmSs(prediction.runSec))}
       ${cpRow}
-      ${statRow('Source', prediction.runPaceSource === 'derived' ? 'Derived from VDOT' : prediction.runPaceSource === 'seed' ? 'Band median' : 'Set manually')}
+      ${statRow('Source', hyroxRunPaceSourceLabel(prediction.runPaceSource))}
       ${cpLink}
     </div>
 

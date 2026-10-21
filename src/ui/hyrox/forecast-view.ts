@@ -34,7 +34,7 @@ import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { buildRacePlanEntryCard, openRacePlanGoalModal, renderHyroxRacePlanView } from './race-plan-view';
 import { hyroxForecastRaceClock } from '@/calculations/hyrox-race-plan';
 import { buildLoseTimeCard, wireLoseTimeCard } from './lose-time-view';
-import { hyroxWeekLine } from './forecast-labels';
+import { hyroxWeekLine, hyroxRunPaceSourceLabel } from './forecast-labels';
 
 function fmtMmSs(sec: number): string {
   if (!Number.isFinite(sec) || sec <= 0) return '—';
@@ -919,9 +919,7 @@ function buildHyroxHero(
   const calibrated = prediction.calibratedCount;
   const runPaceSecKm = Math.round(prediction.runSec / 8);
   const bandLabel = hx.athleteBand ? (hx.athleteBand[0].toUpperCase() + hx.athleteBand.slice(1)) : null;
-  const runPaceSourceDetail = prediction.runPaceSource === 'derived' ? 'From VDOT'
-    : prediction.runPaceSource === 'seed' ? 'Band median'
-    : 'Set manually';
+  const runPaceSourceDetail = hyroxRunPaceSourceLabel(prediction.runPaceSource);
   const courseFactorDetail = Math.abs(courseFactorPct) < 0.1
     ? 'Course-neutral'
     : `${courseFactorPct > 0 ? '+' : '−'}${Math.abs(courseFactorPct).toFixed(1)}% vs neutral`;

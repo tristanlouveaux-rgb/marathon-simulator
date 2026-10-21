@@ -140,7 +140,17 @@ export interface HyroxRunPaceComponents {
 
 export interface HyroxRunPaceResult {
   paceSecKm: number;
+  /** The branch that won: 'user' whenever the stored value is returned, even
+   *  one written by applyHyroxRunPaceDerivation. The marker-bump gate reads
+   *  this (main.ts runs detect before apply for that reason). Not a caption. */
   source: HyroxRunPaceSource;
+  /** Where the returned pace came from, the one source for every provenance
+   *  caption (Forecast chip, confidence note, Run pace page, Stats row). The
+   *  stored value keeps its own provenance (hyroxRunPaceSource 'derived'
+   *  stays derived); otherwise equal to `source`. The Forecast chip read
+   *  `source` and said "Set manually" for a stored derived pace that Stats
+   *  captioned "Updated from your runs" (ISSUE-406 (d)). */
+  provenance: HyroxRunPaceSource;
   /** The model-derived value if available, regardless of which won. */
   derivedSecKm: number | null;
   /** Component breakdown for UI surfacing (Stats view CP card). */
@@ -189,7 +199,7 @@ export function derivePopulationRunPace(
  */
 export function deriveHyroxRunPace(state: SimulatorState): HyroxRunPaceResult {
   const hx = state.hyroxConfig;
-  if (!hx) return { paceSecKm: SEED_RUN_PACE_SEC_KM.intermediate, source: 'seed', derivedSecKm: null };
+  if (!hx) return { paceSecKm: SEED_RUN_PACE_SEC_KM.intermediate, source: 'seed', provenance: 'seed', derivedSecKm: null };
 
   const band = hx.athleteBand;
   const targetFormat: 'singles' | 'doubles' =
@@ -223,12 +233,15 @@ export function deriveHyroxRunPace(state: SimulatorState): HyroxRunPaceResult {
     // Manually-set yields to improvements: derived overrides user when
     // faster by ≥ 5 s/km. Below that margin, user wins.
     if (derived != null && derived <= userVal - 5) {
-      return { paceSecKm: derived, source: 'derived', derivedSecKm: derived, components };
+      return { paceSecKm: derived, source: 'derived', provenance: 'derived', derivedSecKm: derived, components };
     }
-    return { paceSecKm: userVal, source: 'user', derivedSecKm: derived, components };
+    // The stored value wins. A value applyHyroxRunPaceDerivation wrote keeps
+    // 'derived' provenance; one the athlete entered or pasted is 'user'.
+    const provenance: HyroxRunPaceSource = hx.hyroxRunPaceSource === 'derived' ? 'derived' : 'user';
+    return { paceSecKm: userVal, source: 'user', provenance, derivedSecKm: derived, components };
   }
-  if (derived != null) return { paceSecKm: derived, source: 'derived', derivedSecKm: derived, components };
-  return { paceSecKm: seed, source: 'seed', derivedSecKm: null };
+  if (derived != null) return { paceSecKm: derived, source: 'derived', provenance: 'derived', derivedSecKm: derived, components };
+  return { paceSecKm: seed, source: 'seed', provenance: 'seed', derivedSecKm: null };
 }
 
 /**
