@@ -46,6 +46,11 @@ export interface TriAdaptationRatios {
   };
 }
 
+/** s.w is 1-based: the week in progress is wks[s.w - 1] (wks[s.w] is next week). */
+function currentWeekIdx(state: SimulatorState): number {
+  return (state.w ?? 1) - 1;
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Signal 1. HRV trend
 // ───────────────────────────────────────────────────────────────────────────
@@ -71,7 +76,7 @@ function hrvAdjustment(state: SimulatorState): number | null {
 function rpeAdjustment(state: SimulatorState, discipline: Discipline): number | null {
   const samples: number[] = [];
   const wks = state.wks ?? [];
-  const currentWeek = state.w ?? 0;
+  const currentWeek = currentWeekIdx(state);
   // Walk backwards collecting completed-of-discipline sessions until we have enough.
   outer: for (let w = currentWeek; w >= 0 && samples.length < RPE_LOOKBACK_SESSIONS; w--) {
     const wk = wks[w];
@@ -110,8 +115,9 @@ function hrAtPowerAdjustment(state: SimulatorState): number | null {
   // Per-week HR at tempo intensity (avgWatts in [0.80, 0.95] × FTP).
   const perWeek: { week: number; meanHr: number }[] = [];
   const wks = state.wks ?? [];
-  const currentWeek = state.w ?? 0;
-  const startWeek = Math.max(0, currentWeek - HR_AT_POWER_WEEKS);
+  const currentWeek = currentWeekIdx(state);
+  // HR_AT_POWER_WEEKS plan weeks ending at the current week.
+  const startWeek = Math.max(0, currentWeek - HR_AT_POWER_WEEKS + 1);
 
   for (let w = currentWeek; w >= startWeek; w--) {
     const wk = wks[w];
@@ -178,8 +184,9 @@ export function efDecouplingPct(
 
 function pahrAdjustment(state: SimulatorState, discipline: 'bike' | 'run'): number | null {
   const wks = state.wks ?? [];
-  const currentWeek = state.w ?? 0;
-  const startWeek = Math.max(0, currentWeek - PAHR_WEEKS);
+  const currentWeek = currentWeekIdx(state);
+  // PAHR_WEEKS plan weeks ending at the current week.
+  const startWeek = Math.max(0, currentWeek - PAHR_WEEKS + 1);
 
   const perWeek: { week: number; meanDecoup: number }[] = [];
   for (let w = currentWeek; w >= startWeek; w--) {
@@ -219,8 +226,9 @@ function pahrAdjustment(state: SimulatorState, discipline: 'bike' | 'run'): numb
 
 function cssSdAdjustment(state: SimulatorState): number | null {
   const wks = state.wks ?? [];
-  const currentWeek = state.w ?? 0;
-  const startWeek = Math.max(0, currentWeek - CSS_SD_WEEKS);
+  const currentWeek = currentWeekIdx(state);
+  // CSS_SD_WEEKS plan weeks ending at the current week.
+  const startWeek = Math.max(0, currentWeek - CSS_SD_WEEKS + 1);
 
   const perWeek: { week: number; meanSd: number }[] = [];
   for (let w = currentWeek; w >= startWeek; w--) {

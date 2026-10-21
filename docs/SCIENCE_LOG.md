@@ -2894,6 +2894,8 @@ cssSdSensitivity    = 0.10  // 1 sec/100m/week SD reduction → +10% ratio bump
 
 Each signal's adjustment is bounded by its own cap (HRV: ±0.10, RPE: ±0.15, HR-at-power: ±0.10, Pa:Hr: ±0.10, CSS-SD: ±0.05).
 
+**Lookback windows** (`triathlon-adaptation-params.ts`). HR-at-power, Pa:Hr and CSS-SD each regress over the 8 plan weeks ending at the current week, `wks[s.w - 8]` to `wks[s.w - 1]` with the in-progress week included (`s.w` is 1-based). RPE walks back from the current week until it has 6 rated sessions. Until 2026-10-21 every walk started at `wks[s.w]`, next week (ported from the unmerged `fix/week-index-followup`, `9339d5d`, 2026-10-07). That week holds no actuals or ratings in practice, so the data covered was the same 8 weeks; the fix stops the read of next week without changing the window, so forecasts do not move in practice.
+
 ### Limitations
 
 - HERITAGE-scale individual variance is real; the model captures only what training data can reveal in 4–8 weeks. New athletes have insufficient data → ratio defaults to 1.0.
