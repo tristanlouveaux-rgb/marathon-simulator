@@ -447,7 +447,8 @@ import {
 //   MTL;
 // - the deload and taper ceilings (and race week's rounds) compare a session
 //   with the reference week as the injury gates leave both, so the gates
-//   never cut it twice;
+//   never cut it twice, and a ceiling cut the gates would then drop repeats
+//   the reference week's gated session instead;
 // - race week never runs more than taper week 1 through its easy runs.
 export const HYROX_GENERATOR_VERSION = 19;
 
