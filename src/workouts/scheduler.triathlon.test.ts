@@ -242,7 +242,7 @@ describe('real plans: no second run on the long-run or brick day', () => {
     // No weekday holds two runs other than commutes (33 + 9 weeks of the
     // narrower first sweep before step 3b).
     expect(weekdayDoubles.slice(0, 5)).toEqual([]);
-  }, 20000); // about 3 s alone (4,050 plans); the default 5 s timeout tripped under a parallel run
+  }, 30000); // about 3 s alone (4,050 plans); 20 s tripped under a loaded parallel run (31.5 s measured at load 9 to 21, base and branch alike)
 
   it('Ironman 10 h, default weekday split, every ability: no weekday holds two runs', () => {
     at('2026-10-04T12:00:00');
