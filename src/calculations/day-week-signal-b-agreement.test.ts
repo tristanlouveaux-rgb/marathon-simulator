@@ -8,8 +8,9 @@
  * session rated 8 read 69 TSS on the day and 133 in the week. Both now call
  * signalBActualTSS / signalBAdhocTSS.
  */
-import { describe, it, expect } from 'vitest';
-import { computeTodaySignalBTSS, computeWeekRawTSS, normalizeiTrimp } from './fitness-model';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { computeTodaySignalBTSS, computeWeekRawTSS, normalizeiTrimp, getDailyLoadHistory } from './fitness-model';
+import { computeTodayDoubleDayBonus } from './double-day';
 import { TL_PER_MIN } from '@/constants';
 import { localDateKey } from '@/utils/local-date';
 import type { Week } from '@/types/state';
@@ -65,5 +66,61 @@ describe('day and week price an activity the same way', () => {
     const sum = days.reduce((a, b) => a + b, 0);
     // Each day rounds on its own; the week rounds once.
     expect(Math.abs(sum - computeWeekRawTSS(wk, wk.rated))).toBeLessThanOrEqual(3);
+  });
+});
+
+/**
+ * The Load drill-down (rolling-load view) draws each day's bar from the day's
+ * tss and its zone segments from the activity rows. The rows kept the old rule
+ * (iTRIMP, else RPE 5, no rating, no strength override) after the day moved to
+ * signalBActualTSS, so a rated HR-less session drew a 69 TSS segment under a
+ * 133 label. The rows now use the day's helpers: rows plus the double-day bonus
+ * equal the day's tss.
+ */
+describe('Load drill-down: activity rows sum to the day', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  // Friday 2 Oct 2026, evening: the 28-day window ends on day 4 of week().
+  function history(wk: Week) {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 9, 2, 19, 0, 0));
+    return getDailyLoadHistory([wk], key(0));
+  }
+  const rowsOf = (e: { activities: Array<{ tss: number }> }) => e.activities.reduce((a, r) => a + r.tss, 0);
+  const zonesOf = (e: { zoneLoad: { lowAerobic: number; highAerobic: number; anaerobic: number } }) =>
+    e.zoneLoad.lowAerobic + e.zoneLoad.highAerobic + e.zoneLoad.anaerobic;
+
+  it('a rated HR-less session: row, zone segments and bar all read its rating', () => {
+    const e = history(week()).find(x => x.date === key(0))!;
+    const expected = Math.round(60 * TL_PER_MIN[8]); // 133, the row read 69
+    expect(e.tss).toBe(expected);
+    expect(rowsOf(e)).toBe(expected);
+    expect(Math.round(zonesOf(e))).toBe(expected);
+  });
+
+  it('a rated strength session with heart rate: the row takes the strength override', () => {
+    const e = history(week()).find(x => x.date === key(1))!;
+    const expected = Math.round(60 * TL_PER_MIN[7]); // the row read normalizeiTrimp(3000)
+    expect(e.tss).toBe(expected);
+    expect(rowsOf(e)).toBe(expected);
+    expect(Math.round(zonesOf(e))).toBe(expected);
+  });
+
+  it('every day of the week: rows equal the day (one activity a day, manual entry included)', () => {
+    for (const e of history(week())) {
+      expect(Math.abs(rowsOf(e) - e.tss)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('both sessions on one day: rows plus the double-day bonus equal the day', () => {
+    const wk = week();
+    // Move the gym session onto day 0, three hours after the HYROX session.
+    (wk.garminActuals as any)['gym-1'].startTime = new Date(2026, 8, 28, 15, 0, 0).toISOString();
+    const e = history(wk).find(x => x.date === key(0))!;
+    const bonus = computeTodayDoubleDayBonus(wk, key(0));
+    expect(e.activities).toHaveLength(2);
+    expect(bonus).toBeGreaterThan(0);
+    // Each row rounds on its own; the day rounds once.
+    expect(Math.abs(rowsOf(e) + bonus - e.tss)).toBeLessThanOrEqual(2);
   });
 });

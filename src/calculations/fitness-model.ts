@@ -1537,20 +1537,20 @@ export function getDailyLoadHistory(
     const activities: DailyLoadEntry['activities'] = [];
     const seenIds = new Set<string>();
 
-    // Collect activities for this day
-    for (const [, actual] of Object.entries(wk.garminActuals ?? {})) {
+    // Collect activities for this day. Each row is valued with the per-activity
+    // rule the day's tss uses (signalBActualTSS / signalBAdhocTSS, the helpers
+    // computeTodaySignalBTSS calls), so the rows, and the zone segments built
+    // from them, sum to the day's bar apart from the double-day bonus. The rows
+    // used iTRIMP, else RPE 5, with no rating and no strength override: a
+    // 60-minute HR-less session rated 8 drew a 69 TSS segment under a 133 label.
+    for (const [workoutId, actual] of Object.entries(wk.garminActuals ?? {})) {
       if (!isOnLocalDay(actual.startTime, dateStr)) continue;
       if (actual.garminId) {
         if (seenIds.has(actual.garminId)) continue;
         seenIds.add(actual.garminId);
       }
       const durMin = actual.durationSec > 0 ? actual.durationSec / 60 : actual.distanceKm * 6;
-      let actTss = 0;
-      if (actual.iTrimp != null && actual.iTrimp > 0) {
-        actTss = normalizeiTrimp(actual.iTrimp);
-      } else {
-        actTss = durMin * (TL_PER_MIN[5] ?? 1.15);
-      }
+      const actTss = signalBActualTSS(actual, ratedRpeOf(wk.rated?.[workoutId]));
       const name = actual.displayName ?? actual.workoutName
         ?? (actual.activityType ? actual.activityType.charAt(0) + actual.activityType.slice(1).toLowerCase().replace(/_/g, ' ') : 'Activity');
       activities.push({ name, tss: Math.round(actTss), durationMin: Math.round(durMin), avgHR: actual.avgHR ?? null, hrZones: actual.hrZones ?? null });
@@ -1574,13 +1574,7 @@ export function getDailyLoadHistory(
         if ((w as any).dayOfWeek !== ourDay) continue;
       }
       const durMin = parseDurMinFromDesc(w.d);
-      let actTss = 0;
-      if (w.iTrimp != null && w.iTrimp > 0) {
-        actTss = normalizeiTrimp(w.iTrimp, norm);
-      } else {
-        const rpe = w.rpe ?? w.r ?? 5;
-        actTss = durMin * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
-      }
+      const actTss = signalBAdhocTSS(w, norm); // the day's tss adhoc rule
       const name = w.n ?? w.t ?? 'Activity';
       // Don't double-count if already seen via garminActuals
       if (!activities.some(a => a.name === name && Math.abs(a.durationMin - Math.round(durMin)) < 2)) {
