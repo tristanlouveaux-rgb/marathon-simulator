@@ -8,7 +8,7 @@
  * Pure function. No side effects, no network calls.
  */
 
-import type { SimulatorState } from '@/types';
+import type { SimulatorState, Week } from '@/types';
 import {
   computeReadinessACWR,
   computeLiveSameSignalTSB,
@@ -185,6 +185,19 @@ export function getTodayFeeling(s: SimulatorState): 'struggling' | 'ok' | 'good'
 // ─── Strain context auto-derivation ─────────────────────────────────────────
 // When no StrainContext is passed (e.g. from coach-view), derive it from state.
 
+/**
+ * A training session was logged on the local day `day`: the day's Signal B TSS
+ * from its activities alone (computeTodaySignalBTSS with no passive input) is
+ * above 0. Passive step and active-minute load is strain, not a session, so it
+ * never makes a day "trained": a morning walk before an evening Tempo Run left
+ * Home reading "Light session was the right call." (ISSUE-406 (c)). The one
+ * source for StrainContext.trainedToday on Home and in deriveStrainContext,
+ * every mode. Tracking side.
+ */
+export function hasTrainedOnDay(wk: Week, day: string): boolean {
+  return computeTodaySignalBTSS(wk, day) > 0;
+}
+
 function deriveStrainContext(s: SimulatorState): StrainContext {
   const wk = (s.wks ?? [])[s.w - 1];
   if (!wk) return { strainPct: 0, isRestDay: true, isRestDayOverreaching: false, trainedToday: false, todayIsHard: false, upcomingHard: null, recentCrossTraining: null, actualTSS: 0 };
@@ -262,7 +275,7 @@ function deriveStrainContext(s: SimulatorState): StrainContext {
     capacityStrainPct: computeCapacityStrain(s).pctCapacity,
     isRestDay,
     isRestDayOverreaching,
-    trainedToday: todayTSS > 0,
+    trainedToday: hasTrainedOnDay(wk, today),
     todayIsHard,
     upcomingHard,
     recentCrossTraining: null,
@@ -376,7 +389,10 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
     precomputedRecoveryScore: recoveryResult.hasData ? recoveryResult.score : null,
     // Capacity-anchored percent (canonical computeCapacityStrain) feeds the
     // strain floor; the plan-relative strainPct stays for sentence tiers.
-    strainPct: strain?.trainedToday ? (strain.capacityStrainPct ?? strain.strainPct) : null,
+    // Gated on the day's strain TSS (sessions and passive load), the gate Home
+    // and Readiness apply to their own computeReadiness call
+    // (capStrain.todayTSS > 0); trainedToday counts sessions only.
+    strainPct: (strain?.actualTSS ?? 0) > 0 ? (strain!.capacityStrainPct ?? strain!.strainPct) : null,
     acwrSafeUpper: acwr.safeUpper,
     hasUpcomingHardSession: strain?.upcomingHard != null || (strain?.todayIsHard ?? false),
     // HYROX MTL load ratio: the canonical value Home and Readiness feed their

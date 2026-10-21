@@ -20,7 +20,7 @@ import { computeReadiness, readinessColor, readinessColorStops, computeRecoveryS
 import { computeTriReadiness } from '@/calculations/tri-readiness';
 import { hyroxMtlAcwr } from '@/calculations/mtl';
 import { computeDecayedTriCarry } from '@/calculations/tri-cross-training-carry';
-import { computeDailyCoach, type StrainContext } from '@/calculations/daily-coach';
+import { computeDailyCoach, hasTrainedOnDay, type StrainContext } from '@/calculations/daily-coach';
 import { computeCapacityStrain, capacityStrainNote } from '@/calculations/capacity-strain';
 import { getSleepInsight, fmtSleepDuration, sleepScoreColor, buildBarChart, getSleepBank, fmtSleepBank, deriveSleepTarget, buildDailySignalBTSS, computeSleepDebtOutlook, mergeManualSleepHistory } from '@/calculations/sleep-insights';
 import type { PhysiologyDayEntry } from '@/types/state';
@@ -1058,7 +1058,10 @@ export function buildReadinessRing(s: SimulatorState): string {
   // ── Primary message (single authoritative sentence) ─────────────────────
   // Replaces the old readinessSentence + HRV banner with one coherent message
   // computed by daily-coach using all available signals.
-  const trainedToday = todaySignalBTSS > 0;
+  // A logged session, not strain: todaySignalBTSS includes passive step load,
+  // which flipped the coach to "Light session was the right call." before the
+  // day's session (ISSUE-406 (c)). hasTrainedOnDay is deriveStrainContext's rule.
+  const trainedToday = strainWk ? hasTrainedOnDay(strainWk, strainDay) : false;
   const todayPlannedWorkout = plannedCtx.workoutsForDay(todayDayOfWeek)
     .find(w => w.status !== 'skip' && w.status !== 'replaced');
   const todayIsHard = todayPlannedWorkout?.isHard ?? false;
