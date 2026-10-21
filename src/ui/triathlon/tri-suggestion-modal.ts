@@ -303,14 +303,13 @@ function renderOverloadBody(opts: CrossTrainingOverloadResult, selected: Discipl
   const reduceMods = opt.reduceMods;
   const replaceMods = opt.replaceMods;
 
-  const floorLine = opt.floorTSS > 0
+  const remainingLine = opt.floorTSS > 0
     ? `<span style="color:var(--c-muted)">remaining ${opt.remainingTSS} TSS · floor ${opt.floorTSS} TSS</span>`
     : `<span style="color:var(--c-muted)">remaining ${opt.remainingTSS} TSS · no floor (taper or hot ramp)</span>`;
 
-  const belowFloorWarning = opt.belowFloor
-    ? `<div style="font-size:11px;color:#c06a50;margin-top:6px">
-         ⚠ Reducing this discipline would push it below your weekly floor (${opt.floorTSS} TSS).
-       </div>`
+  const floorLine = floorWarningText(opt);
+  const belowFloorWarning = floorLine
+    ? `<div style="font-size:11px;color:#c06a50;margin-top:6px">${floorLine}</div>`
     : '';
 
   // The detector recommends only a discipline with a change, so the opening
@@ -321,7 +320,7 @@ function renderOverloadBody(opts: CrossTrainingOverloadResult, selected: Discipl
     : '';
 
   return `
-    <div style="font-size:12px;line-height:1.5;margin-bottom:10px">${floorLine}</div>
+    <div style="font-size:12px;line-height:1.5;margin-bottom:10px">${remainingLine}</div>
     ${belowFloorWarning}
     ${noChange}
     ${reduceMods.length > 0 ? `
@@ -345,6 +344,30 @@ function renderOverloadBody(opts: CrossTrainingOverloadResult, selected: Discipl
       </details>
     ` : ''}
   `;
+}
+
+/**
+ * The floor warning names the set that breaches the floor (2026-10-22): the
+ * Reduce set alone was checked, so a Replace & Reduce set offered without
+ * Reduce, or with a larger cut, could take the discipline below its floor
+ * with no warning. Null when no offered set breaches it.
+ */
+export function floorWarningText(opt: DisciplineOption): string | null {
+  const reduceOffered = opt.reduceMods.length > 0;
+  const replaceOffered = opt.replaceMods.length > 0;
+  const reduceBreaches = reduceOffered && opt.belowFloor;
+  const replaceBreaches = replaceOffered && opt.replaceBelowFloor;
+  if (!reduceBreaches && !replaceBreaches) return null;
+  const floor = `your weekly floor (${opt.floorTSS} TSS)`;
+  if (reduceBreaches && replaceOffered && !replaceBreaches) {
+    return `Reduce would push this discipline below ${floor}. Replace &amp; Reduce keeps it above.`;
+  }
+  if (replaceBreaches && reduceOffered && !reduceBreaches) {
+    return `Replace &amp; Reduce would push this discipline below ${floor}. Reduce keeps it above.`;
+  }
+  return reduceOffered && replaceOffered
+    ? `Either set would push this discipline below ${floor}.`
+    : `These changes would push this discipline below ${floor}.`;
 }
 
 function renderModLine(m: OverloadAdjustment): string {

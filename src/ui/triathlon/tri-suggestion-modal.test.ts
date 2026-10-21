@@ -17,7 +17,10 @@ vi.mock('@/data/supabaseClient', () => ({
   SUPABASE_FUNCTIONS_BASE: undefined,
 }));
 
-import { showTriSuggestionModal } from './tri-suggestion-modal';
+import { showTriSuggestionModal, floorWarningText } from './tri-suggestion-modal';
+import { detectCrossTrainingOverload } from '@/calculations/tri-cross-training-overload';
+import { generateTriathlonPlan } from '@/workouts/plan_engine.triathlon';
+import { getDefaultState } from '@/state/store';
 import { collectTriSuggestions } from '@/calculations/tri-suggestion-aggregator';
 import { setState, resetState, getState } from '@/state/store';
 import type { SimulatorState } from '@/types/state';
@@ -136,7 +139,7 @@ describe('tri suggestion modal: only choices the discipline can act on', () => {
 
   const swap = { workoutId: 'r-thr', workoutLabel: 'Run threshold', discipline: 'run', action: 'swap_easy', tssReduction: 40 } as const;
   const opt = (discipline: string, reduceMods: any[], replaceMods: any[]) =>
-    ({ discipline, remainingTSS: 100, floorTSS: 0, belowFloor: false, reduceMods, replaceMods });
+    ({ discipline, remainingTSS: 100, floorTSS: 0, belowFloor: false, replaceBelowFloor: false, reduceMods, replaceMods });
   const bundle = () => ({
     mods: [{
       id: 'xt_overload_run', source: 'cross_training_overload', discipline: 'run', headline: '', body: '', severity: 'caution',
@@ -156,6 +159,14 @@ describe('tri suggestion modal: only choices the discipline can act on', () => {
     expect(body.textContent).toContain('Replace');
     expect((document.getElementById('tri-sm-reduce') as HTMLElement).style.display).toBe('none');
     expect((document.getElementById('tri-sm-replace') as HTMLElement).style.display).toBe('');
+  });
+
+  it('a Replace-only option that breaches the floor warns (the Reduce-only check missed it)', () => {
+    const b = bundle();
+    b.mods[0].overloadOptions.options.run = { ...opt('run', [], [swap]), floorTSS: 80, replaceBelowFloor: true };
+    void showTriSuggestionModal(b);
+    expect(document.getElementById('tri-sm-overload-body')!.textContent)
+      .toContain('These changes would push this discipline below your weekly floor (80 TSS).');
   });
 
   it('a discipline flipped to with no change says so and offers only Keep and Push', () => {
@@ -224,4 +235,66 @@ describe('tri suggestion modal: generic rows are remembered for the week', () =>
     await done;
     expect(collectTriSuggestions(getState()).mods.filter(m => m.targetWorkoutId === 'wed-thr')).toEqual([]);
   });
+});
+
+describe('tri suggestion modal: the floor warning names the set that breaches it', () => {
+  const trim = { workoutId: 'b-end', workoutLabel: 'Long bike', discipline: 'bike', action: 'trim_volume', tssReduction: 10 } as const;
+  const swap = { workoutId: 'b-thr', workoutLabel: 'Bike threshold', discipline: 'bike', action: 'swap_easy', tssReduction: 40 } as const;
+  const opt = (o: Record<string, unknown>) =>
+    ({ discipline: 'bike', remainingTSS: 100, floorTSS: 80, belowFloor: false, replaceBelowFloor: false, reduceMods: [trim], replaceMods: [swap], ...o }) as any;
+
+  it('no set breaches: no warning', () => {
+    expect(floorWarningText(opt({}))).toBeNull();
+  });
+  it('only Replace & Reduce breaches: says which, and that Reduce keeps the floor', () => {
+    expect(floorWarningText(opt({ replaceBelowFloor: true })))
+      .toBe('Replace &amp; Reduce would push this discipline below your weekly floor (80 TSS). Reduce keeps it above.');
+  });
+  it('only Reduce breaches: says which', () => {
+    expect(floorWarningText(opt({ belowFloor: true })))
+      .toBe('Reduce would push this discipline below your weekly floor (80 TSS). Replace &amp; Reduce keeps it above.');
+  });
+  it('both breach: one line for either set', () => {
+    expect(floorWarningText(opt({ belowFloor: true, replaceBelowFloor: true })))
+      .toBe('Either set would push this discipline below your weekly floor (80 TSS).');
+  });
+  it('nothing offered: no warning beside "No upcoming workouts to adjust."', () => {
+    expect(floorWarningText(opt({ belowFloor: true, reduceMods: [], replaceMods: [] }))).toBeNull();
+  });
+
+  it('generated plans: every offered set that breaches the floor gets a warning', () => {
+    const cut = (m: Array<{ tssReduction: number }>) => m.reduce((a, x) => a + x.tssReduction, 0);
+    let replaceOnlyBreach = 0;
+    for (const distance of ['sprint', 'olympic', '70.3', 'ironman']) {
+      const base = {
+        ...getDefaultState(), eventType: 'triathlon', w: 1, tw: 20, v: 50,
+        pac: { e: 300, t: 250, i: 230, m: 275, r: 200 }, wks: [],
+        triConfig: {
+          distance, timeAvailableHoursPerWeek: 10, volumeSplit: { swim: 0.175, bike: 0.475, run: 0.35 },
+          skillRating: { swim: 3, bike: 3, run: 3 }, bike: { hasPowerMeter: true, ftp: 220 }, swim: { cssSecPer100m: 100 }, weeksToRace: 20,
+        },
+      } as unknown as SimulatorState;
+      base.wks = generateTriathlonPlan(base);
+      for (let wi = 0; wi < base.wks.length; wi += 2) {
+        for (const pct of [0.2, 0.45]) for (const sport of ['tennis', 'cycling', 'swimming']) {
+          const s = structuredClone(base);
+          s.w = wi + 1;
+          const planned = (s.wks[wi].triWorkouts ?? []).reduce((a, w) => a + (w.aerobic ?? 0) + (w.anaerobic ?? 0), 0);
+          s.wks[wi].adhocWorkouts = [{ id: 'xt', t: 'cross', n: sport, d: '90min', r: 6, iTrimp: pct * planned * 150 } as any];
+          const o = detectCrossTrainingOverload(s, 0);
+          if (!o) continue;
+          for (const d of ['swim', 'bike', 'run'] as const) {
+            const x = o.options[d];
+            if (x.floorTSS <= 0) continue;
+            const reduceBreach = x.reduceMods.length > 0 && x.remainingTSS - cut(x.reduceMods) < x.floorTSS;
+            const replaceBreach = x.replaceMods.length > 0 && x.remainingTSS - cut(x.replaceMods) < x.floorTSS;
+            if (replaceBreach && !reduceBreach) replaceOnlyBreach += 1;
+            if (reduceBreach || replaceBreach) expect(floorWarningText(x), `${distance} wk${wi + 1} ${d}`).not.toBeNull();
+            else expect(floorWarningText(x)).toBeNull();
+          }
+        }
+      }
+    }
+    expect(replaceOnlyBreach).toBeGreaterThan(0); // the cases the Reduce-only check left unwarned
+  }, 60000);
 });

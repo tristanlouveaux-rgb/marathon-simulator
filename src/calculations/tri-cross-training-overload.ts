@@ -107,8 +107,12 @@ export interface DisciplineOption {
   remainingTSS: number;
   /** Floor below which we won't reduce. 0 means no floor (taper or hot ramp). */
   floorTSS: number;
-  /** True if applying ALL reduceMods would push remaining below floorTSS. */
+  /** True if applying the Reduce set (reduceMods) in full would push remaining
+   *  below floorTSS (with an empty set: remaining already sits below it). */
   belowFloor: boolean;
+  /** True if applying the Replace & Reduce set (replaceMods) in full would push
+   *  remaining below floorTSS. False when the set is empty. */
+  replaceBelowFloor: boolean;
   /** Reduce-only mods (downgrade quality, trim endurance). Their summed cut
    *  stays within the reduction budget; the floor only warns (belowFloor). */
   reduceMods: OverloadAdjustment[];
@@ -418,16 +422,24 @@ function buildDisciplineOption(
   const replaceSet = buildReplaceMods(candidates, maxMods, reductionCredit);
   const replaceMods = replaceSet.some(m => m.action === 'swap_easy') ? replaceSet : [];
 
-  // belowFloor = the proposed Reduce mods would drop remaining below floor.
+  // One floor flag per set: applying that set in full would drop remaining
+  // below the floor. Since D1/D2 Replace & Reduce can be the only set offered
+  // (Reduce empty), and its cut can differ from Reduce's either way, so the
+  // modal warns on the set it names, not on Reduce alone (2026-10-22).
+  // belowFloor keeps its meaning (also true for an empty Reduce set when the
+  // discipline already sits below its floor), which dims the chip.
   // We don't block. The modal warns and lets the user override.
-  const totalReduceTSS = reduceMods.reduce((acc, m) => acc + m.tssReduction, 0);
-  const belowFloor = floorTSS > 0 && (remainingTSS - totalReduceTSS) < floorTSS;
+  const cutOf = (mods: OverloadAdjustment[]) => mods.reduce((acc, m) => acc + m.tssReduction, 0);
+  const belowFloor = floorTSS > 0 && (remainingTSS - cutOf(reduceMods)) < floorTSS;
+  const replaceBelowFloor = floorTSS > 0 && replaceMods.length > 0
+    && (remainingTSS - cutOf(replaceMods)) < floorTSS;
 
   return {
     discipline,
     remainingTSS: Math.round(remainingTSS),
     floorTSS: Math.round(floorTSS),
     belowFloor,
+    replaceBelowFloor,
     reduceMods,
     replaceMods,
   };
