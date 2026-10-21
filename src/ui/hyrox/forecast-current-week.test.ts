@@ -16,7 +16,7 @@ import { generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engi
 import { HYROX_WEEKLY_SESSIONS, HYROX_MTL_CAP, HYROX_HOURS_RANGE } from '@/constants/hyrox-constants';
 import { renderHyroxForecastView } from './forecast-view';
 import { renderHyroxChipDetail } from './forecast-chip-detail-view';
-import { hyroxWeekLine, fmtSessionsPerWeek } from './forecast-labels';
+import { hyroxWeekLine, fmtSessionsPerWeek, hyroxPhaseLabel, hyroxCurrentWeekPhase } from './forecast-labels';
 import { plannedHyroxSessionsPerWeek } from '@/calculations/hyrox-volume';
 import type { SimulatorState } from '@/types/state';
 
@@ -161,5 +161,48 @@ describe('Training chip and Race order footer', () => {
     expect(fmtSessionsPerWeek(4.5)).toBe('4.5');
     expect(fmtSessionsPerWeek(5)).toBe('5');
     expect(fmtSessionsPerWeek(4.25)).toBe('4.3');
+  });
+});
+
+describe('Training chip phase reads the current week (D11)', () => {
+  function chipPhase(): string {
+    const chip = document.querySelector('[data-hx-chip="training"]');
+    return (chip?.children[2]?.textContent ?? '').trim();
+  }
+  function trainingPagePhase(s: SimulatorState): string {
+    setState(s);
+    document.body.innerHTML = '<div id="app-root"></div>';
+    renderHyroxChipDetail('training');
+    const m = pageText().match(/Phase\s*(Base|Build|Peak|Taper|—)/);
+    return m?.[1] ?? '';
+  }
+
+  for (const w of [1, 8, 16]) {
+    it(`week ${w} of 16: the chip names wks[${w - 1}]'s own phase, as the Training page does`, () => {
+      const s = hyroxState();
+      s.w = w;
+      const ph = s.wks[w - 1].ph as string;
+      setState(s);
+      renderHyroxForecastView();
+      expect(chipPhase()).toBe(hyroxPhaseLabel(ph));
+      expect(trainingPagePhase(s)).toBe(hyroxPhaseLabel(ph));
+    });
+  }
+
+  it('a week whose stored phase differs from the share of the plan elapsed', () => {
+    // Week 2 of 16 is 12% through, which the old chip called Base whatever the
+    // week held. Give the week a build phase: the chip follows the week.
+    const s = hyroxState();
+    s.w = 2;
+    s.wks[1].ph = 'build';
+    setState(s);
+    renderHyroxForecastView();
+    expect(chipPhase()).toBe('Build');
+    expect(trainingPagePhase(s)).toBe('Build');
+  });
+
+  it('past the end of the plan the chip shows no phase', () => {
+    expect(hyroxCurrentWeekPhase([{ ph: 'base' }], 2)).toBeUndefined();
+    expect(hyroxPhaseLabel(undefined)).toBe('—');
   });
 });

@@ -17,6 +17,31 @@ export function hyroxWeekLine(w: number | null | undefined, tw: number | null | 
   return w > tw ? 'Plan complete' : `Week ${w} of ${tw}`;
 }
 
+/**
+ * The phase of the week in progress, `wks[w - 1].ph` (`w` is 1-based), the
+ * stored phase the plan generator wrote for that week. Undefined with no such
+ * week (no plan, or past its end).
+ */
+export function hyroxCurrentWeekPhase(
+  wks: ReadonlyArray<{ ph?: string }> | null | undefined,
+  w: number | null | undefined,
+): string | undefined {
+  return wks?.[Math.max(0, (w ?? 1) - 1)]?.ph;
+}
+
+/**
+ * A plan phase as the Forecast prints it: "Base", "Build", "Peak", "Taper";
+ * '—' with none. The Training chip and the Training page read the current
+ * week's phase through this (hyroxCurrentWeekPhase), so they cannot disagree.
+ * The chip used a share of the plan elapsed (s.w / s.tw: under 40% Base, under
+ * 75% Build, under 90% Peak, else Taper), which could name a different phase
+ * from the week's own (D11, 2026-10-21).
+ */
+export function hyroxPhaseLabel(ph: string | undefined): string {
+  if (!ph) return '—';
+  return ph[0].toUpperCase() + ph.slice(1);
+}
+
 /** Provenance of the HYROX run pace: deriveHyroxRunPace(...).provenance. */
 export type HyroxRunPaceProvenance = 'user' | 'derived' | 'seed';
 

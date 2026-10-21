@@ -34,7 +34,7 @@ import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { buildRacePlanEntryCard, openRacePlanGoalModal, renderHyroxRacePlanView } from './race-plan-view';
 import { hyroxForecastRaceClock } from '@/calculations/hyrox-race-plan';
 import { buildLoseTimeCard, wireLoseTimeCard } from './lose-time-view';
-import { hyroxWeekLine, hyroxRunPaceSourceLabel, fmtSessionsPerWeek } from './forecast-labels';
+import { hyroxWeekLine, hyroxRunPaceSourceLabel, fmtSessionsPerWeek, hyroxPhaseLabel, hyroxCurrentWeekPhase } from './forecast-labels';
 import { plannedHyroxSessionsPerWeek } from '@/calculations/hyrox-volume';
 
 function fmtMmSs(sec: number): string {
@@ -932,8 +932,8 @@ function buildHyroxHero(
   // 1-based), so it read "5/wk" beside the footer's "4.5 sessions/wk"
   // (ISSUE-406 (f)), and "0/wk" with a "Build a plan" prompt in race week.
   const plannedPerWeek = prediction.projection?.plannedSessionsPerWeek ?? plannedHyroxSessionsPerWeek(s, 4);
-  const phasePct = (s.tw && s.tw > 0) ? ((s.w ?? 0) / s.tw) : 0;
-  const phaseLabel = phasePct < 0.40 ? 'Base' : phasePct < 0.75 ? 'Build' : phasePct < 0.90 ? 'Peak' : 'Taper';
+  // The current week's own phase, the Training page's source (D11).
+  const phaseLabel = hyroxPhaseLabel(hyroxCurrentWeekPhase(s.wks, s.w));
   const trainingPresent = plannedPerWeek > 0;
 
   type Chip = { key: string; label: string; headline: string; detail: string; present: boolean; addCta?: string };

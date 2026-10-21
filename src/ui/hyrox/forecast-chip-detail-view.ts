@@ -38,7 +38,7 @@ import {
   buildSportLegend as buildSportLegendShared,
 } from '@/ui/sport-mix-donut';
 import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
-import { hyroxWeekLine, hyroxRunPaceSourceLabel } from './forecast-labels';
+import { hyroxWeekLine, hyroxRunPaceSourceLabel, hyroxPhaseLabel, hyroxCurrentWeekPhase } from './forecast-labels';
 
 export type HyroxChipKey = 'you' | 'runpace' | 'stations' | 'training' | 'venue';
 
@@ -461,12 +461,9 @@ function pageTraining(s: SimulatorState): { title: string; subhead: string; body
     peak:  '#DC2626',
     taper: '#16A34A',
   };
-  const phaseLabel = (ph: string | undefined): string => {
-    if (!ph) return '—';
-    return ph[0].toUpperCase() + ph.slice(1);
-  };
-  const currentPhase = currentWk?.ph as string | undefined;
-  const currentPhaseLabel = phaseLabel(currentPhase);
+  // The chip on the Forecast reads the same phase (hyroxCurrentWeekPhase).
+  const currentPhase = hyroxCurrentWeekPhase(wks, s.w);
+  const currentPhaseLabel = hyroxPhaseLabel(currentPhase);
   const currentPhaseColor = currentPhase ? PHASE_COLORS[currentPhase] ?? TEXT_M : TEXT_M;
 
   // Count completed sessions per week from `garminActuals` (the canonical
