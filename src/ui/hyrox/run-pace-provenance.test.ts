@@ -25,7 +25,9 @@ import { HYROX_WEEKLY_SESSIONS, HYROX_MTL_CAP, HYROX_HOURS_RANGE } from '@/const
 import { applyHyroxRunPaceDerivation } from '@/calculations/hyrox-marker-bumps';
 import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { renderHyroxForecastView } from './forecast-view';
-import { renderHyroxStatsView } from './stats-view';
+import { renderHyroxStatsView, hyroxRunPaceRowCaption } from './stats-view';
+import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
+import { fmtModelPaceKm } from '@/utils/format';
 import { hyroxRunPaceSourceLabel, hyroxRunPaceCaption } from './forecast-labels';
 import type { SimulatorState } from '@/types/state';
 
@@ -103,5 +105,30 @@ describe('run pace provenance on the Forecast and Stats', () => {
     document.body.innerHTML = '<div id="app-root"></div>';
     renderHyroxStatsView();
     expect(pageText()).toContain('Set manually.');
+  });
+});
+
+describe('Stats run pace row says which pace it is (D12)', () => {
+  it('singles: the pace before venue, captioned so', () => {
+    const s = hyroxState();
+    setState(s);
+    renderHyroxStatsView();
+    expect(pageText()).toContain(hyroxRunPaceRowCaption(false));
+    expect(hyroxRunPaceRowCaption(false)).toBe('Average of 8 legs, before venue');
+  });
+
+  it("doubles: the pair's pace, and the seed row shows the derivation's doubles seed", () => {
+    const s = hyroxState();
+    s.vo2 = null; // no real signal: the seed (D5)
+    s.hyroxConfig!.format = 'open_doubles';
+    const r = deriveHyroxRunPace(s);
+    expect(r.provenance).toBe('seed');
+    setState(s);
+    renderHyroxStatsView();
+    const text = pageText();
+    expect(text).toContain('Pair pace, 8 legs, before venue');
+    // The row's number is the forecast's base pace (doubles run ratio applied),
+    // not the singles band seed.
+    expect(text).toContain(`${fmtModelPaceKm(r.paceSecKm)}/km`);
   });
 });
