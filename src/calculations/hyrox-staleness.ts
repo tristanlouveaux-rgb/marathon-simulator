@@ -30,6 +30,17 @@ import type { SimulatorState } from '@/types/state';
 import type { AbilityBand } from '@/types/triathlon';
 import { getHyroxEventById } from '@/data/hyrox-events';
 import { hyroxMtlChronicVsPlan } from './mtl';
+import { hasRealRunningFitnessSignal } from './physiological-vdot';
+
+/**
+ * state.v may be read as running fitness: a real running-fitness signal backs
+ * it (hasRealRunningFitnessSignal). Without one it is the bare baseline (the
+ * default VDOT 50, or a stale carried value), and the canonical rule is no
+ * claims off it (D5's rule for the run pace, deriveHyroxRunPace).
+ */
+export function hyroxVdotIsMeasured(state: SimulatorState): boolean {
+  try { return hasRealRunningFitnessSignal(state); } catch { return false; }
+}
 
 export type HyroxStalenessCategory = 'fresh' | 'aging' | 'stale' | 'very_stale' | 'unknown';
 
@@ -76,7 +87,9 @@ export function computePhysiologyMitigation(state: SimulatorState): number {
   const factors: number[] = [];
 
   // Signal 1: VDOT vs band-implied VDOT. Above implied = mitigation up.
-  const v = state.v;
+  // Only for a measured runner: a bare VDOT 50 on a beginner band scored the
+  // maximum and released the stale-race penalty off no evidence (2026-10-22).
+  const v = hyroxVdotIsMeasured(state) ? state.v : undefined;
   const impliedVdot: Record<AbilityBand, number> = {
     competitive: 60, advanced: 53, intermediate: 45,
     novice: 38, beginner: 32, total_beginner: 28,

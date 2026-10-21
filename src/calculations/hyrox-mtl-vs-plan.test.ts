@@ -118,6 +118,7 @@ describe('staleness: the MTL signal does not mark a plan-compliant athlete down'
   function staleState(week: number): SimulatorState {
     const s = compliantAt('intermediate', week);
     s.v = 50; // intermediate implies 45
+    (s as { vo2?: number }).vo2 = 50; // a measured runner: Signal 1 reads VDOT only then
     s.ctlBaseline = undefined;
     s.hyroxConfig!.hyroxPreviousRaceDate = new Date(Date.now() - 9 * MONTH_MS).toISOString().slice(0, 10);
     return s;

@@ -30,7 +30,7 @@ import type { SimulatorState } from '@/types/state';
 import type { HyroxStation, AbilityBand, HyroxLoadTier } from '@/types/triathlon';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { deriveHyroxRunPace } from './hyrox-run-pace';
-import { computeHyroxStaleness, computePhysiologyMitigation, hyroxEntrySplitsWeight, bandFromVdot } from './hyrox-staleness';
+import { computeHyroxStaleness, computePhysiologyMitigation, hyroxEntrySplitsWeight, bandFromVdot, hyroxVdotIsMeasured } from './hyrox-staleness';
 import { PER_STATION_FATIGUE_RATE_BY_BAND } from '@/constants/hyrox-constants';
 import {
   getHyroxVenueById,
@@ -596,7 +596,9 @@ function seedBasis(state: SimulatorState, hx: HyroxConfigOf): SeedBasis {
   const seeds = hyroxStationSeedsAtTarget(state, band);
   const seedRoxzone = hyroxSeedRoxzoneSec(state, band);
   const stale = computeHyroxStaleness(state);
-  const vdotBand = bandFromVdot(state.v);
+  // The stale-race blend toward the VDOT band's seeds needs a measured runner:
+  // the bare VDOT 50 pulled every stale beginner toward intermediate seeds.
+  const vdotBand = hyroxVdotIsMeasured(state) ? bandFromVdot(state.v) : null;
   const useBandBlend = stale.bandWeight < 1 && vdotBand != null && vdotBand !== band;
   const vdotSeeds = useBandBlend ? hyroxStationSeedsAtTarget(state, vdotBand!) : seeds;
   const effectiveSeeds = useBandBlend
