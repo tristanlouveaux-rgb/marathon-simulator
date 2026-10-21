@@ -500,14 +500,16 @@ export function withoutHyroxStation(w: Workout, station: HyroxStation): Workout 
 }
 
 /**
- * The same station session with one station's single set cut to `fraction`
- * of its amount, rounded down to a whole metre or rep: its time, MTL and
- * share of the race volume follow in proportion (the injury gate's partial
- * set, applyHyroxInjuryGates: a restricted side's station the session holds
- * as one set, which no cut of rounds can reduce, keeps the capacity's share
- * of that set, as a run keeps the capacity's share of its duration). Null
- * when the station holds other than one set, `fraction` is not under 1, or
- * the amount would fall under one metre or rep.
+ * The same station session with one station's sets cut to `fraction` of
+ * their amount, rounded down to a whole metre or rep: each set's time, the
+ * station's MTL (its component total) and each set's share of the race
+ * volume follow in proportion (the injury gate's partial set,
+ * applyHyroxInjuryGates: a restricted side's station keeps the capacity's
+ * share of every set, as a run keeps the capacity's share of its duration).
+ * Review round 6 cut a station held as one set only, which no cut of rounds
+ * can reduce; round 7 cuts every set, so a 2-set station no longer goes by
+ * whole rounds (100% or 50%). Null when the station holds no set, `fraction`
+ * is not under 1, or the amount would fall under one metre or rep.
  */
 export function withHyroxPartialSet(w: Workout, station: HyroxStation, fraction: number): Workout | null {
   if (!w.hyroxSpec || !(fraction > 0) || fraction >= 1) return null;
@@ -516,7 +518,7 @@ export function withHyroxPartialSet(w: Workout, station: HyroxStation, fraction:
   const idx = comps.findIndex(c => c.type === station);
   if (idx < 0) return null;
   const c = comps[idx];
-  if (hyroxComponentSets(c, rounds) !== 1) return null;
+  if (hyroxComponentSets(c, rounds) < 1) return null;
   const reps = typeof c.reps === 'number';
   const old = reps ? (c.reps as number) : (c.distanceM ?? 0);
   if (!(old > 0)) return null;

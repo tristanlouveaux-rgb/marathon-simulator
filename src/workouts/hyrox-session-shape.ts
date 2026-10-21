@@ -106,6 +106,15 @@ export function hyroxSessionWorkSec(w: Pick<Workout, 'hyroxComponents' | 'hyroxR
   return hyroxSessionWalk(w).reduce((sum, s) => sum + (s.component.durationSec ?? 0) + s.restSec + s.transitionSec, 0);
 }
 
+/** Length of a session's first round (seconds): its sets' work, the rest
+ *  after each and the transition jogs. A station session with no warm-up
+ *  left takes it at the easy RPE as the warm-up (hyroxSpec.warmupRound): the
+ *  15-min station floor counts the station work after it, and planned TSS
+ *  prices it at the easy RPE (review round 7). */
+export function hyroxRoundOneSec(w: Pick<Workout, 'hyroxComponents' | 'hyroxRounds' | 'hyroxRoundRestSec' | 'hyroxSpec'>): number {
+  return hyroxSessionWalk(w).filter(s => s.round === 1).reduce((sum, s) => sum + (s.component.durationSec ?? 0) + s.restSec + s.transitionSec, 0);
+}
+
 /** Length of a session (seconds): its station work and the parts around it
  *  (the warm-up, the strength block, the finisher). */
 export function hyroxSessionDurationSec(w: Pick<Workout, 'hyroxComponents' | 'hyroxRounds' | 'hyroxRoundRestSec' | 'hyroxSpec'>): number {
@@ -118,23 +127,30 @@ export function hyroxSessionDurationSec(w: Pick<Workout, 'hyroxComponents' | 'hy
  * planned sessions price at plannedTssPerMin of their type). A lane H2b part
  * 2 session prices each part at its own effort: the warm-up and the finisher
  * at the easy RPE (HYROX_EASY_RPE), the strength block at its RPE as a gym
- * session, the station work at the session's RPE. Any other session: its
- * duration at its type and RPE, as before. One source for the plan engine
- * (hyroxPlannedTss: the acute:chronic guard, the deload and taper ceilings)
- * and the planned-day pricer (ui/planned-day-tss.ts).
+ * session, the station work at the session's RPE. Round 1 as the warm-up
+ * (hyroxSpec.warmupRound: the injury gates left no warm-up) prices at the
+ * easy RPE too, as its MTL does (finishHyroxSession), so the session's two
+ * load figures follow one rule (review round 7: its TSS priced round 1 at the
+ * session's RPE). Any other session: its duration at its type and RPE, as
+ * before. One source for the plan engine (hyroxPlannedTss: the acute:chronic
+ * guard, the deload and taper ceilings) and the planned-day pricer
+ * (ui/planned-day-tss.ts).
  */
-export function hyroxSessionPlannedTss(w: Pick<Workout, 't' | 'rpe' | 'r' | 'estimatedDurationMin' | 'hyroxSpec'>): number {
+export function hyroxSessionPlannedTss(w: Pick<Workout, 't' | 'rpe' | 'r' | 'estimatedDurationMin' | 'hyroxSpec' | 'hyroxComponents' | 'hyroxRounds' | 'hyroxRoundRestSec'>): number {
   const dur = w.estimatedDurationMin ?? 0;
   const rpe = w.rpe ?? w.r ?? 5;
   const rate = plannedTssPerMin(w.t ?? '', rpe);
   if (!w.hyroxSpec) return dur * rate;
   const parts = hyroxSessionPartsMin(w);
-  if (parts.easy + parts.strength <= 0) return dur * rate;
+  // Round 1 at the easy RPE (only above it, as the MTL's rule).
+  const easyRound = w.hyroxSpec.warmupRound && rpe > HYROX_EASY_RPE ? hyroxRoundOneSec(w) / 60 : 0;
+  if (parts.easy + parts.strength + easyRound <= 0) return dur * rate;
   // The injury gates scale a session's length; the parts keep theirs, so the
   // work is what is left (never negative).
   const work = Math.max(0, dur - parts.easy - parts.strength);
-  return work * rate
-    + parts.easy * plannedTssPerMin('', HYROX_EASY_RPE)
+  const easyWork = Math.min(work, easyRound);
+  return (work - easyWork) * rate
+    + (parts.easy + easyWork) * plannedTssPerMin('', HYROX_EASY_RPE)
     + parts.strength * plannedTssPerMin('gym', w.hyroxSpec.strength?.rpe ?? rpe);
 }
 
