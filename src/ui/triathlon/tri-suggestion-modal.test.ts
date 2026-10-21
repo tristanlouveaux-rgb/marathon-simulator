@@ -131,6 +131,44 @@ describe('tri suggestion modal: Replace & Reduce shows only when it replaces som
   });
 });
 
+describe('tri suggestion modal: only choices the discipline can act on', () => {
+  afterEach(() => { document.getElementById('tri-suggestion-overlay')?.remove(); });
+
+  const swap = { workoutId: 'r-thr', workoutLabel: 'Run threshold', discipline: 'run', action: 'swap_easy', tssReduction: 40 } as const;
+  const opt = (discipline: string, reduceMods: any[], replaceMods: any[]) =>
+    ({ discipline, remainingTSS: 100, floorTSS: 0, belowFloor: false, reduceMods, replaceMods });
+  const bundle = () => ({
+    mods: [{
+      id: 'xt_overload_run', source: 'cross_training_overload', discipline: 'run', headline: '', body: '', severity: 'caution',
+      action: 'swap_easy', targetWorkoutId: 'r-thr',
+      overloadOptions: {
+        crossTrainingTSS: 60, plannedTriTSS: 300, overshootPct: 0.2, severity: 'heavy', recommendedDiscipline: 'run',
+        options: { run: opt('run', [], [swap]), bike: opt('bike', [], []), swim: opt('swim', [], []) },
+      },
+    }],
+    diagnostics: { rampViolations: 0, rpeBlown: false, readinessLabel: null, crossTrainingOverload: true },
+  }) as any;
+
+  it('a Replace-only option opens with no empty Reduce list and no Reduce button', () => {
+    void showTriSuggestionModal(bundle());
+    const body = document.getElementById('tri-sm-overload-body')!;
+    expect(body.textContent).not.toContain('No upcoming workouts');
+    expect(body.textContent).toContain('Replace');
+    expect((document.getElementById('tri-sm-reduce') as HTMLElement).style.display).toBe('none');
+    expect((document.getElementById('tri-sm-replace') as HTMLElement).style.display).toBe('');
+  });
+
+  it('a discipline flipped to with no change says so and offers only Keep and Push', () => {
+    void showTriSuggestionModal(bundle());
+    (document.getElementById('tri-sm-chip-bike') as HTMLElement).click();
+    expect(document.getElementById('tri-sm-overload-body')!.textContent).toContain('No upcoming workouts to adjust.');
+    expect((document.getElementById('tri-sm-reduce') as HTMLElement).style.display).toBe('none');
+    expect((document.getElementById('tri-sm-replace') as HTMLElement).style.display).toBe('none');
+    expect(document.getElementById('tri-sm-keep')).not.toBeNull();
+    expect(document.getElementById('tri-sm-push')).not.toBeNull();
+  });
+});
+
 describe('tri suggestion modal: generic rows are remembered for the week', () => {
   afterEach(() => {
     document.getElementById('tri-suggestion-overlay')?.remove();

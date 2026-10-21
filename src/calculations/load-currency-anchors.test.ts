@@ -229,6 +229,8 @@ describe('Anchor 4b: the triathlon overload budget never exceeds the unanswered 
     expect(r!.options.run.replaceMods).toEqual([]);
     expect(r!.options.run.reduceMods).toEqual([]);
     expect(r!.options.bike.reduceMods).toMatchObject([{ workoutId: 'sat-b', action: 'trim_volume', tssReduction: 30 }]);
+    // Run (tennis is run-affinity) has no change, so the pop-up opens on bike.
+    expect(r!.recommendedDiscipline).toBe('bike');
   });
 
   it('generated plans: every proposed set takes at most the unanswered load, and what it shows', () => {

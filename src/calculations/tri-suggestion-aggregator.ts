@@ -184,7 +184,9 @@ export function collectTriSuggestions(
     const overshootPct = Math.round(overload.overshootPct * 100);
     const recDiscipline = overload.recommendedDiscipline;
     const recOpt = overload.options[recDiscipline];
-    const firstMod = recOpt.reduceMods[0]; // placeholder fallback; modal reads overloadOptions directly
+    // Placeholder fallback; the modal reads overloadOptions directly. The
+    // recommended option holds a change in one of its two sets.
+    const firstMod = recOpt.reduceMods[0] ?? recOpt.replaceMods[0];
     // Map detector's severity vocabulary (heavy/extreme) to the aggregator's
     // existing severity vocabulary (caution/warning). The modal keys its
     // banner/colour styling off the latter.

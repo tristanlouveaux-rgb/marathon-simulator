@@ -181,6 +181,41 @@ describe('detectCrossTrainingOverload — recommended discipline (run-anchored)'
     expect(r!.recommendedDiscipline).toBe('bike');
   });
 
+  // Never a pop-up with nothing to act on (Tristan, 2026-10-21). A 62 TSS load
+  // on a 400 TSS week (15.5%) unlocks a 58.2 TSS budget. The threshold run's
+  // downgrade takes 69 and its swap 137: neither fits, and quality sessions are
+  // never trimmed, so run has work but no change.
+  const thresholdRun = { id: 'mon-r', t: 'threshold', n: 'Run threshold', d: '90min', r: 8, discipline: 'run', aerobic: 150, anaerobic: 50, dayOfWeek: 0, estimatedDurationMin: 90 };
+  const longRide = { id: 'sat-b', t: 'bike_endurance', n: 'Long bike', d: '4h', r: 5, discipline: 'bike', aerobic: 180, anaerobic: 20, dayOfWeek: 5, estimatedDurationMin: 240 };
+
+  it('passes over a discipline with work but no change, to the next in affinity order with one', () => {
+    const s = state({
+      wks: [{
+        triWorkouts: [thresholdRun, longRide],
+        adhocWorkouts: [{ id: 'tennis', t: 'cross', n: 'tennis', d: '90min', r: 6, iTrimp: 62 * 150 }],
+      }] as any,
+    });
+    const r = detectCrossTrainingOverload(s, 0)!;
+    expect(r).not.toBeNull();
+    expect(r.options.run.remainingTSS).toBe(200);
+    expect(r.options.run.reduceMods).toEqual([]);
+    expect(r.options.run.replaceMods).toEqual([]);
+    expect(r.recommendedDiscipline).toBe('bike');
+    expect(r.options.bike.reduceMods).toMatchObject([{ workoutId: 'sat-b', action: 'trim_volume' }]);
+  });
+
+  it('returns null when no discipline has a change, even with planned work left', () => {
+    // Same week and load share without the ride: 200 TSS planned, 31 TSS of
+    // tennis (15.5%, budget 30.1). The run's downgrade (69) does not fit.
+    const s = state({
+      wks: [{
+        triWorkouts: [thresholdRun],
+        adhocWorkouts: [{ id: 'tennis', t: 'cross', n: 'tennis', d: '45min', r: 6, iTrimp: 31 * 150 }],
+      }] as any,
+    });
+    expect(detectCrossTrainingOverload(s, 0)).toBeNull();
+  });
+
   it('returns null when ALL disciplines have no remaining TSS', () => {
     // Every workout completed → no recommendation possible.
     const wk = canonicalTriWeek();

@@ -262,6 +262,7 @@ function renderOverloadSection(opts: CrossTrainingOverloadResult, selected: Disc
           flex:1;padding:11px;border-radius:10px;
           border:none;background:var(--c-accent,#0F172A);
           font-size:13px;font-weight:500;color:#fff;
+          ${opts.options[selected].reduceMods.length > 0 ? '' : 'display:none;'}
         ">Reduce</button>
         <button id="tri-sm-replace" class="tri-sm-btn" style="
           flex:1;padding:11px;border-radius:10px;
@@ -285,11 +286,14 @@ function renderOverloadSection(opts: CrossTrainingOverloadResult, selected: Disc
 }
 
 /**
- * Show only the choices the selected discipline can act on. Replace & Reduce
- * appears when its set holds a swap (the detector leaves it empty otherwise,
- * since it would repeat Reduce). Re-run when the chip changes.
+ * Show only the choices the selected discipline can act on: Reduce when its
+ * set holds a change, Replace & Reduce when its set holds a swap (the detector
+ * leaves it empty otherwise, since it would repeat Reduce). Keep and Push
+ * always show. Re-run when the chip changes.
  */
 function syncOverloadButtons(opt: DisciplineOption): void {
+  const reduce = document.getElementById('tri-sm-reduce');
+  if (reduce) reduce.style.display = opt.reduceMods.length > 0 ? '' : 'none';
   const replace = document.getElementById('tri-sm-replace');
   if (replace) replace.style.display = opt.replaceMods.length > 0 ? '' : 'none';
 }
@@ -309,23 +313,29 @@ function renderOverloadBody(opts: CrossTrainingOverloadResult, selected: Discipl
        </div>`
     : '';
 
-  const reduceList = reduceMods.length === 0
-    ? `<div style="color:var(--c-muted);font-size:12px;font-style:italic">No upcoming workouts to adjust.</div>`
-    : reduceMods.map(renderModLine).join('');
+  // The detector recommends only a discipline with a change, so the opening
+  // view always lists one. The empty line is for a discipline the user flips
+  // to that has none; a set with no change gets no section and no button.
+  const noChange = reduceMods.length === 0 && replaceMods.length === 0
+    ? `<div style="color:var(--c-muted);font-size:12px;font-style:italic;margin-top:6px">No upcoming workouts to adjust.</div>`
+    : '';
 
   return `
     <div style="font-size:12px;line-height:1.5;margin-bottom:10px">${floorLine}</div>
     ${belowFloorWarning}
-    <details open style="border:1px solid var(--c-border);border-radius:10px;padding:10px 12px;margin-top:6px">
-      <summary style="font-size:12px;color:#0F172A;font-weight:500;cursor:pointer;list-style:none">
-        Reduce. ${reduceMods.length} change${reduceMods.length === 1 ? '' : 's'}
-      </summary>
-      <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
-        ${reduceList}
-      </div>
-    </details>
+    ${noChange}
+    ${reduceMods.length > 0 ? `
+      <details open style="border:1px solid var(--c-border);border-radius:10px;padding:10px 12px;margin-top:6px">
+        <summary style="font-size:12px;color:#0F172A;font-weight:500;cursor:pointer;list-style:none">
+          Reduce. ${reduceMods.length} change${reduceMods.length === 1 ? '' : 's'}
+        </summary>
+        <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
+          ${reduceMods.map(renderModLine).join('')}
+        </div>
+      </details>
+    ` : ''}
     ${replaceMods.length > 0 ? `
-      <details style="border:1px solid var(--c-border);border-radius:10px;padding:10px 12px;margin-top:6px">
+      <details ${reduceMods.length > 0 ? '' : 'open '}style="border:1px solid var(--c-border);border-radius:10px;padding:10px 12px;margin-top:6px">
         <summary style="font-size:12px;color:#0F172A;font-weight:500;cursor:pointer;list-style:none">
           Replace &amp; Reduce. ${replaceMods.length} change${replaceMods.length === 1 ? '' : 's'}
         </summary>

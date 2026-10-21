@@ -128,7 +128,8 @@ export interface CrossTrainingOverloadResult {
   overshootPct: number;
   /** 'heavy' = 15–25%; 'extreme' = >25%. (Below 15% the detector returns null.) */
   severity: 'heavy' | 'extreme';
-  /** Discipline with the most remaining planned TSS — the auto-recommendation. */
+  /** The auto-recommendation: the first discipline in affinity order whose
+   *  option holds a change (pickRecommendedDiscipline). */
   recommendedDiscipline: Discipline;
   /** Per-discipline mod options. UI chips switch between these. */
   options: {
@@ -227,11 +228,14 @@ export function detectCrossTrainingOverload(
     run:  buildDisciplineOption(state, wk, weekIdx, 'run',  todayDow, maxMods, reductionCredit),
   };
 
+  // Never a pop-up with nothing to act on (Tristan, 2026-10-21): the
+  // recommendation is the first discipline in affinity order with a change.
+  // With none (every session done, skipped or already changed, or every change
+  // larger than the budget), no pop-up. Nothing is recorded as answered, so the
+  // load still counts in the week's load and is judged again with any later
+  // cross-training this week.
   const recommendedDiscipline = pickRecommendedDiscipline(summary.byAffinity, options);
-
-  // If the recommended discipline has zero remaining TSS (everything done or
-  // skipped), the detector has nothing to act on. Don't emit a flag.
-  if (options[recommendedDiscipline].remainingTSS <= 0) return null;
+  if (!recommendedDiscipline) return null;
 
   return {
     crossTrainingTSS: Math.round(unansweredTSS),
@@ -251,34 +255,29 @@ export function detectCrossTrainingOverload(
  * Running is also the highest-injury-risk discipline in tri training, so the
  * conservative default protects the run.
  *
- * Override only when the cross-training is clearly bike-shaped (cycling) or
- * swim-shaped: pick that discipline if it has the largest single-affinity
- * contribution AND the matching tri discipline has remaining work to reduce.
+ * Affinity order: disciplines sorted by the cross-training TSS that resembles
+ * each (byAffinity), ties to run, then bike, then swim. Cycling puts bike
+ * first, swimming swim, everything else run.
  *
- * Fallback chain when the preferred discipline has no remaining workouts:
- *   run → bike → swim (in remaining-TSS order).
+ * The recommendation is the first discipline in that order whose option holds
+ * a change (a Reduce set or a Replace & Reduce set). A discipline with planned
+ * work but no change that fits (every session done, skipped or already
+ * changed, a quality session whose downgrade exceeds the budget) is passed
+ * over, so the pop-up never opens on an empty list. Null when no discipline
+ * has a change: the caller then emits no pop-up.
  */
 function pickRecommendedDiscipline(
   byAffinity: { swim: number; bike: number; run: number },
   options: { swim: DisciplineOption; bike: DisciplineOption; run: DisciplineOption },
-): Discipline {
-  // Find the affinity bucket with the most TSS. Ties favour run.
-  const sortedAffinities: Discipline[] = ['run', 'bike', 'swim'];
-  sortedAffinities.sort((a, b) => byAffinity[b] - byAffinity[a]);
-  const primary = sortedAffinities[0];
+): Discipline | null {
+  const affinityOrder: Discipline[] = ['run', 'bike', 'swim'];
+  affinityOrder.sort((a, b) => byAffinity[b] - byAffinity[a]);
+  return affinityOrder.find(d => hasChange(options[d])) ?? null;
+}
 
-  // If the primary affinity discipline has remaining work, use it.
-  if (byAffinity[primary] > 0 && options[primary].remainingTSS > 0) {
-    return primary;
-  }
-
-  // Fallback: walk the affinity-sorted list to find any discipline with work.
-  for (const d of sortedAffinities) {
-    if (options[d].remainingTSS > 0) return d;
-  }
-
-  // Last resort: run. (Caller already returns null if all options are empty.)
-  return 'run';
+/** The option holds at least one change the user can accept. */
+function hasChange(opt: DisciplineOption): boolean {
+  return opt.reduceMods.length > 0 || opt.replaceMods.length > 0;
 }
 
 // ───────────────────────────────────────────────────────────────────────────
