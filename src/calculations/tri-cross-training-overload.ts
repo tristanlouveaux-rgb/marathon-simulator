@@ -34,7 +34,7 @@ import { computeTriDisciplineFloorTSS } from './tri-discipline-floor';
 import { computeDecayedTriCarry } from './tri-cross-training-carry';
 import { answeredCrossTrainingTSS, isOpenForTriSuggestion } from './tri-suggestion-handled';
 import { canApplyTriSuggestion, isTriQualitySession, triDowngradeTssReduction } from './tri-suggestion-apply';
-import { normalizeiTrimp } from '@/calculations/fitness-model';
+import { normalizeiTrimp, ratedRpeOf, signalBActualTSS, signalBAdhocTSS } from '@/calculations/fitness-model';
 import { saturateCredit } from '@/cross-training/universalLoad';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 
@@ -316,7 +316,7 @@ function computeCrossTrainingTSS(wk: Week): CrossTrainingSummary {
     if (adhoc.id && planIds.has(adhoc.id)) continue; // in-plan: skip
     if (isPlannedAdhocId(adhoc.id)) continue;         // planned adhoc session: plan
     if (adhoc.id) countedIds.add(adhoc.id);
-    const tss = tssOfWorkout(adhoc);
+    const tss = tssOfAdhoc(wk, adhoc);
     if (tss <= 0) continue;
     // For adhocs we read the workout name (`n`) since manual entries don't
     // carry a Garmin/Strava activityType. Synced ones may have either.
@@ -330,8 +330,10 @@ function computeCrossTrainingTSS(wk: Week): CrossTrainingSummary {
     if (countedIds.has(workoutId)) continue;
     if (planIds.has(workoutId)) continue;
     if (isPlannedAdhocId(workoutId)) continue; // done record of a planned adhoc session
-    if (actual.iTrimp == null || actual.iTrimp <= 0) continue;
-    const tss = normalizeiTrimp(actual.iTrimp); // personal normalizer (ISSUE-262)
+    const tss = actual.iTrimp != null && actual.iTrimp > 0
+      ? normalizeiTrimp(actual.iTrimp) // personal normalizer (ISSUE-262)
+      : signalBActualTSS(actual, ratedRpeOf(wk.rated?.[workoutId])); // no stored load: Signal B's rule
+    if (tss <= 0) continue;
     const affinity = classifyAffinity(actual.activityType, actual.displayName);
     credit(tss, affinity);
   }
@@ -339,9 +341,23 @@ function computeCrossTrainingTSS(wk: Week): CrossTrainingSummary {
   return { totalTSS: total, byAffinity };
 }
 
-function tssOfWorkout(w: Workout): number {
+/**
+ * One adhoc entry's load, canonical TSS. Its own iTRIMP, else its stamped
+ * aerobic + anaerobic (canonical TSS at ingest, addAdhocWorkoutFromPending).
+ * With neither (a GPS-recorded extra run, whose entry carries no load and whose
+ * activity record has iTrimp null; a manual entry with no load), Signal B's own
+ * per-activity rule values it (signalBActualTSS on the activity record under
+ * the same id, which carries the measured minutes and the rating; else
+ * signalBAdhocTSS on the entry). It used to count 0: this pass marks the id
+ * counted, so pass 2 skipped the record too. SCIENCE_LOG §DP item 3.
+ */
+function tssOfAdhoc(wk: Week, w: Workout): number {
   if (w.iTrimp != null && w.iTrimp > 0) return normalizeiTrimp(w.iTrimp); // personal normalizer (ISSUE-262)
-  return (w.aerobic ?? 0) + (w.anaerobic ?? 0);
+  const stamped = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
+  if (stamped > 0) return stamped;
+  const twin: GarminActual | undefined = w.id ? wk.garminActuals?.[w.id] : undefined;
+  if (twin) return signalBActualTSS(twin, ratedRpeOf(wk.rated?.[w.id!]));
+  return signalBAdhocTSS(w);
 }
 
 /** When an adhoc has a twin in garminActuals, read the activityType from there

@@ -21,6 +21,8 @@ import { applyTriSuggestions } from './tri-suggestion-apply';
 import { markTriSuggestionsHandled } from './tri-suggestion-handled';
 import type { TriSuggestionMod } from './tri-suggestion-aggregator';
 import type { SimulatorState } from '@/types/state';
+import { TL_PER_MIN } from '@/constants';
+import { computeWeekRawTSS } from './fitness-model';
 
 // s.w is 1-based (store.ts default w: 1): the current week is wks[s.w - 1], so
 // these fixtures put the week under test at wks[0] with w: 1.
@@ -324,6 +326,91 @@ describe('detectCrossTrainingOverload — planned adhoc sessions are plan (isPla
       }] as any,
     });
     expect(detectCrossTrainingOverload(s, 0)?.crossTrainingTSS).toBe(100);
+  });
+});
+
+describe('detectCrossTrainingOverload — activities with no stored load are valued (Signal B rule)', () => {
+  // A GPS-recorded extra run: the adhoc entry carries no load and its activity
+  // record has iTrimp null (recording-handler saveAsAdhoc, buildGpsRunActual).
+  // It counted 0: pass 1 marked the id counted, pass 2 skipped the record.
+  const gpsRun = (id: string, min: number, rpe: number) => ({
+    adhoc: { id, n: 'Run', d: `${(min / 6).toFixed(1)}km`, r: 5, t: 'easy' },
+    actual: {
+      garminId: `inapp-${id}`, startTime: '2026-10-20T07:00:00.000Z', distanceKm: min / 6, durationSec: min * 60,
+      avgPaceSecKm: 360, avgHR: null, maxHR: null, calories: null, iTrimp: null, hrZones: null,
+      activityType: null, plannedType: null, rpe, displayName: 'Run',
+    },
+  });
+
+  it('a 90-min GPS extra run rated 5 counts 90 x TL_PER_MIN[5]', () => {
+    const r1 = gpsRun('9b2c7f0e-gps', 90, 5);
+    const wk = {
+      ...canonicalTriWeek(),
+      adhocWorkouts: [r1.adhoc],
+      garminActuals: { [r1.adhoc.id]: r1.actual },
+      rated: { [r1.adhoc.id]: 5 },
+    };
+    const r = detectCrossTrainingOverload(state({ wks: [wk] as any }), 0);
+    expect(r).not.toBeNull();
+    expect(r!.crossTrainingTSS).toBe(Math.round(90 * TL_PER_MIN[5])); // 104
+    expect(r!.recommendedDiscipline).toBe('run'); // an extra run is run-affinity
+  });
+
+  it('the rating sets the row: the same run rated 7 counts 90 x TL_PER_MIN[7]', () => {
+    const r1 = gpsRun('9b2c7f0e-gps', 90, 7);
+    const wk = {
+      ...canonicalTriWeek(),
+      adhocWorkouts: [r1.adhoc],
+      garminActuals: { [r1.adhoc.id]: r1.actual },
+      rated: { [r1.adhoc.id]: 7 },
+    };
+    expect(detectCrossTrainingOverload(state({ wks: [wk] as any }), 0)?.crossTrainingTSS)
+      .toBe(Math.round(90 * TL_PER_MIN[7]));
+  });
+
+  it('Signal B and the detector give an unmeasured activity the same figure', () => {
+    const r1 = gpsRun('9b2c7f0e-gps', 90, 5);
+    const extras = { adhocWorkouts: [r1.adhoc], garminActuals: { [r1.adhoc.id]: r1.actual }, rated: { [r1.adhoc.id]: 5 } };
+    const signalB = computeWeekRawTSS({ w: 1, ...extras } as any, extras.rated);
+    const r = detectCrossTrainingOverload(state({ wks: [{ ...canonicalTriWeek(), ...extras }] as any }), 0);
+    expect(r!.crossTrainingTSS).toBe(signalB);
+  });
+
+  it('a manual entry with no load and no record counts its minutes at its RPE', () => {
+    const wk = {
+      ...canonicalTriWeek(),
+      adhocWorkouts: [{ id: 'manual-legacy-1', t: 'cross', n: 'padel', d: '90min', r: 6, rpe: 6 }],
+    };
+    expect(detectCrossTrainingOverload(state({ wks: [wk] as any }), 0)?.crossTrainingTSS)
+      .toBe(Math.round(90 * TL_PER_MIN[6]));
+  });
+
+  it('an activity record with no iTRIMP and no adhoc twin counts its minutes', () => {
+    const wk = {
+      ...canonicalTriWeek(),
+      garminActuals: {
+        'garmin-tennis-nohr': {
+          garminId: 'tennis-nohr', startTime: '2026-10-20T18:00:00.000Z', durationSec: 5400, distanceKm: 0,
+          avgPaceSecKm: null, avgHR: null, maxHR: null, calories: null, iTrimp: null, activityType: 'TENNIS',
+        },
+      },
+    };
+    expect(detectCrossTrainingOverload(state({ wks: [wk] as any }), 0)?.crossTrainingTSS)
+      .toBe(Math.round(90 * TL_PER_MIN[5]));
+  });
+
+  it('a stored load still wins: stamped aerobic + anaerobic is not re-valued', () => {
+    const wk = {
+      ...canonicalTriWeek(),
+      adhocWorkouts: [{ id: 'garmin-ride-1', t: 'cross', n: 'cycling', d: '90min', r: 6, aerobic: 85, anaerobic: 15 }],
+      garminActuals: {
+        'garmin-ride-1': {
+          garminId: 'ride-1', startTime: '2026-10-20T08:00:00.000Z', durationSec: 5400, distanceKm: 40,
+          avgPaceSecKm: null, avgHR: null, maxHR: null, calories: null, iTrimp: null, activityType: 'CYCLING',
+        },
+      },
+    };
+    expect(detectCrossTrainingOverload(state({ wks: [wk] as any }), 0)?.crossTrainingTSS).toBe(100);
   });
 });
 

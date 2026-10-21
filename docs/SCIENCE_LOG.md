@@ -9226,7 +9226,7 @@ Likely range (hyroxLikelyRangeSec, the Forecast hero's "Likely X-Y")
 
 ---
 
-## §DP: Cross-training overload detector: the budget curve has slope 1, planned sessions are plan (2026-10-21, lane ctd)
+## §DP: Cross-training overload detector: the budget curve has slope 1, planned sessions are plan, every outside activity is valued (2026-10-21, lane ctd)
 
 **Side.** Planning. The triathlon overload detector (`detectCrossTrainingOverload`, `src/calculations/tri-cross-training-overload.ts`) reads tracked load (cross-training TSS this week) and prescribes plan cuts. It writes nothing; only an accepted Reduce or Push changes state. The same detector feeds triathlon and cycling (cycling reuses `eventType: 'triathlon'`). HYROX does not use it yet (it returns null outside triathlon); the HYROX cross-training design (`docs/research/hyrox-cross-training-design-2026-10.md` §2) reuses it after lane `fix/hyrox-h2b` merges.
 
@@ -9243,8 +9243,21 @@ Before: `1500 x (1 - e^(-U / 800))`, the pre-ISSUE-263 two-parameter form runnin
 
 **2. Planned sessions in `adhocWorkouts` are plan.** Ids for which `isPlannedAdhocId` is true (`adhoc-` user-added sessions and injury capability offers, `holiday-`, `benchmark-`; `src/workouts/planned-adhoc.ts`) are skipped in both passes, with any record under the same id. Signal B already skips them (`computeWeekRawTSS`). Before, a holiday or benchmark session with a stamped load counted as overload. A capability offer counted 0 only by accident (it carries no load, and its Mark as Done record was skipped because pass 1 had marked the id counted); once activities without a stored load are valued (item 3) it would have been valued by its minutes.
 
-**Limitations.** The curve is running's single-session saturation applied to a week's sum of sessions; TAU was derived for one session. It is a cap, not a dose-response model.
+**3. Every outside activity is valued (Signal B per-activity rule).** An activity with no iTRIMP and no stamped load (a GPS-recorded extra run: its adhoc entry has no load and its activity record `iTrimp: null`; a manual entry with no load) was counted 0: pass 1 marked its id counted before the zero check, and pass 2 then skipped the activity record under the same id. It is now valued by Signal B's own per-activity rule, extracted from `computeWeekRawTSS` into `signalBActualTSS` and `signalBAdhocTSS` (`src/calculations/fitness-model.ts`), which both call:
 
-**Guards.** `load-currency-anchors.test.ts` anchor 4b (budget <= load from 10 to 900 TSS; the detector books no more cuts than the unanswered load); `tri-cross-training-overload.test.ts` (planned adhoc ids add 0, with a stamped load or a done record).
+```
+activity record (GarminActual), rated RPE r from wk.rated:
+  strength override (rated strength session): minutes x TL_PER_MIN[r]
+  else iTRIMP > 0:                            normalizeiTrimp(iTRIMP)
+  else:                                       minutes x TL_PER_MIN[r or 5]   (minutes = duration, else km x 6)
+adhoc entry with no activity record:
+  iTRIMP > 0: normalizeiTrimp(iTRIMP), else description minutes x TL_PER_MIN[rpe or 5]
+```
+
+Precedence in the detector is unchanged for activities that carry load: the adhoc entry's iTRIMP, then its stamped canonical TSS (`addAdhocWorkoutFromPending`). The Signal B rule applies only when both are absent, reading the activity record under the same id when it exists (it carries the measured duration and the rating), else the adhoc entry. An activity record with no iTRIMP and no adhoc twin (an HR-less synced session) was skipped outright in pass 2; it now takes `signalBActualTSS` too. The detector's figure is the activity's own load: it never adds Signal B's double-day bonus.
+
+**Limitations.** The curve is running's single-session saturation applied to a week's sum of sessions; TAU was derived for one session. It is a cap, not a dose-response model. Valuing an unmeasured activity at minutes x TL_PER_MIN[RPE] inherits Signal B's estimate (an unrated session reads as RPE 5, 1.15 TSS/min). `computeTodaySignalBTSS` (the day's strain) still values an unmeasured, non-strength activity record at RPE 5 whatever its rating, so the day and the week can price a rated HR-less session differently; not changed here.
+
+**Guards.** `load-currency-anchors.test.ts` anchor 4b (budget <= load from 10 to 900 TSS; the detector books no more cuts than the unanswered load); `tri-cross-training-overload.test.ts` (planned adhoc ids add 0, with a stamped load or a done record; a GPS extra run counts its rated minutes; Signal B and the detector agree on an unmeasured activity; a stored load is not re-valued).
 
 ---

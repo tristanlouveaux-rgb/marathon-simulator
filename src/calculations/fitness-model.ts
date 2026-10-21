@@ -562,6 +562,56 @@ export function computeWeekTSS(
 /** @deprecated Use computeWeekTSS */
 export const computeWeekTL = computeWeekTSS;
 
+/** A wk.rated value as an RPE: a number, else null ('skip' or unrated). */
+export function ratedRpeOf(ratedVal: number | 'skip' | undefined | null): number | null {
+  return typeof ratedVal === 'number' ? ratedVal : null;
+}
+
+/**
+ * One activity record's Signal B TSS: the per-activity rule computeWeekRawTSS
+ * sums (no runSpec discount; full physiological load). Canonical TSS.
+ *   1. A rated strength session: minutes x TL_PER_MIN[RPE] (computeStrengthRpeTSS).
+ *   2. iTRIMP: normalizeiTrimp (the athlete's normalizer).
+ *   3. Otherwise minutes x TL_PER_MIN[rated RPE, else 5]; minutes from the
+ *      duration, else distance x 6 (6:00/km).
+ * Exported so every reader that values one outside activity (the triathlon
+ * overload detector) uses this rule, not a copy that can drift. Tracking side.
+ */
+export function signalBActualTSS(
+  actual: {
+    activityType?: string | null;
+    manualSport?: string;
+    workoutName?: string;
+    displayName?: string;
+    durationSec: number;
+    distanceKm: number;
+    iTrimp?: number | null;
+    rpe?: number;
+  },
+  ratedRpe: number | null,
+): number {
+  // Strength override: Signal B uses no runSpec discount (full physiological load).
+  const strengthOverride = computeStrengthRpeTSS(actual, false, ratedRpe);
+  if (strengthOverride != null) return strengthOverride;
+  if (actual.iTrimp != null && actual.iTrimp > 0) return normalizeiTrimp(actual.iTrimp);
+  const rpe = ratedRpe ?? 5;
+  const durMin = actual.durationSec > 0 ? actual.durationSec / 60 : actual.distanceKm * 6;
+  return durMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
+}
+
+/**
+ * One adhoc entry's Signal B TSS when no activity record covers it (the
+ * adhoc half of computeWeekRawTSS): iTRIMP through normalizeiTrimp, else the
+ * description's minutes x TL_PER_MIN[its RPE, else 5]. Canonical TSS.
+ * Exported for the same reason as signalBActualTSS. Tracking side.
+ */
+export function signalBAdhocTSS(w: Workout, norm?: number): number {
+  if (w.iTrimp != null && w.iTrimp > 0) return normalizeiTrimp(w.iTrimp, norm);
+  const rpe = w.rpe ?? w.r ?? 5;
+  const durMin = parseDurMinFromDesc(w.d ?? '');
+  return durMin * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
+}
+
 /**
  * Compute raw physiological TSS for a single week (Signal B).
  * Counts the same activities as computeWeekTSS, once each, with no runSpec discount:
@@ -589,21 +639,7 @@ export function computeWeekRawTSS(
       if (seenGarminIds.has(actual.garminId)) continue;
       seenGarminIds.add(actual.garminId);
     }
-    const ratedVal = ratedMap[workoutId];
-    const ratedRpe = (typeof ratedVal === 'number') ? ratedVal : null;
-    // Strength override: Signal B uses no runSpec discount (full physiological load).
-    const strengthOverride = computeStrengthRpeTSS(actual, false, ratedRpe);
-    if (strengthOverride != null) {
-      tl += strengthOverride;
-      continue;
-    }
-    const rpe = ratedRpe ?? 5;
-    if (actual.iTrimp != null && actual.iTrimp > 0) {
-      tl += normalizeiTrimp(actual.iTrimp);
-    } else {
-      const durMin = actual.durationSec > 0 ? actual.durationSec / 60 : actual.distanceKm * 6;
-      tl += durMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
-    }
+    tl += signalBActualTSS(actual, ratedRpeOf(ratedMap[workoutId]));
   }
 
   // Adhoc workouts. RunSpec = 1.0 (full physiological cost, Signal B)
@@ -621,13 +657,7 @@ export function computeWeekRawTSS(
       if (seenGarminIds.has(rawId)) continue;
       seenGarminIds.add(rawId);
     }
-    if (w.iTrimp != null && w.iTrimp > 0) {
-      tl += normalizeiTrimp(w.iTrimp, norm); // no runSpec discount
-    } else {
-      const rpe = w.rpe ?? w.r ?? 5;
-      const durMin = parseDurMinFromDesc(w.d);
-      tl += durMin * (TL_PER_MIN[Math.round(rpe)] ?? 1.15); // no runSpec discount
-    }
+    tl += signalBAdhocTSS(w, norm); // no runSpec discount
   }
 
   // unspentLoadItems are decision records, never load: each one points at an
