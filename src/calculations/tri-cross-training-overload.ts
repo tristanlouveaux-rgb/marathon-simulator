@@ -33,7 +33,7 @@ import type { Discipline } from '@/types/triathlon';
 import { computeTriDisciplineFloorTSS } from './tri-discipline-floor';
 import { computeDecayedTriCarry } from './tri-cross-training-carry';
 import { answeredCrossTrainingTSS, isOpenForTriSuggestion } from './tri-suggestion-handled';
-import { canApplyTriSuggestion, isTriQualitySession, triDowngradeTssReduction } from './tri-suggestion-apply';
+import { isTriQualitySession, triSuggestionTssReduction } from './tri-suggestion-apply';
 import { normalizeiTrimp, ratedRpeOf, signalBActualTSS, signalBAdhocTSS } from '@/calculations/fitness-model';
 import { saturateCredit } from '@/cross-training/universalLoad';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
@@ -51,12 +51,6 @@ const EXTREME_THRESHOLD = 0.25;
 /** Max number of mods we'll propose per discipline at each severity tier. */
 const MAX_MODS_HEAVY = 2;
 const MAX_MODS_EXTREME = 3;
-
-/** Trim fraction for endurance reductions (15% off planned duration). */
-const TRIM_FRACTION = 0.15;
-
-/** Replace-with-easy reduces the session's TSS by ~50% (intensity drop). */
-const REPLACE_WITH_EASY_TSS_REDUCTION = 0.50;
 
 const DISCIPLINES: Discipline[] = ['swim', 'bike', 'run'];
 
@@ -101,7 +95,8 @@ export interface OverloadAdjustment {
   workoutLabel: string;
   discipline: Discipline;
   action: 'trim_volume' | 'downgrade_today' | 'swap_easy';
-  /** Estimated TSS this adjustment removes from the week. */
+  /** Planned TSS accepting this adjustment takes off the week: the apply
+   *  step's own re-pricing (triSuggestionTssReduction), never clipped. */
   tssReduction: number;
 }
 
@@ -114,9 +109,11 @@ export interface DisciplineOption {
   floorTSS: number;
   /** True if applying ALL reduceMods would push remaining below floorTSS. */
   belowFloor: boolean;
-  /** Reduce-only mods (downgrade quality, trim endurance). Capped by floor. */
+  /** Reduce-only mods (downgrade quality, trim endurance). Their summed cut
+   *  stays within the reduction budget; the floor only warns (belowFloor). */
   reduceMods: OverloadAdjustment[];
-  /** Replace-and-reduce mods (swap quality with easy + trim others). Capped by floor. */
+  /** Replace-and-reduce mods (swap quality with easy + trim others). Same
+   *  budget rule as reduceMods. */
   replaceMods: OverloadAdjustment[];
 }
 
@@ -217,7 +214,10 @@ export function detectCrossTrainingOverload(
 
   // Saturation: a single huge cross-training session shouldn't unlock
   // unbounded reductions. Cap the "credit" available per discipline by
-  // running's saturation curve (overloadReductionBudget).
+  // running's saturation curve (overloadReductionBudget). Each option set's
+  // applied cut stays within it (the builders propose only changes whose full
+  // cut fits), so accepting a proposal never takes more planned TSS off the
+  // week than the unanswered load.
   const reductionCredit = overloadReductionBudget(unansweredTSS);
 
   const options = {
@@ -397,9 +397,9 @@ function buildDisciplineOption(
   // also skip a session the apply step cannot change with the chosen action
   // (canApplyTriSuggestion: a brick, a swap on an off-ladder kind such as
   // bike_vo2_micros / bike_over_under, a downgrade that would raise planned load,
-  // sessions without planned minutes) and a downgrade that would not lower the
-  // stored load (triDowngradeTssReduction 0), so the budget goes to sessions
-  // that can take it.
+  // sessions without planned minutes), a change that would not lower the stored
+  // load (triSuggestionTssReduction 0), and a change whose cut is larger than
+  // the budget left, so the budget goes to sessions that can take it.
   const candidates = upcoming.filter(w => isOpenForTriSuggestion(w));
 
   const floorTSS = computeTriDisciplineFloorTSS(state, discipline, weekIdx);
@@ -441,17 +441,34 @@ function isQualityWorkout(w: Workout): boolean {
 }
 
 /**
- * TSS an adjustment takes off the session, as booked against the reduction
- * budget and shown in the modal ("-N TSS"). A downgrade is priced from the rung
- * the apply step lands on (triDowngradeTssReduction: the stored load minus the
- * landing rung's load at the planned minutes, the exact change in the plan
- * total); 0 when the step would not lower the stored load, so it is not
- * proposed. A trim and a swap keep their pre-existing fractions of the planned
- * load (TRIM_FRACTION, REPLACE_WITH_EASY_TSS_REDUCTION).
+ * Planned TSS `action` takes off the session, booked against the reduction
+ * budget and shown in the modal ("-N TSS"), when that full cut fits the budget
+ * left; else 0 and the change is not proposed. The cut is the apply step's own
+ * re-pricing (triSuggestionTssReduction: the stored load minus the load the
+ * downgrade, swap or trim stamps), so the modal number is the change Apply makes
+ * and the plan header then shows. It is 0 when the apply step would not change
+ * the session (canApplyTriSuggestion) or would not lower its stored load.
+ *
+ * Never clipped to the budget left: before 2026-10-21 the last change of a set
+ * showed min(estimate, budget), while Apply took the whole change, so the modal
+ * understated the cut and the plan could lose more than the unanswered load
+ * (Load Currency Law). The swap and trim estimates were also fixed fractions
+ * (50%, 15%) of the stored load where Apply re-priced the session. SCIENCE_LOG
+ * §DP item 4.
  */
-function estimatedReduction(w: Workout, action: OverloadAdjustment['action'], planTSS: number): number {
-  if (action === 'downgrade_today') return triDowngradeTssReduction(w);
-  return planTSS * (action === 'swap_easy' ? REPLACE_WITH_EASY_TSS_REDUCTION : TRIM_FRACTION);
+function fittingReduction(w: Workout, action: OverloadAdjustment['action'], budget: number): number {
+  const cut = triSuggestionTssReduction(w, action);
+  return cut > 0 && cut <= budget ? cut : 0;
+}
+
+function adjustmentFor(w: Workout, action: OverloadAdjustment['action'], cut: number): OverloadAdjustment {
+  return {
+    workoutId: w.id!,
+    workoutLabel: w.n || w.t || w.id!,
+    discipline: w.discipline as Discipline,
+    action,
+    tssReduction: Math.round(cut),
+  };
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -461,6 +478,9 @@ function estimatedReduction(w: Workout, action: OverloadAdjustment['action'], pl
 /**
  * Reduce-only: downgrade nearest upcoming quality, trim endurance volume.
  * No workouts are removed from the plan; sessions just get easier or shorter.
+ * A session whose change would take more than the budget left is passed over
+ * for a later one that fits (fittingReduction), so the set's applied cut stays
+ * within the budget.
  *
  * Mods are NOT silently capped by the floor. If the resulting remaining-TSS
  * would breach the floor, the option's `belowFloor` flag fires and the modal
@@ -479,24 +499,11 @@ function buildReduceMods(
   for (const w of sorted) {
     if (mods.length >= maxMods) break;
     if (budget <= 0) break;
-    const planTSS = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
-    if (planTSS <= 0) continue;
-
-    const isQuality = isQualityWorkout(w);
-    const action = isQuality ? 'downgrade_today' : 'trim_volume';
-    // A session the apply step would leave untouched is not proposed.
-    if (!canApplyTriSuggestion(w, action)) continue;
-    const proposedReduction = Math.min(estimatedReduction(w, action, planTSS), budget);
-    if (proposedReduction <= 0) continue;
-
-    mods.push({
-      workoutId: w.id!,
-      workoutLabel: w.n || w.t || w.id!,
-      discipline: w.discipline as Discipline,
-      action,
-      tssReduction: Math.round(proposedReduction),
-    });
-    budget -= proposedReduction;
+    const action = isQualityWorkout(w) ? 'downgrade_today' : 'trim_volume';
+    const cut = fittingReduction(w, action, budget);
+    if (cut <= 0) continue;
+    mods.push(adjustmentFor(w, action, cut));
+    budget -= cut;
   }
 
   return mods;
@@ -507,8 +514,11 @@ function buildReduceMods(
  * the same discipline, then trim/downgrade subsequent sessions. Mirrors
  * running's `buildReplaceAdjustments` interleave (replace 1, reduce 1, …).
  *
- * Like `buildReduceMods`, this proposes mods freely and lets the option-level
- * `belowFloor` flag drive UI warnings rather than silently capping.
+ * The swap goes to the first quality session the apply step can swap whose
+ * full cut fits the budget left. A quality session whose swap is too large
+ * takes the Reduce path's downgrade instead when that fits, and the swap stays
+ * open for a later quality session. Like `buildReduceMods`, the floor only
+ * drives the option-level `belowFloor` warning.
  */
 function buildReplaceMods(
   candidates: Workout[],
@@ -523,35 +533,18 @@ function buildReplaceMods(
   for (const w of sorted) {
     if (mods.length >= maxMods) break;
     if (budget <= 0) break;
-    const planTSS = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
-    if (planTSS <= 0) continue;
-
     const isQuality = isQualityWorkout(w);
 
-    // Pick the action: the first quality session the apply step can swap
-    // becomes a swap_easy; everything else is reduce/downgrade like the
-    // Reduce-only path. A session the apply step would leave untouched with
-    // the chosen action is not proposed (canApplyTriSuggestion).
-    let action: 'swap_easy' | 'downgrade_today' | 'trim_volume';
-    if (!didReplace && isQuality && canApplyTriSuggestion(w, 'swap_easy')) {
-      action = 'swap_easy';
-      didReplace = true;
-    } else {
-      action = isQuality ? 'downgrade_today' : 'trim_volume';
-      if (!canApplyTriSuggestion(w, action)) continue;
+    let action: OverloadAdjustment['action'] = isQuality ? 'downgrade_today' : 'trim_volume';
+    let cut = 0;
+    if (!didReplace && isQuality) {
+      cut = fittingReduction(w, 'swap_easy', budget);
+      if (cut > 0) { action = 'swap_easy'; didReplace = true; }
     }
-
-    const proposedReduction = Math.min(estimatedReduction(w, action, planTSS), budget);
-    if (proposedReduction <= 0) continue;
-
-    mods.push({
-      workoutId: w.id!,
-      workoutLabel: w.n || w.t || w.id!,
-      discipline: w.discipline as Discipline,
-      action,
-      tssReduction: Math.round(proposedReduction),
-    });
-    budget -= proposedReduction;
+    if (cut <= 0) cut = fittingReduction(w, action, budget);
+    if (cut <= 0) continue;
+    mods.push(adjustmentFor(w, action, cut));
+    budget -= cut;
   }
 
   return mods;
