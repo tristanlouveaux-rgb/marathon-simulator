@@ -369,19 +369,19 @@ describe('postSessionSentence — shared post-session copy (running Tier 1 + tri
   });
 
   it('returns "Solid session" at 100–129%', () => {
-    expect(postSessionSentence(43, 100)).toBe('Solid session today (43 TSS). Rest up and recover.');
-    expect(postSessionSentence(43, 99.5)).toBe('Solid session today (43 TSS). Rest up and recover.'); // rounds to 100
+    expect(postSessionSentence(43, 100)).toBe('Solid session today. 43 TSS logged. Rest up and recover.');
+    expect(postSessionSentence(43, 99.5)).toBe('Solid session today. 43 TSS logged. Rest up and recover.'); // rounds to 100
     expect(postSessionSentence(60, 129.4)).toContain('Solid session');
   });
 
   it('returns "Big session" at 130%+', () => {
     const msg = postSessionSentence(85, 145);
-    expect(msg).toContain('Big session today (85 TSS)');
+    expect(msg).toContain('Big session today. 85 TSS logged.');
     expect(msg).toContain('prioritise recovery');
   });
 
   it('rounds the TSS figure shown in the sentence', () => {
-    expect(postSessionSentence(42.6, 110)).toContain('(43 TSS)');
+    expect(postSessionSentence(42.6, 110)).toContain(' 43 TSS logged.');
   });
 });
 
@@ -389,7 +389,7 @@ describe('postSessionSentence — CTL-anchored 80% tier (adhoc days)', () => {
   it('80-99% acknowledges only when ctlAnchored (session is done, not in progress)', () => {
     expect(postSessionSentence(43, 87)).toBeNull();                          // planned-target case: caller keeps "Nearly at today's target"
     expect(postSessionSentence(43, 87, { ctlAnchored: true }))
-      .toBe("Good training today (43 TSS), most of a typical day's load.");
+      .toBe("Good training today. 43 TSS logged, most of a typical day's load.");
   });
 
   it('below 80% returns null even when ctlAnchored', () => {

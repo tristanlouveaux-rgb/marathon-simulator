@@ -918,6 +918,11 @@ function derivePrimaryMessage(
   // Was today's actual session heavy relative to chronic daily load?
   // CTL in signals is already ÷7 (daily equivalent). Compare raw TSS to that.
   const actualTSS = strain?.actualTSS ?? 0;
+  // The TSS a sentence quotes: the day's strain TSS, the Strain ring's number
+  // (strainTSS), so the card never shows two numbers for today. The tiers stay
+  // gated on sessions (sp, actualTSS): steps alone never print "session".
+  // Triathlon's capacityStrainNote quotes the same number (cs.todayTSS).
+  const quotedTSS = strain?.strainTSS ?? actualTSS;
   const dailyCTL = sig.ctlNow > 0 ? sig.ctlNow : null;
   const sessionHeavy = trained && dailyCTL != null && actualTSS > dailyCTL * 1.2;
 
@@ -933,9 +938,12 @@ function derivePrimaryMessage(
     // stays capacity-based, the sentence carries the rehab-cap message.
     if (trained && sp >= 130 && actualTSS > 0) {
       const plannedTSS = actualTSS / (sp / 100);
+      // The clause reads the canonical capacity percent (computeCapacityStrain,
+      // the one triathlon's call-out reads) when the context carries it.
       const capacityAnchor = Math.max(plannedTSS, dailyCTL ?? 0);
-      const capacityPct = capacityAnchor > 0 ? (actualTSS / capacityAnchor) * 100 : sp;
-      return injuryCapOvershootSentence(actualTSS, plannedTSS, capacityPct);
+      const capacityPct = strain?.capacityStrainPct
+        ?? (capacityAnchor > 0 ? (actualTSS / capacityAnchor) * 100 : sp);
+      return injuryCapOvershootSentence(quotedTSS, plannedTSS, capacityPct);
     }
     // Tailor the message to whether the user actually has training options.
     // Full-stop message only when the stance routed to 'rest' above; for
@@ -952,7 +960,7 @@ function derivePrimaryMessage(
   // ── Tier 1: Session complete (strain-based) ─────────────────────────────
   if (strain?.isRestDayOverreaching)
     return 'High load on a rest day. Recovery for upcoming sessions is impaired.';
-  const postNote = postSessionSentence(actualTSS, sp);
+  const postNote = postSessionSentence(quotedTSS, sp);
   if (postNote) return postNote;
 
   // ── Tier 2: Red flags ───────────────────────────────────────────────────

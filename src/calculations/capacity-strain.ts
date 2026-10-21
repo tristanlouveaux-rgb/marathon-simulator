@@ -120,17 +120,25 @@ export function computeCapacityStrain(s: SimulatorState): CapacityStrain {
  * session still in progress — that case keeps the caller's "Nearly at today's
  * target" copy, so the tier is gated off by default.
  *
+ * `dayTSS` is the day's strain TSS, the number the Strain ring beside the
+ * sentence shows (sessions plus passive step and active-minute load,
+ * computeDayStrainTSS). The copy states it as the day's logged load, not as the
+ * session's own figure: running and HYROX gate the tier on sessions only while
+ * the ring adds steps, and the card showed two numbers for today when the
+ * sentence quoted session TSS ("Solid session today (44 TSS)." beside a ring
+ * reading 71, 2026-10-22).
+ *
  * Rounds before comparing so the threshold matches the displayed percent.
  * Returns null below the active threshold.
  */
-export function postSessionSentence(actualTSS: number, strainPct: number, opts?: { ctlAnchored?: boolean }): string | null {
+export function postSessionSentence(dayTSS: number, strainPct: number, opts?: { ctlAnchored?: boolean }): string | null {
   const pct = Math.round(strainPct);
   if (pct >= 130)
-    return `Big session today (${Math.round(actualTSS)} TSS). Rest up and prioritise recovery for the next 24 hours.`;
+    return `Big session today. ${Math.round(dayTSS)} TSS logged. Rest up and prioritise recovery for the next 24 hours.`;
   if (pct >= 100)
-    return `Solid session today (${Math.round(actualTSS)} TSS). Rest up and recover.`;
+    return `Solid session today. ${Math.round(dayTSS)} TSS logged. Rest up and recover.`;
   if (opts?.ctlAnchored && pct >= 80)
-    return `Good training today (${Math.round(actualTSS)} TSS), most of a typical day's load.`;
+    return `Good training today. ${Math.round(dayTSS)} TSS logged, most of a typical day's load.`;
   return null;
 }
 

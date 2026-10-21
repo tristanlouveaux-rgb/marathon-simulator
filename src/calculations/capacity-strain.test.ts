@@ -31,7 +31,7 @@ describe('capacityStrainNote — note priority', () => {
 
   it('without overshoot, falls through to the capacity tiers', () => {
     expect(capacityStrainNote({ ...base, injuryCapOvershoot: false }))
-      .toBe("Good training today (42 TSS), most of a typical day's load.");
+      .toBe("Good training today. 42 TSS logged, most of a typical day's load.");
   });
 
   it('null below all tiers when no fallback is supplied (legacy contract)', () => {
@@ -59,6 +59,6 @@ describe('capacityStrainNote — note priority', () => {
     expect(capacityStrainNote(
       { ...base, injuryCapOvershoot: false },
       'Bike load is elevated relative to your baseline.',
-    )).toBe("Good training today (42 TSS), most of a typical day's load.");
+    )).toBe("Good training today. 42 TSS logged, most of a typical day's load.");
   });
 });
