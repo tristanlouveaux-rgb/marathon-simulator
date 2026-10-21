@@ -23,6 +23,9 @@ import type { TriSuggestionMod } from './tri-suggestion-aggregator';
 import type { SimulatorState } from '@/types/state';
 import { TL_PER_MIN } from '@/constants';
 import { computeWeekRawTSS } from './fitness-model';
+import { isTriQualitySession } from './tri-suggestion-apply';
+import { generateTriathlonPlan } from '@/workouts/plan_engine.triathlon';
+import { getDefaultState } from '@/state/store';
 
 // s.w is 1-based (store.ts default w: 1): the current week is wks[s.w - 1], so
 // these fixtures put the week under test at wks[0] with w: 1.
@@ -698,5 +701,47 @@ describe('detectCrossTrainingOverload — answered proposals', () => {
     const next = detectCrossTrainingOverload(s, 0);
     expect(next).not.toBeNull();
     expect(next!.crossTrainingTSS).toBe(260); // 40 + 220, the 220 answered earlier is out
+  });
+});
+
+// ─── Quality sessions are never trimmed (Tristan, 2026-10-21, D3) ──────────
+// The builders' rule, kept by decision: a quality session takes a downgrade or
+// a swap, never a trim. When neither fits the budget the session gets no
+// proposal (no trim fallback), and the pop-up moves to a discipline with a
+// change (D1).
+
+describe('detectCrossTrainingOverload — quality sessions are never trimmed', () => {
+  it('generated plans: every proposed trim targets a non-quality session', () => {
+    let trims = 0;
+    for (const distance of ['olympic', 'ironman']) {
+      const base = {
+        ...getDefaultState(), eventType: 'triathlon', w: 1, tw: 20, v: 50,
+        pac: { e: 300, t: 250, i: 230, m: 275, r: 200 }, wks: [],
+        triConfig: {
+          distance, timeAvailableHoursPerWeek: 10, volumeSplit: { swim: 0.175, bike: 0.475, run: 0.35 },
+          skillRating: { swim: 3, bike: 3, run: 3 }, bike: { hasPowerMeter: true, ftp: 220 }, swim: { cssSecPer100m: 100 }, weeksToRace: 20,
+        },
+      } as unknown as SimulatorState;
+      base.wks = generateTriathlonPlan(base);
+      for (let wi = 0; wi < base.wks.length; wi += 3) {
+        for (const pct of [0.16, 0.45]) for (const sport of ['tennis', 'cycling', 'swimming']) {
+          const s = structuredClone(base);
+          s.w = wi + 1;
+          const planned = (s.wks[wi].triWorkouts ?? []).reduce((a, w) => a + (w.aerobic ?? 0) + (w.anaerobic ?? 0), 0);
+          s.wks[wi].adhocWorkouts = [{ id: 'xt', t: 'cross', n: sport, d: '90min', r: 6, iTrimp: pct * planned * 150 } as any];
+          const o = detectCrossTrainingOverload(s, 0);
+          if (!o) continue;
+          const byId = new Map((s.wks[wi].triWorkouts ?? []).map(w => [w.id, w]));
+          for (const d of ['swim', 'bike', 'run'] as const) {
+            for (const m of [...o.options[d].reduceMods, ...o.options[d].replaceMods]) {
+              if (m.action !== 'trim_volume') continue;
+              trims += 1;
+              expect(isTriQualitySession(byId.get(m.workoutId)!), `${distance} wk${wi + 1} ${m.workoutLabel}`).toBe(false);
+            }
+          }
+        }
+      }
+    }
+    expect(trims).toBeGreaterThan(50);
   });
 });
