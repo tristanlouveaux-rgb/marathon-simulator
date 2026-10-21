@@ -385,6 +385,16 @@ The figures in the examples (a 110 TSS ride, cuts of 12 and 41 TSS) are worked f
 
 ---
 
+**Decisions (Tristan, 2026-10-21):**
+1. B: the cut matches the extra load (easy erg and easy runs shorten toward 20 min, capped at the unanswered load).
+2. B: Reduce, Keep and Push to next week. Replace is later.
+3. B as step 2: after v1, offer to turn the next day's tempo or interval run into an easy run of the same length when the sport was 50 TSS or more. Station work stays.
+4. B: the pop-up appears only from 25% (triathlon's extreme level). The Home "Reduce session load" button is the quiet path from 15% (triathlon's moderate level), so smaller loads can still be answered without a pop-up.
+
+Build after lane `fix/hyrox-h2b` merges (needs its session pricing). The shared detector fixes (triathlon's slope-1.875 saturation curve; activities with no iTRIMP valued at 0) go first, in their own commits.
+
+---
+
 ## 9. Out of scope / later
 
 - **Other sports in MTL.** Needs per-sport factors that do not exist. For scale, the existing formula puts a 90-minute match at RPE 7 at 630 MTL if treated as interval running (48% of the intermediate cap of 1300), or 378 as easy running (29%) (h2b `mtl.ts:37-63`, `hyrox-constants.ts:187-194`, `:269-273`). Whether off-plan runs and rows should enter tracked MTL is a related decision: it would move the MTL readiness floor and let chronic MTL exceed the plan.
