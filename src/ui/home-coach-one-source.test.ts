@@ -149,4 +149,17 @@ describe('HYROX long run is a hard day on the coach line (D13)', () => {
     expect(ctx.todayIsHard).toBe(true);
     expect(computeDailyCoach(s).primaryMessage).toBe(`Sleep 40/100 last night. Consider converting ${lr!.n} to easy effort.`);
   });
+
+  it('the day before the long run: the look-ahead carries its plan name', () => {
+    const s = hyroxState();
+    setState(s);
+    const lr = (s.wks[0].triWorkouts ?? []).find(w => w.t === 'hyrox_run_easy' && (w as any).longRun);
+    expect(lr?.dayOfWeek, 'the long run is not on Monday').toBeGreaterThan(0);
+    vi.setSystemTime(new Date(PLAN_MONDAY.getTime() + (lr!.dayOfWeek! - 1) * 86400000));
+    const hardTomorrow = getPlannedDayTSSContext(s, 1).workoutsForDay(lr!.dayOfWeek!).filter(w => w.isHard);
+    const ctx = deriveStrainContext(s);
+    expect(ctx.upcomingHard?.whenLabel).toBe('tomorrow');
+    expect(ctx.upcomingHard?.name).toBe(hardTomorrow[0].name);
+    if (hardTomorrow.length === 1) expect(ctx.upcomingHard?.name).toBe(lr!.n);
+  });
 });

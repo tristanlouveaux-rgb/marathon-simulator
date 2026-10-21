@@ -248,7 +248,7 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
     if (overall === 'Overreaching') {
       if (crossIsDominant) {
         return upcomingHard
-          ? `Cross-training has pushed your load above baseline. Ease into ${upcomingHard.dayLabel}'s ${upcomingHard.workout.t.replace(/_/g, ' ')} and cut discretionary activity this week.`
+          ? `Cross-training has pushed your load above baseline. Ease into ${upcomingHard.dayLabel}'s ${upcomingHard.workout.n?.trim() || upcomingHard.workout.t.replace(/_/g, ' ')} and cut discretionary activity this week.`
           : `Cross-training has pushed your load above baseline. Nothing hard is planned in the next couple of days, so planned sessions are fine. Cut discretionary activity this week.`;
       }
       if (crossIsSignificant) {
@@ -264,7 +264,7 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
     if (overall === 'Ease Back') {
       if (crossIsDominant) {
         return upcomingHard
-          ? `Cross-training has added significant load this week. Ease into ${upcomingHard.dayLabel}'s ${upcomingHard.workout.t.replace(/_/g, ' ')} and hold off on extra discretionary activity.`
+          ? `Cross-training has added significant load this week. Ease into ${upcomingHard.dayLabel}'s ${upcomingHard.workout.n?.trim() || upcomingHard.workout.t.replace(/_/g, ' ')} and hold off on extra discretionary activity.`
           : `Cross-training has added significant load this week. Nothing hard is planned in the next couple of days, so planned sessions are fine. Hold off on extra discretionary activity.`;
       }
       const tail = others ? ` ${others} ${others.includes(' and ') ? 'are' : 'is'} fine today.` : '';

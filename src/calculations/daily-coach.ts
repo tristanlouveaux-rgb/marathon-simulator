@@ -121,8 +121,9 @@ export interface StrainContext {
   /** Today's planned workout is a quality/hard session. */
   todayIsHard: boolean;
   /** First hard session in the next 1-2 days (excluding today). Null when nothing hard is upcoming.
-   *  Day labels are 'tomorrow' / 'the day after' so copy reads naturally without absolute weekday. */
-  upcomingHard: { whenLabel: string; type: string } | null;
+   *  Day labels are 'tomorrow' / 'the day after' so copy reads naturally without absolute weekday.
+   *  `name` is the session's plan name (the copy prints it; `type` only when it is empty). */
+  upcomingHard: { whenLabel: string; type: string; name?: string } | null;
   /** Recent cross-training label + TSS in last 48h (null if none > 25 TSS). */
   recentCrossTraining: { label: string; tss: number } | null;
   /** Today's raw Signal B TSS from logged sessions (0 if nothing logged). Used to judge session weight on adhoc days. */
@@ -278,7 +279,7 @@ export function deriveStrainContext(s: SimulatorState): StrainContext {
     const hit = plannedCtx.workoutsForDay(targetDow)
       .find(w => w.status !== 'skip' && w.status !== 'replaced' && w.isHard);
     if (hit) {
-      upcomingHard = { whenLabel: offset === 1 ? 'tomorrow' : 'the day after', type: hit.type };
+      upcomingHard = { whenLabel: offset === 1 ? 'tomorrow' : 'the day after', type: hit.type, name: hit.name };
       break;
     }
   }
@@ -896,6 +897,15 @@ export function detectEasyDriftPattern(s: SimulatorState): string | null {
 // sentence is shaped by today's workout context (hard/easy/rest) and secondary
 // modifiers (phase, CTL trend, week RPE, recent cross-training).
 
+/** What the look-ahead copy calls the upcoming hard session: its plan name
+ *  ("Long Run"), else its type with underscores as spaces. The type alone read
+ *  "Treat tomorrow's hyrox run easy as a chance to ease in." for the HYROX
+ *  long run (2026-10-22). */
+function upcomingHardLabel(u: NonNullable<StrainContext['upcomingHard']>): string {
+  const name = u.name?.trim();
+  return name ? name : u.type.replace(/_/g, ' ');
+}
+
 function derivePrimaryMessage(
   sig: CoachSignals,
   readiness: ReadinessResult,
@@ -980,10 +990,10 @@ function derivePrimaryMessage(
       return `Load spike (${sig.acwr}x). Reduce or skip ${wn}.`;
     if (restDay)
       return strain?.upcomingHard
-        ? `Load spike (${sig.acwr}x). Rest is well placed. Treat ${strain.upcomingHard.whenLabel}'s ${strain.upcomingHard.type.replace(/_/g, ' ')} as a chance to ease in.`
+        ? `Load spike (${sig.acwr}x). Rest is well placed. Treat ${strain.upcomingHard.whenLabel}'s ${upcomingHardLabel(strain.upcomingHard)} as a chance to ease in.`
         : `Load spike (${sig.acwr}x). Rest is well placed. No hard sessions in the next couple of days.`;
     return strain?.upcomingHard
-      ? `Load spike (${sig.acwr}x). Keep today easy. Treat ${strain.upcomingHard.whenLabel}'s ${strain.upcomingHard.type.replace(/_/g, ' ')} as a chance to ease in.`
+      ? `Load spike (${sig.acwr}x). Keep today easy. Treat ${strain.upcomingHard.whenLabel}'s ${upcomingHardLabel(strain.upcomingHard)} as a chance to ease in.`
       : `Load spike (${sig.acwr}x). Keep today easy. Nothing hard is planned in the next couple of days.`;
   }
 
@@ -1057,10 +1067,10 @@ function derivePrimaryMessage(
       return `Training load spiking (${sig.acwr}x). Keep ${wn} controlled.`;
     if (restDay)
       return strain?.upcomingHard
-        ? `Training load spiking (${sig.acwr}x). Rest is well placed. ${strain.upcomingHard.whenLabel.charAt(0).toUpperCase() + strain.upcomingHard.whenLabel.slice(1)}'s ${strain.upcomingHard.type.replace(/_/g, ' ')} is the next thing to watch.`
+        ? `Training load spiking (${sig.acwr}x). Rest is well placed. ${strain.upcomingHard.whenLabel.charAt(0).toUpperCase() + strain.upcomingHard.whenLabel.slice(1)}'s ${upcomingHardLabel(strain.upcomingHard)} is the next thing to watch.`
         : `Training load spiking (${sig.acwr}x). Rest is well placed.`;
     return strain?.upcomingHard
-      ? `Training load spiking (${sig.acwr}x). Easy session is well placed today. ${strain.upcomingHard.whenLabel.charAt(0).toUpperCase() + strain.upcomingHard.whenLabel.slice(1)}'s ${strain.upcomingHard.type.replace(/_/g, ' ')} is the next thing to watch.`
+      ? `Training load spiking (${sig.acwr}x). Easy session is well placed today. ${strain.upcomingHard.whenLabel.charAt(0).toUpperCase() + strain.upcomingHard.whenLabel.slice(1)}'s ${upcomingHardLabel(strain.upcomingHard)} is the next thing to watch.`
       : `Training load spiking (${sig.acwr}x). Easy session is well placed today.`;
   }
 
