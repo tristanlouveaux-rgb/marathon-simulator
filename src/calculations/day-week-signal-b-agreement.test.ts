@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { computeTodaySignalBTSS, computeWeekRawTSS, normalizeiTrimp, getDailyLoadHistory } from './fitness-model';
 import { computeTodayDoubleDayBonus } from './double-day';
+import { buildDailySignalBTSS } from './sleep-insights';
 import { TL_PER_MIN } from '@/constants';
 import { localDateKey } from '@/utils/local-date';
 import type { Week } from '@/types/state';
@@ -122,5 +123,37 @@ describe('Load drill-down: activity rows sum to the day', () => {
     expect(bonus).toBeGreaterThan(0);
     // Each row rounds on its own; the day rounds once.
     expect(Math.abs(rowsOf(e) + bonus - e.tss)).toBeLessThanOrEqual(2);
+  });
+});
+
+/**
+ * The sleep-debt series (buildDailySignalBTSS: Home's sleep-debt outlook, the
+ * Readiness and Sleep pages, the coach) had its own per-activity rule: an
+ * activity record counted only its iTRIMP, so a rated in-app HYROX session
+ * counted 0 there and 133 on the Strain ring. It now calls the same helpers.
+ * It still leaves out manual adhoc entries with no timestamp (filed by weekday)
+ * and the double-day bonus.
+ */
+describe('sleep-debt series prices an activity as today\'s strain does', () => {
+  it('activity records: the rated HR-less session, strength override, skip and iTRIMP days agree', () => {
+    const wk = week();
+    const byDate = buildDailySignalBTSS([wk]);
+    for (const i of [0, 1, 2, 3]) {
+      expect(Math.round(byDate[key(i)] ?? 0)).toBe(computeTodaySignalBTSS(wk, key(i)));
+    }
+    expect(Math.round(byDate[key(0)])).toBe(Math.round(60 * TL_PER_MIN[8])); // was 0
+  });
+
+  it('a synced adhoc entry with no activity record agrees; its twin counts once', () => {
+    const wk = week();
+    const ts = day(5).toISOString();
+    wk.adhocWorkouts = [
+      { id: 'garmin-row-1', t: 'cross', n: 'Row', d: '40min', r: 7, rpe: 7, garminTimestamp: ts, garminDurationMin: 40 } as any,
+      // Twin of 'hx-density' under its key: the record carries the load.
+      { id: 'hx-density', t: 'cross', n: 'Station density', d: '60min', r: 8, rpe: 8, garminTimestamp: day(0).toISOString() } as any,
+    ];
+    const byDate = buildDailySignalBTSS([wk]);
+    expect(Math.round(byDate[key(5)])).toBe(computeTodaySignalBTSS(wk, key(5)));
+    expect(Math.round(byDate[key(0)])).toBe(computeTodaySignalBTSS(wk, key(0)));
   });
 });

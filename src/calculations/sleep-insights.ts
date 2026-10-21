@@ -6,8 +6,7 @@
  */
 
 import type { PhysiologyDayEntry } from '@/types/state';
-import { TL_PER_MIN } from '@/constants';
-import { normalizeiTrimp } from '@/calculations/fitness-model';
+import { signalBActualTSS, signalBAdhocTSS, ratedRpeOf } from '@/calculations/fitness-model';
 import { localDateKey } from '@/utils/local-date';
 
 export interface SleepInsightInput {
@@ -427,11 +426,21 @@ const SURPLUS_CREDIT_CAP_SEC = 60 * 60;
 
 
 /**
- * Build a Record<YYYY-MM-DD, Signal B TSS> from plan weeks.
- * Signal B = raw physiological load (no runSpec discount).
- * Two sources: garminActuals (matched runs and synced-activity twins) and
- * adhocWorkouts (cross-training). Each activity counts once: an adhoc entry is
- * skipped when its garminActuals twin already added load for it.
+ * Build a Record<YYYY-MM-DD, Signal B TSS> from plan weeks, keyed by local day.
+ * Signal B = raw physiological load (no runSpec discount). Each activity is
+ * valued with the per-activity rule today's strain and the weekly total use
+ * (signalBActualTSS with the week's rating for an activity record,
+ * signalBAdhocTSS for an adhoc entry; fitness-model.ts), and counts once: an
+ * adhoc entry is skipped when an activity record covers it (same key or same
+ * garminId), as computeTodaySignalBTSS skips it.
+ *
+ * Before 2026-10-22 this had its own rule: an activity record counted only its
+ * iTRIMP (0 without one), so a rated in-app HYROX session counted 0 in the
+ * sleep-debt series and 133 on the Strain ring.
+ *
+ * Differs from computeTodaySignalBTSS in two places: a manual adhoc entry with
+ * no timestamp (filed by weekday, which needs the plan start) is not counted,
+ * and the double-day bonus is not added. Tracking side.
  */
 export function buildDailySignalBTSS(
   wks: any[],
@@ -445,43 +454,34 @@ export function buildDailySignalBTSS(
     ...(archivedPlans ?? []).flatMap(p => p.weeks ?? []),
   ];
   for (const wk of allWeeks) {
-    // One set per week, seeded by the garminActuals loop: every synced activity
+    // One set per week, seeded by the activity records: every synced activity
     // logged as adhoc also has a garminActuals twin with the same garminId
     // (addAdhocWorkoutFromPending), so without the seed each one counted twice.
-    // An id is marked only once it has added load, so a twin without HR data
-    // still leaves the adhoc entry's RPE estimate to count.
-    // The twin's KEY is marked too: the Strava upgrade (activity-matcher.ts)
-    // rewrites the twin's garminId to strava-<id> but keeps its key and the
-    // adhoc id as garmin-<old id>, so after an upgrade only the key still pairs
-    // them (computeWeekRawTSS and computeTodaySignalBTSS skip on the key too).
     const seenGarminIds = new Set<string>();
     for (const [key, actual] of Object.entries(wk.garminActuals ?? {})) {
       const a = actual as any;
       if (!a.startTime) continue;
-      if (a.garminId && seenGarminIds.has(a.garminId)) continue;
-      const date = localDateKey(a.startTime as string); // local day, as sleep entries are keyed
-      const tss = (a.iTrimp != null && a.iTrimp > 0)
-        ? normalizeiTrimp(a.iTrimp as number)
-        : 0;
-      if (tss > 0) {
-        byDate[date] = (byDate[date] ?? 0) + tss;
-        if (a.garminId) seenGarminIds.add(a.garminId);
-        if (key.startsWith('garmin-')) seenGarminIds.add(key.slice('garmin-'.length));
+      if (a.garminId) {
+        if (seenGarminIds.has(a.garminId)) continue;
+        seenGarminIds.add(a.garminId);
       }
+      const date = localDateKey(a.startTime as string); // local day, as sleep entries are keyed
+      const tss = signalBActualTSS(a, ratedRpeOf(wk.rated?.[key]));
+      if (tss > 0) byDate[date] = (byDate[date] ?? 0) + tss;
     }
     for (const w of (wk.adhocWorkouts ?? [])) {
       const wo = w as any;
       if (!wo.id?.startsWith('garmin-')) continue;
+      // Twin of an activity record: that record carries the load, even after
+      // the Strava upgrade (activity-matcher.ts) rewrote its garminId to
+      // strava-<id> and left only the key pairing them.
+      if (wk.garminActuals?.[wo.id]) continue;
       const rawId = (wo.id as string).slice('garmin-'.length);
       if (rawId && seenGarminIds.has(rawId)) continue;
       if (rawId) seenGarminIds.add(rawId);
       const date: string | null = wo.garminTimestamp ? localDateKey(wo.garminTimestamp as string) : null;
       if (!date) continue;
-      const tss = (wo.iTrimp != null && wo.iTrimp > 0)
-        ? normalizeiTrimp(wo.iTrimp as number)
-        : (wo.garminDurationMin != null && wo.rpe != null)
-          ? (wo.garminDurationMin as number) * (TL_PER_MIN[Math.round(wo.rpe as number)] ?? 1.15)
-          : 0;
+      const tss = signalBAdhocTSS(wo, undefined);
       if (tss > 0) byDate[date] = (byDate[date] ?? 0) + tss;
     }
   }
