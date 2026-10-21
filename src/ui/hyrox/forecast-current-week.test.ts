@@ -16,7 +16,8 @@ import { generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engi
 import { HYROX_WEEKLY_SESSIONS, HYROX_MTL_CAP, HYROX_HOURS_RANGE } from '@/constants/hyrox-constants';
 import { renderHyroxForecastView } from './forecast-view';
 import { renderHyroxChipDetail } from './forecast-chip-detail-view';
-import { hyroxWeekLine } from './forecast-labels';
+import { hyroxWeekLine, fmtSessionsPerWeek } from './forecast-labels';
+import { plannedHyroxSessionsPerWeek } from '@/calculations/hyrox-volume';
 import type { SimulatorState } from '@/types/state';
 
 function hyroxState(): SimulatorState {
@@ -119,5 +120,46 @@ describe('HYROX Forecast at the end of the plan', () => {
     document.body.innerHTML = '<div id="app-root"></div>';
     renderHyroxChipDetail('training');
     expect(pageText()).toContain('Plan complete');
+  });
+});
+
+// ─── One sessions-per-week number (ISSUE-406 (f)) ────────────────────────────
+// The Training chip counted every session of wks[s.w] (next week) while the
+// Race order footer printed plannedHyroxSessionsPerWeek: "5/wk" beside
+// "4.5 sessions/wk". Both print the footer's number now.
+function trainingChipHeadline(): string {
+  const chip = document.querySelector('[data-hx-chip="training"]');
+  return (chip?.children[1]?.textContent ?? '').trim();
+}
+
+describe('Training chip and Race order footer', () => {
+  it('print the same sessions-per-week number', () => {
+    const s = hyroxState();
+    s.hyroxConfig!.raceDate = '2027-01-17'; // a race date shows the footer
+    // Make the current week differ from the next so a one-week count would show.
+    s.wks[1].triWorkouts = (s.wks[1].triWorkouts ?? []).slice(1);
+    setState(s);
+    renderHyroxForecastView();
+
+    const expected = fmtSessionsPerWeek(plannedHyroxSessionsPerWeek(s, 4));
+    expect(trainingChipHeadline()).toBe(`${expected}/wk`);
+    const footer = pageText().match(/(\d+(?:\.\d)?) sessions?\/wk for/);
+    expect(footer?.[1]).toBe(expected);
+  });
+
+  it('race week reads the race week, not "0/wk" past the end of the plan', () => {
+    const s = hyroxState();
+    s.w = s.tw;
+    setState(s);
+    renderHyroxForecastView();
+    expect(trainingChipHeadline()).not.toBe('0/wk');
+    expect(trainingChipHeadline()).toBe(`${fmtSessionsPerWeek(plannedHyroxSessionsPerWeek(s, 4))}/wk`);
+    expect(pageText()).not.toContain('Build a plan');
+  });
+
+  it('fmtSessionsPerWeek drops a trailing .0', () => {
+    expect(fmtSessionsPerWeek(4.5)).toBe('4.5');
+    expect(fmtSessionsPerWeek(5)).toBe('5');
+    expect(fmtSessionsPerWeek(4.25)).toBe('4.3');
   });
 });

@@ -44,3 +44,14 @@ export function hyroxRunPaceCaption(provenance: HyroxRunPaceProvenance): string 
   if (provenance === 'seed') return 'Population est.';
   return 'Set manually.';
 }
+
+/**
+ * Planned HYROX sessions per week as the Forecast prints it: one decimal,
+ * a whole number without ".0" ("4.5", "5"). The Training chip and the Race
+ * order footer print the same number (plannedHyroxSessionsPerWeek, the
+ * station horizon's sessions_per_week) through this, so they cannot read
+ * "5/wk" and "4.5 sessions/wk" side by side (ISSUE-406 (f)).
+ */
+export function fmtSessionsPerWeek(n: number): string {
+  return n.toFixed(1).replace(/\.0$/, '');
+}

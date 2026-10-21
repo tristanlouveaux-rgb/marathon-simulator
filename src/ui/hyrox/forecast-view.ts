@@ -34,7 +34,8 @@ import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { buildRacePlanEntryCard, openRacePlanGoalModal, renderHyroxRacePlanView } from './race-plan-view';
 import { hyroxForecastRaceClock } from '@/calculations/hyrox-race-plan';
 import { buildLoseTimeCard, wireLoseTimeCard } from './lose-time-view';
-import { hyroxWeekLine, hyroxRunPaceSourceLabel } from './forecast-labels';
+import { hyroxWeekLine, hyroxRunPaceSourceLabel, fmtSessionsPerWeek } from './forecast-labels';
+import { plannedHyroxSessionsPerWeek } from '@/calculations/hyrox-volume';
 
 function fmtMmSs(sec: number): string {
   if (!Number.isFinite(sec) || sec <= 0) return '—';
@@ -589,7 +590,7 @@ function renderTrajectoryFooter(proj: HyroxProjectionMarkers): string {
   if (proj.weeksRemaining <= 0) return '';
   const sessions = proj.plannedSessionsPerWeek;
   const sessionsLabel = sessions > 0
-    ? `${sessions.toFixed(1)} session${sessions >= 1.5 ? 's' : ''}/wk`
+    ? `${fmtSessionsPerWeek(sessions)} session${sessions >= 1.5 ? 's' : ''}/wk`
     : 'no planned sessions yet';
   return `<div style="font-size:11px;color:var(--c-faint);padding:10px 0 0;border-top:1px solid rgba(0,0,0,0.05);margin-top:8px;line-height:1.5">${sessionsLabel} for ${proj.weeksRemaining.toFixed(1)} weeks. Gain rates anchored on rowing, local muscular endurance, and HIFT adaptation literature; per-class differences applied (cardio, strength-endurance, grip-carry). Taper is gradiented (Mujika 2002): gains shrink toward race day.</div>`;
 }
@@ -924,21 +925,23 @@ function buildHyroxHero(
     ? 'Course-neutral'
     : `${courseFactorPct > 0 ? '+' : '−'}${Math.abs(courseFactorPct).toFixed(1)}% vs neutral`;
 
-  // Training chip — sessions in the current planned week + plan phase.
-  const currentWk = s.wks?.[s.w ?? 0];
-  const sessionsThisWeek = currentWk?.triWorkouts
-    ? currentWk.triWorkouts.filter(w => w != null).length
-    : 0;
+  // Training chip: the planned sessions per week the forecast reads (the
+  // station horizon's sessions_per_week, plannedHyroxSessionsPerWeek: 4 weeks
+  // from the current week, easy erg work left out), the number the Race order
+  // footer prints. It counted every session of wks[s.w], next week (s.w is
+  // 1-based), so it read "5/wk" beside the footer's "4.5 sessions/wk"
+  // (ISSUE-406 (f)), and "0/wk" with a "Build a plan" prompt in race week.
+  const plannedPerWeek = prediction.projection?.plannedSessionsPerWeek ?? plannedHyroxSessionsPerWeek(s, 4);
   const phasePct = (s.tw && s.tw > 0) ? ((s.w ?? 0) / s.tw) : 0;
   const phaseLabel = phasePct < 0.40 ? 'Base' : phasePct < 0.75 ? 'Build' : phasePct < 0.90 ? 'Peak' : 'Taper';
-  const trainingPresent = sessionsThisWeek > 0;
+  const trainingPresent = plannedPerWeek > 0;
 
   type Chip = { key: string; label: string; headline: string; detail: string; present: boolean; addCta?: string };
   const chips: Chip[] = [
     { key: 'you',      label: 'You',      headline: bandLabel ?? 'Set band',         detail: hx.previousHyroxTimeSec ? fmtMmSs(hx.previousHyroxTimeSec) : '', present: !!bandLabel,    addCta: 'Set in onboarding' },
     { key: 'runpace',  label: 'Run pace', headline: fmtPace(runPaceSecKm),           detail: runPaceSourceDetail,                                           present: runPaceSecKm > 0 },
     { key: 'stations', label: 'Stations', headline: `${calibrated}/${totalStations}`, detail: `${fmtMmSs(prediction.stationsSec)} summed`,                  present: totalStations > 0, addCta: 'Test stations' },
-    { key: 'training', label: 'Training', headline: `${sessionsThisWeek}/wk`,         detail: phaseLabel,                                                    present: trainingPresent,   addCta: 'Build a plan' },
+    { key: 'training', label: 'Training', headline: `${fmtSessionsPerWeek(plannedPerWeek)}/wk`, detail: phaseLabel,                                                    present: trainingPresent,   addCta: 'Build a plan' },
     { key: 'venue',    label: 'Venue',    headline: venue?.city ?? 'Pick race',       detail: venue ? courseFactorDetail : '',                               present: !!venue,           addCta: 'Pick in onboarding' },
   ];
 
