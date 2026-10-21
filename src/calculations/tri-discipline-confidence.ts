@@ -56,7 +56,7 @@ export function computeTriDisciplineConfidence(
     // Session counts aren't stored on fitnessHistory; fall back to
     // garminActuals scan for an approximate count, otherwise 0.
     const wks = state.wks ?? [];
-    const currentWeek = state.w ?? 0;
+    const currentWeek = currentWeekIdx(state);
     const startWeek = Math.max(0, currentWeek - weeks + 1);
     for (let w = startWeek; w <= currentWeek; w++) {
       const wk = wks[w];
@@ -75,7 +75,7 @@ export function computeTriDisciplineConfidence(
 
   // Fallback: no fitnessHistory yet. Count from state.wks directly.
   const wks = state.wks ?? [];
-  const currentWeek = state.w ?? 0;
+  const currentWeek = currentWeekIdx(state);
   const startWeek = Math.max(0, currentWeek - weeks + 1);
   const activeWeeks: Record<Discipline, Set<number>> = {
     swim: new Set(), bike: new Set(), run: new Set(),
@@ -95,6 +95,11 @@ export function computeTriDisciplineConfidence(
     out[d].confidence = bucketConfidence(out[d].weeksActive);
   }
   return out;
+}
+
+/** s.w is 1-based: the week in progress is wks[s.w - 1] (wks[s.w] is next week). */
+function currentWeekIdx(state: SimulatorState): number {
+  return (state.w ?? 1) - 1;
 }
 
 function empty(): DisciplineConfidence {
