@@ -1982,7 +1982,23 @@ function generateWeekSessions(
     // (race week holds no long run). Before, one easy run took it all (66 min
     // in an intermediate 8 h race week).
     const shareSlots = raceWeek ? Math.max(n, structureRuns - (quality ? 1 : 0)) : n;
-    const each = n > 0 ? Math.floor(Math.min(easyCapMin, Math.max(HYROX_RUN_FLOOR_MIN, room / shareSlots))) : 0;
+    let each = n > 0 ? Math.floor(Math.min(easyCapMin, Math.max(HYROX_RUN_FLOOR_MIN, room / shareSlots))) : 0;
+    // Race week never runs more than taper week 1 (the taper never rises, as
+    // taper week 1 against the week before, counted the same way: the
+    // primer, the easy runs, run legs; the race is not in the week). Only
+    // when its easy runs would take it over: fewer runs where the run floor
+    // would lift it above, then each at most its share of what is left; the
+    // last run stays when there is no primer (race week holds a run). The
+    // primer at its shortest (25 min) is not cut: a week the primer alone
+    // takes over stays as it is (review round 7, finding 12: seven-session
+    // open singles race weeks ran two 20-min easy runs beside the primer, 65
+    // min against taper week 1's 63).
+    const raceCapRoom = raceWeek && inputs.prevRunMin != null ? inputs.prevRunMin - brickRunMin - (longMin ?? 0) - qMin() : Infinity;
+    if (n > 0 && n * each > raceCapRoom + 1e-9) {
+      const keep = quality ? 0 : 1;
+      while (n > keep && n * HYROX_RUN_FLOOR_MIN > raceCapRoom + 1e-9) n--;
+      if (n > 0) each = Math.max(HYROX_RUN_FLOOR_MIN, Math.min(each, Math.floor(raceCapRoom / n)));
+    }
     // Race week holds a run whenever it holds a run slot (review 2026-10-13:
     // at a logged load of 30 TSS or less, 25 to 30 race weeks held nothing,
     // the primer above the 110% single-run ceiling and the easy runs under

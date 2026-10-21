@@ -1250,6 +1250,43 @@ describe('HYROX review fixes, round 2 (2026-10-13)', () => {
     expect(off.slice(0, 10)).toEqual([]);
   }, 300000);
 
+  it('race week never runs more than taper week 1, both counted as the running share counts them, unless the primer at its shortest alone does (its easy runs give way first), or with no primer its one easy run at the run floor (race week holds a run), singles, 7-session singles and doubles, every band and hour (review round 7, finding 12: seven-session open singles race weeks ran two 20-min easy runs beside the primer, 65 min against taper week 1\'s 63)', () => {
+    const variants: Array<[string, Partial<OnboardingState>]> = [
+      ['open singles', {}],
+      ['7-session open singles', { hyroxWeeklySessionCount: 7 } as Partial<OnboardingState>],
+      ['open doubles mixed', { hyroxFormat: 'open_doubles', hyroxDivision: 'mixed' } as Partial<OnboardingState>],
+    ];
+    let checked = 0; let primerAlone = 0; let oneFloorRun = 0;
+    const off: string[] = [];
+    for (const [name, over] of variants) {
+      for (const band of BANDS) {
+        for (let hrs = HYROX_HOURS_RANGE[band].min; hrs <= HYROX_HOURS_RANGE[band].max; hrs++) {
+          for (const len of [8, 10, 12, 16, 20, 24]) {
+            const s = build(band, hrs, len, over);
+            const tw = planTrainingWeeks(s);
+            const rw = s.wks[tw - 1];
+            const t1 = s.wks[tw - 2];
+            if (t1?.ph !== 'taper' || !rw) continue;
+            checked++;
+            if (runningMin(rw) <= runningMin(t1) + 1e-6) continue;
+            const ws = prescribed(rw);
+            const easy = ws.filter(w => w.discipline === 'run' && !isQuality(w));
+            const primer = ws.some(isQuality);
+            if (primer && easy.length === 0) { primerAlone++; continue; }
+            if (!primer && easy.length === 1 && easy[0].estimatedDurationMin === HYROX_RUN_FLOOR_MIN) { oneFloorRun++; continue; }
+            off.push(`${name} ${band} ${hrs}h ${len}w W${tw}: ${runningMin(rw).toFixed(1)} min against taper week 1's ${runningMin(t1).toFixed(1)} (${ws.map(w => `${w.n} ${w.estimatedDurationMin}`).join(', ')})`);
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(1000);
+    // Measured 2026-10-21 (review round 7): the 25-min primer above taper
+    // week 1's one easy run of 21 to 24 min, 2 h plans (16 of them).
+    expect(primerAlone).toBeLessThanOrEqual(16);
+    expect(oneFloorRun).toBe(0);
+    expect(off.slice(0, 10)).toEqual([]);
+  }, 600000);
+
   it('race week keeps the reference week\'s run count whenever 0.30 of the reference week holds an easy run at the run floor beside the primer and the circuit (review round 2: 23 of 168 race weeks held fewer runs, 4 before)', () => {
     // Sheet taper.content: keep the run count. The exempt circuit's warm-up
     // is exempt in race week (a fixed part of the exempt circuit), so a race
