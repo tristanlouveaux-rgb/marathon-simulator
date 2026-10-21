@@ -1712,7 +1712,9 @@ Where:
 
 A single `plannedHyroxSessionsPerWeek` count drives all three classes. Why: one Hyrox-style workout typically hits multiple stations and a run, so per-station counting would either double-count (every workout = 1 to every class) or be structurally noisy (only 0.3 sled sessions/wk would read as undertraining for sled even though every Hyrox session involves loaded movement). The literature reports class-level adaptation rates against total Hyrox-style frequency — we mirror that.
 
-`plannedHyroxSessionsPerWeek` reads `wk.triWorkouts` over the next 4 weeks and averages session count. Lesson from triathlon: PLANNED sessions, not historical. Historical reads 0/wk on a fresh plan and trips the undertrain penalty, making the projection slower than current.
+`plannedHyroxSessionsPerWeek` reads `wk.triWorkouts` over 4 plan weeks starting at the current week (`wks[s.w - 1]`) and averages session count. Lesson from triathlon: PLANNED sessions, not historical. Historical reads 0/wk on a fresh plan and trips the undertrain penalty, making the projection slower than current.
+
+*Window start (2026-10-21, lane ctd, `eefe083`).* Until then the window started at `wks[s.w]`. `s.w` is 1-based (store default `w: 1`), so that is next week: the week in progress never counted, and in race week the loop read past the plan and returned 0 sessions/week, the undertrain case the paragraph above warns about. It now starts at the current week; window length, the easy-erg exclusion and the closing-week skip are unchanged, and no constant changed. What moves: the `sessions_per_week` input to the station and Roxzone horizon (`buildStationProjection`, `race-prediction.hyrox.ts`), so the race-day station projection, and the Race order footer and Training chip that print the same number. The review measured sessions/week shifting by -0.25 to +0.5 across plan weeks and race week reading 3 to 4 instead of 0; the current-time headline totals did not change. Ported from the unmerged `fix/week-index-followup` (`bbdb7bf`, 2026-10-07). Kept pending Tristan's keep or revert call.
 
 ### Anchoring `currentSec` — display consistency rule
 
