@@ -296,8 +296,10 @@ function computeCrossTrainingTSS(wk: Week): CrossTrainingSummary {
   // planned `cross`/`gym` session in triWorkouts is plan, not overload.
   // Planned sessions stored in adhocWorkouts are plan too (isPlannedAdhocId:
   // user-added `adhoc-` sessions and injury capability offers, `holiday-`,
-  // `benchmark-`), with any done record under the same id. Signal B skips the
-  // same ids (computeWeekRawTSS). SCIENCE_LOG §DP.
+  // `benchmark-`), with any done record under the same id. Signal B
+  // (computeWeekRawTSS) skips the planned entries too but counts their done
+  // records as load; here a completed planned session is plan, on purpose
+  // (the question is load outside the plan). SCIENCE_LOG §DP item 2.
   const planIds = new Set(
     (wk.triWorkouts ?? []).map(w => w.id).filter((id): id is string => !!id),
   );
