@@ -431,6 +431,24 @@ import {
 //   own (a jog, the SkiErg, the Row Erg as full-body), keeping its share;
 // - with no warm-up left, round 1 at easy effort is written into the session
 //   (text, detail view, MTL) and the 15-min floor counts no warm-up for it.
+// Still v19 (unreleased; part 2 review fixes, round 7, 2026-10-21):
+// - under a partial station capacity a station session leaves the week when
+//   no shape within the shares holds the 15-min floor (round 6 kept the
+//   smallest shape, above the shares), every set of a restricted side's
+//   station keeps its capacity's share (round 6: a single set only), and two
+//   restricted sides take every cut order, so no kept session sits above a
+//   share and none leaves as the run capacity or a one-sided capacity rises;
+// - the 15-min floor counts the planned 10-min warm-up whatever the gates
+//   left of it (after round 1 when round 1 is the warm-up, so a one-round
+//   session leaves), so a shortened warm-up never decides whether a session
+//   stays;
+// - the warm-up keeps its capacity's share at equal capacities too;
+// - round 1 as the warm-up prices its planned TSS at the easy RPE, as its
+//   MTL;
+// - the deload and taper ceilings (and race week's rounds) compare a session
+//   with the reference week as the injury gates leave both, so the gates
+//   never cut it twice;
+// - race week never runs more than taper week 1 through its easy runs.
 export const HYROX_GENERATOR_VERSION = 19;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
