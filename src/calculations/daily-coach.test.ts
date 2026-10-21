@@ -419,3 +419,39 @@ describe('injuryCapOvershootSentence — rehab-cap call-out (capacity-based ring
     expect(injuryCapOvershootSentence(41.6, 19.7, 92.9)).toContain('42 TSS logged against an injury-capped day of 20.');
   });
 });
+
+// ─── HYROX hard sessions read as hard on the Home coach line (ISSUE-406 (b)) ──
+// The coach takes hardness from getPlannedDayTSSContext. The running token check
+// alone called a HYROX Tempo Run easy, so a poor-sleep morning read "Poor sleep
+// last night. Rest or easy movement is appropriate." instead of naming the session.
+describe('computeDailyCoach — HYROX hard sessions', () => {
+  function localDow(): number {
+    return (new Date().getDay() + 6) % 7;
+  }
+  function hyroxDay(t: string, n: string): SimulatorState {
+    return makeState({
+      eventType: 'hyrox' as any,
+      w: 1,
+      wks: [makeWeek(1, {
+        triWorkouts: [{ id: 'W1-q', t, n, d: '50min', r: 7, rpe: 7, discipline: 'run', dayOfWeek: localDow(), estimatedDurationMin: 50 }],
+        adhocWorkouts: [],
+      } as any)],
+      physiologyHistory: [{ date: todayISO(), sleepScore: 40 } as any],
+    });
+  }
+
+  it('a Tempo Run day names the session on poor sleep', () => {
+    const coach = computeDailyCoach(hyroxDay('hyrox_run_tempo', 'Tempo Run'));
+    expect(coach.primaryMessage).toBe('Sleep 40/100 last night. Consider converting Tempo Run to easy effort.');
+  });
+
+  it('a station density day is hard too', () => {
+    const coach = computeDailyCoach(hyroxDay('hyrox_station_density', 'Station Density'));
+    expect(coach.primaryMessage).toContain('Consider converting Station Density to easy effort.');
+  });
+
+  it('an easy run day keeps the easy copy', () => {
+    const coach = computeDailyCoach(hyroxDay('hyrox_run_easy', 'Easy Run'));
+    expect(coach.primaryMessage).toBe('Poor sleep last night. Rest or easy movement is appropriate.');
+  });
+});

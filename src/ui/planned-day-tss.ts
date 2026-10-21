@@ -6,6 +6,8 @@ import { TL_PER_MIN, plannedTssPerMin } from '@/constants';
 import { isHardWorkout } from '@/workouts/scheduler';
 import { isLongRun } from '@/workouts/long-run';
 import { signalARunSpec } from '@/cross-training/activities';
+import { isHighIntensity as isHyroxHardSession } from '@/workouts/scheduler.hyrox';
+import { isTriQualitySession } from '@/calculations/tri-suggestion-apply';
 
 /** Running-plan workout types that are strength sessions (generator.ts gym templates, injury rehab). */
 const GYM_PLANNED_TYPES = new Set(['gym', 'strength']);
@@ -71,6 +73,27 @@ function isHardPlannedType(t: string): boolean {
   return t.split('_').some(tok => isHardWorkout(tok));
 }
 
+/**
+ * Hardness of a session in the stored-plan modes (triathlon, cycling, HYROX),
+ * from each mode's own classifier, so the Home coach line and the readiness
+ * look-ahead call the same sessions hard as the plan does. The running token
+ * check (isHardPlannedType) missed most of them: a HYROX Tempo Run, a station
+ * density session or a brick read as easy ("Easy effort today allows
+ * recovery", ISSUE-406 (b)); so did a triathlon brick, sweet spot, over-under,
+ * tempo run or hills session.
+ *  - HYROX: isHighIntensity (scheduler.hyrox.ts), the scheduler's hard-day
+ *    set: quality runs, bricks except the light secondary brick, race-pace
+ *    station sessions (and race simulations once lane h2b adds them there).
+ *  - Triathlon and cycling: isTriQualitySession (tri-suggestion-apply.ts),
+ *    the quality classifier the readiness row and the overload builders share.
+ * The running token check still applies on top, so no session it called hard
+ * becomes easy (a user-added threshold run in either mode).
+ */
+function isHardStoredPlanSession(s: SimulatorState, w: any): boolean {
+  if (isHardPlannedType(w.t ?? '')) return true;
+  return s.eventType === 'hyrox' ? isHyroxHardSession(w) : isTriQualitySession(w);
+}
+
 /** Synced actuals (Garmin/Strava-ingested adhocs) are history, not plan intent. */
 function isSyncedActual(w: any): boolean {
   const id: string = w.id ?? '';
@@ -133,7 +156,7 @@ export function getPlannedDayTSSContext(s: SimulatorState, viewWeek: number): Pl
           description: w.d ?? null,
           plannedTSS: Math.round(tss),
           plannedDurationMin: Math.round(durMin),
-          isHard: isHardPlannedType(w.t ?? ''),
+          isHard: isHardStoredPlanSession(s, w),
           status: w.status,
         });
       }

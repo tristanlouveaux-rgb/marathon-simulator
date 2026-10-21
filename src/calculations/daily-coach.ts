@@ -871,7 +871,10 @@ function derivePrimaryMessage(
   // Sentence-start variant: real workout names are already capitalized; this
   // only fixes the fallback ("the session as planned." → "The session ...").
   const wnCap = wn.charAt(0).toUpperCase() + wn.slice(1);
-  const hard = strain?.todayIsHard ?? (sig.todayWorkoutType ? isHardType(sig.todayWorkoutType) : false);
+  // Hardness comes from the planned-day context (getPlannedDayTSSContext:
+  // the running token check, plus each stored-plan mode's own classifier).
+  // computeDailyCoach always supplies a strain context.
+  const hard = strain?.todayIsHard ?? false;
   const restDay = strain?.isRestDay ?? false;
   const sp = strain?.strainPct ?? 0;
   const trained = strain?.trainedToday ?? false;
@@ -1243,11 +1246,6 @@ function derivePrimaryMessage(
   return readiness.sentence;
 }
 
-/** Matches isHardWorkout from scheduler — duplicated here to avoid circular import. */
-const HARD_TYPES = ['threshold', 'tempo', 'vo2max', 'intervals', 'long', 'mp', 'race', 'time_trial', 'progression', 'marathon_pace', 'steady', 'float'];
-function isHardType(t: string): boolean {
-  return HARD_TYPES.includes(t);
-}
 
 // ─── LLM payload builder ────────────────────────────────────────────────────
 //
