@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { getPlannedDayTSSContext } from './planned-day-tss';
+import { isHighIntensity as isHyroxHardSession } from '@/workouts/scheduler.hyrox';
 import { reconcileTriCompletions } from '@/calculations/activity-matcher.triathlon';
 import { resolveWeekWorkouts } from './week-resolve';
 import { computePlannedDaySignalBTSS } from '@/calculations/fitness-model';
@@ -137,7 +138,7 @@ describe('getPlannedDayTSSContext — hardness in the stored-plan modes (ISSUE-4
     return out;
   };
 
-  it('HYROX: tempo and interval runs, station density and bricks are hard; easy work is not', () => {
+  it('HYROX: tempo and interval runs, station density, bricks and the long run are hard; easy work is not', () => {
     const s = weekOf('hyrox', [
       { t: 'hyrox_run_tempo', discipline: 'run' },
       { t: 'hyrox_run_intervals', discipline: 'run' },
@@ -153,9 +154,20 @@ describe('getPlannedDayTSSContext — hardness in the stored-plan modes (ISSUE-4
       hyrox_station_density: true,
       hyrox_brick: true,
       hyrox_mini_brick: true,
-      hyrox_run_easy: false,
+      // The long run, as running's and triathlon's 'long' (D13).
+      hyrox_run_easy: true,
       hyrox_station_technique: false,
     });
+  });
+
+  it('HYROX: only the long-run stamp makes an easy run hard; the scheduler\'s spacing set is unchanged', () => {
+    const s = weekOf('hyrox', [
+      { t: 'hyrox_run_easy', discipline: 'run', longRun: true },
+      { t: 'hyrox_run_easy', discipline: 'run' },
+    ]);
+    const ctx = getPlannedDayTSSContext(s, 1);
+    expect([0, 1].map(d => ctx.workoutsForDay(d)[0].isHard)).toEqual([true, false]);
+    expect(isHyroxHardSession({ t: 'hyrox_run_easy', longRun: true } as any)).toBe(false);
   });
 
   it('HYROX: the light secondary brick and easy erg work are not hard (the scheduler\'s own set)', () => {

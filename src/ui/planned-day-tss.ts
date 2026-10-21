@@ -6,7 +6,7 @@ import { TL_PER_MIN, plannedTssPerMin } from '@/constants';
 import { isHardWorkout } from '@/workouts/scheduler';
 import { isLongRun } from '@/workouts/long-run';
 import { signalARunSpec } from '@/cross-training/activities';
-import { isHighIntensity as isHyroxHardSession } from '@/workouts/scheduler.hyrox';
+import { isHighIntensity as isHyroxHardSession, isHyroxLongRun } from '@/workouts/scheduler.hyrox';
 import { isTriQualitySession } from '@/calculations/tri-suggestion-apply';
 
 /** Running-plan workout types that are strength sessions (generator.ts gym templates, injury rehab). */
@@ -83,7 +83,11 @@ function isHardPlannedType(t: string): boolean {
  * tempo run or hills session.
  *  - HYROX: isHighIntensity (scheduler.hyrox.ts), the scheduler's hard-day
  *    set: quality runs, bricks except the light secondary brick, race-pace
- *    station sessions (and race simulations once lane h2b adds them there).
+ *    station sessions (and race simulations once lane h2b adds them there);
+ *    plus the long run (isHyroxLongRun), which the running token check calls
+ *    hard in running and triathlon ('long'), so the three modes mirror (D13,
+ *    2026-10-21). The scheduler's spacing set is unchanged: the long run is
+ *    easy for spacing. The light secondary brick stays easy.
  *  - Triathlon and cycling: isTriQualitySession (tri-suggestion-apply.ts),
  *    the quality classifier the readiness row and the overload builders share.
  * The running token check still applies on top, so no session it called hard
@@ -91,7 +95,8 @@ function isHardPlannedType(t: string): boolean {
  */
 function isHardStoredPlanSession(s: SimulatorState, w: any): boolean {
   if (isHardPlannedType(w.t ?? '')) return true;
-  return s.eventType === 'hyrox' ? isHyroxHardSession(w) : isTriQualitySession(w);
+  if (s.eventType === 'hyrox') return isHyroxHardSession(w) || isHyroxLongRun(w);
+  return isTriQualitySession(w);
 }
 
 /** Synced actuals (Garmin/Strava-ingested adhocs) are history, not plan intent. */

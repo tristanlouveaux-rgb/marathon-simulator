@@ -136,3 +136,17 @@ describe('Just-Track: Home and the coach read one context', () => {
     expect(text()).toContain(computeDailyCoach(s).primaryMessage);
   });
 });
+
+describe('HYROX long run is a hard day on the coach line (D13)', () => {
+  it('poor sleep on the long-run day: the hard-day sentence names it', () => {
+    const s = hyroxState();
+    setState(s);
+    const lr = (s.wks[0].triWorkouts ?? []).find(w => w.t === 'hyrox_run_easy' && (w as any).longRun);
+    expect(lr, 'week 1 holds a long run').toBeDefined();
+    vi.setSystemTime(new Date(PLAN_MONDAY.getTime() + (lr!.dayOfWeek ?? 0) * 86400000));
+    s.physiologyHistory = [{ date: localDateKey(new Date()), sleepScore: 40 } as any];
+    const ctx = deriveStrainContext(s);
+    expect(ctx.todayIsHard).toBe(true);
+    expect(computeDailyCoach(s).primaryMessage).toBe(`Sleep 40/100 last night. Consider converting ${lr!.n} to easy effort.`);
+  });
+});
