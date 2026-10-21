@@ -25,6 +25,11 @@ export interface VolumePerDiscipline {
   run: number;
 }
 
+/** s.w is 1-based: the week in progress is wks[s.w - 1] (wks[s.w] is next week). */
+function currentWeekIdx(state: SimulatorState): number {
+  return Math.max(0, (state.w ?? 1) - 1);
+}
+
 interface RecentActual {
   activityType?: string | null;
   startTime?: string | null;
@@ -33,7 +38,8 @@ interface RecentActual {
 }
 
 /**
- * Iterate the last `weeks` of `state.wks[w].garminActuals` newest-first, then
+ * Iterate the `weeks` plan weeks ending at the current week (`wks[s.w - 1]`,
+ * in progress, included) of `state.wks[w].garminActuals` newest-first, then
  * top up from `state.recentDisciplineActivity` — the slim DB-backed summary
  * persisted at launch. After a fresh sign-in `garminActuals` is empty until
  * activities re-match forward, so without this fallback every per-discipline
@@ -45,8 +51,9 @@ interface RecentActual {
  */
 function* iterateRecentActuals(state: SimulatorState, weeks: number): Generator<RecentActual> {
   const wks = state.wks ?? [];
-  const currentWeek = state.w ?? 0;
-  const startWeek = Math.max(0, currentWeek - weeks);
+  const currentWeek = currentWeekIdx(state);
+  // `weeks` weeks, matching the callers' divisor and the fallback's date window.
+  const startWeek = Math.max(0, currentWeek - weeks + 1);
   // Track yielded (sport, startMs) so the persisted fallback can skip overlaps.
   const yielded: Array<{ sport: string; ms: number }> = [];
   const TEN_MIN_MS = 10 * 60 * 1000;
@@ -131,7 +138,8 @@ type DoseSession = Pick<Workout, 'discipline' | 'estimatedDurationMin'>;
 
 /**
  * Per-discipline sessions/wk and hours/wk averaged over the next `weeks` plan
- * weeks from `state.w + startOffset`, reading each week through `sessionsOf`.
+ * weeks from the current week (`wks[s.w - 1]`, `s.w` 1-based) plus
+ * `startOffset`, reading each week through `sessionsOf`.
  * The public look-ahead helpers read `triWorkouts` (the plan as scheduled);
  * the forecast's fallback reads the planned dose (`forecastLookAheadDose`).
  * A week without `triWorkouts` is skipped, and so is a closing week
@@ -149,7 +157,7 @@ function lookAheadDose(
   const counts: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
   const totals: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
   const wks = state.wks ?? [];
-  const currentWeek = (state.w ?? 0) + Math.max(0, Math.floor(startOffset));
+  const currentWeek = currentWeekIdx(state) + Math.max(0, Math.floor(startOffset));
   let weeksCovered = 0;
   for (let w = currentWeek; w < wks.length && weeksCovered < weeks; w++) {
     const wk = wks[w];
@@ -175,9 +183,10 @@ function lookAheadDose(
  * Training chip fingerprint reads. The forecast's planned dose reads
  * `plannedBuildDoseByDiscipline` / `plannedPeakDoseByDiscipline` instead.
  *
- * Defaults to a 4-week look-ahead window. Past weeks (`w < state.w`) and a
- * closing week (raceClosing) are skipped; if fewer than 4 future weeks remain
- * (race week, taper) we average over what's available.
+ * Defaults to a 4-week look-ahead window starting at the current week
+ * (`wks[s.w - 1]`); earlier weeks and a closing week (raceClosing) are
+ * skipped. If fewer than 4 weeks remain (race week, taper) we average over
+ * what's available.
  *
  * `startOffset` skips that many weeks ahead of the current week before
  * sampling. The injury-aware predictor uses it to sample the **recovered**
@@ -288,7 +297,7 @@ export function plannedBuildDoseByDiscipline(
   const counts: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
   const hours: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
   const wks = state.wks ?? [];
-  const startWeek = (state.w ?? 0) + Math.max(0, Math.floor(startOffset));
+  const startWeek = currentWeekIdx(state) + Math.max(0, Math.floor(startOffset));
   let buildWeeks = 0;
   for (let w = startWeek; w < wks.length; w++) {
     const wk = wks[w];
@@ -343,7 +352,7 @@ export function plannedPeakDoseByDiscipline(
   startOffset: number = 0,
 ): { sessions: VolumePerDiscipline; hours: VolumePerDiscipline } {
   const wks = state.wks ?? [];
-  const startWeek = (state.w ?? 0) + Math.max(0, Math.floor(startOffset));
+  const startWeek = currentWeekIdx(state) + Math.max(0, Math.floor(startOffset));
   const disciplines = ['swim', 'bike', 'run'] as const;
   const peakSess: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
   const peakHrs: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
