@@ -36,6 +36,7 @@ import { answeredCrossTrainingTSS, isOpenForTriSuggestion } from './tri-suggesti
 import { canApplyTriSuggestion, isTriQualitySession, triDowngradeTssReduction } from './tri-suggestion-apply';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
 import { saturateCredit } from '@/cross-training/universalLoad';
+import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Constants
@@ -293,6 +294,10 @@ function computeCrossTrainingTSS(wk: Week): CrossTrainingSummary {
   // Membership filter: a session is cross-training if its id is NOT in
   // `wk.triWorkouts`. Per "anything in your plan is in your plan". A
   // planned `cross`/`gym` session in triWorkouts is plan, not overload.
+  // Planned sessions stored in adhocWorkouts are plan too (isPlannedAdhocId:
+  // user-added `adhoc-` sessions and injury capability offers, `holiday-`,
+  // `benchmark-`), with any done record under the same id. Signal B skips the
+  // same ids (computeWeekRawTSS). SCIENCE_LOG §DP.
   const planIds = new Set(
     (wk.triWorkouts ?? []).map(w => w.id).filter((id): id is string => !!id),
   );
@@ -309,6 +314,7 @@ function computeCrossTrainingTSS(wk: Week): CrossTrainingSummary {
   // entries land here AND in garminActuals at the same id (we dedupe in pass 2).
   for (const adhoc of wk.adhocWorkouts ?? []) {
     if (adhoc.id && planIds.has(adhoc.id)) continue; // in-plan: skip
+    if (isPlannedAdhocId(adhoc.id)) continue;         // planned adhoc session: plan
     if (adhoc.id) countedIds.add(adhoc.id);
     const tss = tssOfWorkout(adhoc);
     if (tss <= 0) continue;
@@ -323,6 +329,7 @@ function computeCrossTrainingTSS(wk: Week): CrossTrainingSummary {
   for (const [workoutId, actual] of Object.entries(wk.garminActuals ?? {})) {
     if (countedIds.has(workoutId)) continue;
     if (planIds.has(workoutId)) continue;
+    if (isPlannedAdhocId(workoutId)) continue; // done record of a planned adhoc session
     if (actual.iTrimp == null || actual.iTrimp <= 0) continue;
     const tss = normalizeiTrimp(actual.iTrimp); // personal normalizer (ISSUE-262)
     const affinity = classifyAffinity(actual.activityType, actual.displayName);

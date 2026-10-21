@@ -9226,7 +9226,7 @@ Likely range (hyroxLikelyRangeSec, the Forecast hero's "Likely X-Y")
 
 ---
 
-## §DP: Cross-training overload detector: the budget curve has slope 1 (2026-10-21, lane ctd)
+## §DP: Cross-training overload detector: the budget curve has slope 1, planned sessions are plan (2026-10-21, lane ctd)
 
 **Side.** Planning. The triathlon overload detector (`detectCrossTrainingOverload`, `src/calculations/tri-cross-training-overload.ts`) reads tracked load (cross-training TSS this week) and prescribes plan cuts. It writes nothing; only an accepted Reduce or Push changes state. The same detector feeds triathlon and cycling (cycling reuses `eventType: 'triathlon'`). HYROX does not use it yet (it returns null outside triathlon); the HYROX cross-training design (`docs/research/hyrox-cross-training-design-2026-10.md` §2) reuses it after lane `fix/hyrox-h2b` merges.
 
@@ -9241,8 +9241,10 @@ U         = this week's cross-training TSS + decayed carry - load already answer
 
 Before: `1500 x (1 - e^(-U / 800))`, the pre-ISSUE-263 two-parameter form running dropped on 2026-06-04. Slope 1500 / 800 = 1.875 at 0. 50 TSS of tennis unlocked about 91 TSS of cuts; 62 TSS unlocked 112, so a single swap-to-easy (50% of a 200 TSS threshold run, 100 TSS) went through whole. Now 50 TSS unlocks 47.5 and 62 unlocks 58. The change limits (2 cuts heavy, 3 extreme) and the per-session estimates (15% trim, 50% swap, the rung price of a downgrade) usually bind first, so most proposals are unchanged; the curve binds when one session's estimate exceeds the unanswered load.
 
+**2. Planned sessions in `adhocWorkouts` are plan.** Ids for which `isPlannedAdhocId` is true (`adhoc-` user-added sessions and injury capability offers, `holiday-`, `benchmark-`; `src/workouts/planned-adhoc.ts`) are skipped in both passes, with any record under the same id. Signal B already skips them (`computeWeekRawTSS`). Before, a holiday or benchmark session with a stamped load counted as overload. A capability offer counted 0 only by accident (it carries no load, and its Mark as Done record was skipped because pass 1 had marked the id counted); once activities without a stored load are valued (item 3) it would have been valued by its minutes.
+
 **Limitations.** The curve is running's single-session saturation applied to a week's sum of sessions; TAU was derived for one session. It is a cap, not a dose-response model.
 
-**Guards.** `load-currency-anchors.test.ts` anchor 4b (budget <= load from 10 to 900 TSS; the detector books no more cuts than the unanswered load).
+**Guards.** `load-currency-anchors.test.ts` anchor 4b (budget <= load from 10 to 900 TSS; the detector books no more cuts than the unanswered load); `tri-cross-training-overload.test.ts` (planned adhoc ids add 0, with a stamped load or a done record).
 
 ---

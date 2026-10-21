@@ -280,6 +280,53 @@ describe('detectCrossTrainingOverload — membership filter (plan-vs-extra)', ()
   });
 });
 
+describe('detectCrossTrainingOverload — planned adhoc sessions are plan (isPlannedAdhocId)', () => {
+  // adhocWorkouts also holds sessions injected into the plan: user-added
+  // (adhoc-), injury capability offers (adhoc-cap-, adhoc-strength-), holiday
+  // replacements (holiday-) and benchmark check-ins (benchmark-). Signal B
+  // skips them; so does the detector, with any done record under the same id.
+  for (const id of ['adhoc-1', 'adhoc-cap-bike-1', 'adhoc-strength-1', 'holiday-run-1', 'benchmark-5k-1']) {
+    it(`${id} with a stamped load adds nothing`, () => {
+      const s = state({
+        wks: [{
+          ...canonicalTriWeek(),
+          adhocWorkouts: [{ id, t: 'cross', n: 'Planned session', d: '90min', r: 6, aerobic: 170, anaerobic: 30 }],
+        }] as any,
+      });
+      expect(detectCrossTrainingOverload(s, 0)).toBeNull();
+    });
+
+    it(`${id} with a Mark as Done record under the same key adds nothing`, () => {
+      const s = state({
+        wks: [{
+          ...canonicalTriWeek(),
+          adhocWorkouts: [{ id, t: 'cross', n: 'Planned session', d: '90min', r: 6 }],
+          garminActuals: {
+            [id]: {
+              garminId: `manual-${id}`, startTime: '2026-10-20T12:00:00.000Z', durationSec: 5400, distanceKm: 0,
+              avgPaceSecKm: null, avgHR: 150, maxHR: 170, calories: null, iTrimp: 30000, activityType: 'TENNIS',
+            },
+          },
+        }] as any,
+      });
+      expect(detectCrossTrainingOverload(s, 0)).toBeNull();
+    });
+  }
+
+  it('a synced activity beside a planned adhoc session still counts', () => {
+    const s = state({
+      wks: [{
+        ...canonicalTriWeek(),
+        adhocWorkouts: [
+          { id: 'holiday-run-1', t: 'easy', n: 'Holiday run', d: '60min', r: 4, aerobic: 55, anaerobic: 0 },
+          { id: 'garmin-tennis-1', t: 'cross', n: 'tennis', d: '90min', r: 6, iTrimp: 15000 },
+        ],
+      }] as any,
+    });
+    expect(detectCrossTrainingOverload(s, 0)?.crossTrainingTSS).toBe(100);
+  });
+});
+
 describe('detectCrossTrainingOverload — TSS dedup (regression)', () => {
   // v1 bug fixed earlier today: addAdhocWorkoutFromPending writes to BOTH
   // wk.adhocWorkouts AND wk.garminActuals at the same id, so the detector
