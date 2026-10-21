@@ -4071,7 +4071,7 @@ Readiness uses **label-based bands** (75/55/35) matching the Primed/On Track/Man
 
 **perSessionAvg**: Derived from current week's planned TSS / training day count (not CTL baseline). Tracks plan intent so targets rise during build phases and drop during taper, rather than lagging behind via 42-day EMA.
 
-**Rest-day overreach threshold**: `perSessionAvg × 0.33` (`REST_DAY_OVERREACH_RATIO`). Based on Whoop's ~33% recovery-day cap and Seiler's polarised model (Zone 1 recovery sessions ≈ 25-35% of a hard session).
+**Rest-day overreach threshold**: `perSessionAvg × 0.33` (`REST_DAY_OVERREACH_RATIO`). Based on Whoop's ~33% recovery-day cap and Seiler's polarised model (Zone 1 recovery sessions ≈ 25-35% of a hard session). Since 2026-10-21 (D4) the load compared is the day's logged sessions only (`isRestDayOverreached`, `fitness-model.ts`), not the strain TSS with passive step and active-minute load: the threshold is framed against a recovery session, and steps are background movement, not a session (`hasTrainedOnDay`, ISSUE-406 (c)). Every surface reads the helper; Just-Track (no planned per-session average) never fires.
 
 **Limitations**: Readiness modulation is binary (label-based thresholds), not continuous. A more sophisticated model would use the readiness score as a continuous multiplier.
 

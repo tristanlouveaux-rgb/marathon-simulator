@@ -17,7 +17,7 @@ import {
   computeWeekTSS,
   getTrailingEffortScore,
   computeTodaySignalBTSS,
-  REST_DAY_OVERREACH_RATIO,
+  isRestDayOverreached,
 } from '@/calculations/fitness-model';
 import { computeReadiness, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
 import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
@@ -230,7 +230,7 @@ function deriveStrainContext(s: SimulatorState): StrainContext {
   const isRestDay = !hasPlannedWorkout && !matchedActivityToday;
   // Per-session average: planned week TSS / training day count (tracks plan intent, not CTL history)
   const perSessionAvg = plannedCtx.perSessionAvg;
-  const isRestDayOverreaching = isRestDay && todayTSS > 0 && perSessionAvg > 0 && todayTSS > perSessionAvg * REST_DAY_OVERREACH_RATIO;
+  const isRestDayOverreaching = isRestDayOverreached(wk, today, isRestDay, perSessionAvg);
 
   const strainPct = hasPlannedWorkout && todayTSS > 0 && plannedDayTSS > 0
     ? (todayTSS / plannedDayTSS) * 100 : 0;

@@ -12,7 +12,7 @@ import type { Week } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/app/runtime';
 import { getPhysiologySource } from '@/data/sources';
-import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, getTrailingEffortScore, computeDayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, getTrailingEffortScore, computeDayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDayTargetTSS, isRestDayOverreached, normalizeiTrimp} from '@/calculations/fitness-model';
 import { computePlannedWeekTarget, computeCurrentWeekCarry } from '@/calculations/planned-week-target';
 import { computeAcwrReductionProjection } from '@/calculations/acwr-reduction-projection';
 import { workoutsToPlannedRuns } from '@/cross-training/suggester';
@@ -989,9 +989,12 @@ export function buildReadinessRing(s: SimulatorState): string {
   // Day type
   const hasPlannedWorkout = plannedDayTSS > 0;
   const isRestDay = !hasPlannedWorkout && !matchedActivityToday;
-  // Rest-day overreach: activity exceeds a typical light session (50% of per-session avg)
-  const restDayOverreachThreshold = perSessionAvg * REST_DAY_OVERREACH_RATIO;
-  const isRestDayOverreaching = isRestDay && todaySignalBTSS > 0 && perSessionAvg > 0 && todaySignalBTSS > restDayOverreachThreshold;
+  // Rest-day overreach on logged sessions only, against the plan's per-session
+  // average (isRestDayOverreached; not the Just-Track ring anchor above): the
+  // rule the Readiness page, the strain page and the coach read. Passive step
+  // load lifted the ring to "High for rest day" on a walking day while the
+  // Readiness page read the day as fine.
+  const isRestDayOverreaching = strainWk ? isRestDayOverreached(strainWk, strainDay, isRestDay, plannedCtx.perSessionAvg) : false;
   // Strain: two scales for different purposes.
   // Linear (actual/target × 100). Used for the readiness floor thresholds.
   //   The floor cares about real physiological load completion, not visual display.

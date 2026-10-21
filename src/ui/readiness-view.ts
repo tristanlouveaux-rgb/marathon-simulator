@@ -13,7 +13,7 @@ import {
   computeFitnessModel,
   computeDayStrainTSS,
   computeToBaseline,
-  REST_DAY_OVERREACH_RATIO,
+  isRestDayOverreached,
 } from '@/calculations/fitness-model';
 import { getPlannedDayTSSContext } from './planned-day-tss';
 import {
@@ -166,9 +166,9 @@ function getReadinessHTML(s: SimulatorState): string {
   }
   const hasPlannedWorkout = plannedDayTSS > 0;
   const isRestDay = !hasPlannedWorkout && !matchedActivityToday;
-  // Rest-day overreach: activity exceeds 50% of per-session average
-  const restDayOverreachThreshold = perSessionAvg * REST_DAY_OVERREACH_RATIO;
-  const isRestDayOverreaching = isRestDay && todaySignalBTSS > 0 && perSessionAvg > 0 && todaySignalBTSS > restDayOverreachThreshold;
+  // Rest-day overreach on logged sessions only (isRestDayOverreached: passive
+  // step load is strain, not a session), the rule Home and the coach read.
+  const isRestDayOverreaching = strainWk ? isRestDayOverreached(strainWk, strainDay, isRestDay, perSessionAvg) : false;
   // Strain: planned days vs plan, adhoc vs per-session avg (display semantics
   // for the Today's Strain card — % of daily target).
   const strainPct = hasPlannedWorkout && todaySignalBTSS > 0 && plannedDayTSS > 0

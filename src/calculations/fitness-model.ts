@@ -99,6 +99,31 @@ const REST_DAY_TARGET_FRAC = 0.30;
  */
 export const REST_DAY_OVERREACH_RATIO = 0.33;
 
+/**
+ * "High load on a rest day": a rest day (no planned session, no matched
+ * activity) whose logged sessions carry more than REST_DAY_OVERREACH_RATIO x
+ * the plan's per-session average. Sessions only: computeTodaySignalBTSS with no
+ * passive input, the source hasTrainedOnDay (daily-coach.ts) reads. Passive
+ * step and active-minute load is strain, not a session, so 12,000 steps never
+ * make a rest day "high load" (Tristan, 2026-10-21, D4). A logged walk is a
+ * session and counts.
+ *
+ * `plannedPerSessionAvg` is the plan's per-session average
+ * (getPlannedDayTSSContext(...).perSessionAvg); 0 (no plan, Just-Track) never
+ * flags. The one rule for Home (ring label and coach line), the Readiness page,
+ * the strain page and the coach's derived context. Tracking side.
+ */
+export function isRestDayOverreached(
+  wk: Week,
+  day: string,
+  isRestDay: boolean,
+  plannedPerSessionAvg: number,
+): boolean {
+  if (!isRestDay || !(plannedPerSessionAvg > 0)) return false;
+  const sessionsTSS = computeTodaySignalBTSS(wk, day);
+  return sessionsTSS > 0 && sessionsTSS > plannedPerSessionAvg * REST_DAY_OVERREACH_RATIO;
+}
+
 export interface TargetTSSRange {
   lo: number;   // lower bound
   mid: number;  // midpoint (used for ring scaling)
