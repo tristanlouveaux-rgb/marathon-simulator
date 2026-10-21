@@ -236,7 +236,7 @@ Quick reference for reading code that uses `s = getState()`:
 
 | Abbrev | Full Name | Type |
 |--------|-----------|------|
-| `s.w` | Current week | `number` |
+| `s.w` | Current week, 1-based (store default `w: 1`). The week in progress is `s.wks[s.w - 1]`, next week `s.wks[s.w]`, the last completed week `s.wks[s.w - 2]` (when `s.w > 1`). Print it as is: `Week ${s.w} of ${s.tw}` | `number` |
 | `s.tw` | Total weeks | `number` |
 | `s.v` | Starting VDOT | `number` |
 | `s.iv` | Initial VDOT | `number` |
