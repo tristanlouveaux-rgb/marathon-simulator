@@ -34,6 +34,7 @@ import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { buildRacePlanEntryCard, openRacePlanGoalModal, renderHyroxRacePlanView } from './race-plan-view';
 import { hyroxForecastRaceClock } from '@/calculations/hyrox-race-plan';
 import { buildLoseTimeCard, wireLoseTimeCard } from './lose-time-view';
+import { hyroxWeekLine } from './forecast-labels';
 
 function fmtMmSs(sec: number): string {
   if (!Number.isFinite(sec) || sec <= 0) return '—';
@@ -1111,11 +1112,10 @@ export function renderHyroxForecastView(): void {
   // Title sub-line: mirrors marathon "Test's Dubai Marathon — Week 1 of 35".
   // Skips gracefully when name/event are missing.
   const eventCity = hx.raceEventId ? getHyroxEventById(hx.raceEventId)?.city : undefined;
-  const currentWeek = s.w ?? 0;
-  const totalWeeks = s.tw ?? 0;
   const possessive = firstName ? `${firstName}${firstName.endsWith('s') ? "'" : "'s"}` : '';
   const raceLabel = eventCity ? `${eventCity} HYROX` : 'HYROX';
-  const weekLine = totalWeeks > 0 ? `Week ${currentWeek + 1} of ${totalWeeks}` : '';
+  // s.w is 1-based: "Week ${s.w} of ${s.tw}", as Home, Plan and Stats print it.
+  const weekLine = hyroxWeekLine(s.w, s.tw);
   const subLineParts = [possessive ? `${possessive} ${raceLabel}` : raceLabel, weekLine].filter(Boolean);
   const subLine = subLineParts.join('. ');
 

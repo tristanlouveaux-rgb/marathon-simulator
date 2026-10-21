@@ -38,6 +38,7 @@ import {
   buildSportLegend as buildSportLegendShared,
 } from '@/ui/sport-mix-donut';
 import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
+import { hyroxWeekLine } from './forecast-labels';
 
 export type HyroxChipKey = 'you' | 'runpace' | 'stations' | 'training' | 'venue';
 
@@ -443,7 +444,10 @@ function pageStations(s: SimulatorState): { title: string; subhead: string; body
 
 function pageTraining(s: SimulatorState): { title: string; subhead: string; body: string } {
   const hx = s.hyroxConfig;
-  const currentWeekIdx = s.w ?? 0;
+  // s.w is 1-based: the current week is wks[s.w - 1]; wks[s.w] is next week.
+  // Reading s.w as the index showed next week's phase, ringed next week as
+  // current, printed "Week 2" in week 1 and one week too few to go.
+  const currentWeekIdx = Math.max(0, (s.w ?? 1) - 1);
   const totalWeeks = s.tw ?? 0;
   const weeksRemaining = Math.max(0, totalWeeks - currentWeekIdx - 1);
   const wks = s.wks ?? [];
@@ -597,7 +601,7 @@ function pageTraining(s: SimulatorState): { title: string; subhead: string; body
           <div style="font-size:28px;font-weight:600;color:${currentPhaseColor};letter-spacing:-0.01em">${escapeText(currentPhaseLabel)}</div>
         </div>
         <div style="text-align:right">
-          <div style="font-size:11px;color:${TEXT_L}">Week ${currentWeekIdx + 1} of ${totalWeeks || '—'}</div>
+          <div style="font-size:11px;color:${TEXT_L}">${hyroxWeekLine(s.w, totalWeeks) || `Week ${currentWeekIdx + 1}`}</div>
           ${weeksRemaining > 0 ? `<div style="font-size:11px;color:${TEXT_L};margin-top:2px">${weeksRemaining} weeks to go</div>` : ''}
         </div>
       </div>
