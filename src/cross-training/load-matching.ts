@@ -28,17 +28,6 @@ export function vibeSimilarity(
 }
 
 /**
- * Apply saturation curve to prevent huge sessions from scaling linearly
- * @param rawLoad - Raw load value
- * @returns Saturated load value
- */
-export function applySaturation(rawLoad: number): number {
-  const tau = 800;       // Saturation constant
-  const maxCredit = 1500; // Maximum credit from any single session
-  return maxCredit * (1 - Math.exp(-rawLoad / tau));
-}
-
-/**
  * Calculate reduction percentage for a workout based on remaining load
  * @param ratio - Load ratio (activity / workout)
  * @param workoutType - Type of workout being modified

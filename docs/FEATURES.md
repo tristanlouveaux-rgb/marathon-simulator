@@ -1295,7 +1295,7 @@ Unstructured run with no pace target. Workout type `'vibes'` internally; user-fa
 **Downgrades step one pace category (2026-10-06, Tristan's rule of 2026-10-05)**: `downgradeType` reads the canonical running ladder (`src/constants/intensity-ladder.ts`, `RUN_PACE_LADDER` recovery, easy, marathon pace, threshold, vo2). Progressive steps to easy (it used to read "N km @ MP"), an already-eased session steps one more rung instead of straight to easy, a cut long run keeps type 'long' on both the Reduce and Replace paths, and every downgrade writes the generator RPE of the new type (`RUN_GENERATOR_RPE`). Tests ✅ `downgrade-one-pace-category.test.ts`, `intensity-ladder.test.ts`.
 
 **Key files**: `src/cross-training/suggester.ts`, `src/ui/suggestion-modal.ts`, `src/ui/plan-view.ts` (km nudge card), `src/workouts/workout-mods.ts`, `src/constants/intensity-ladder.ts`, `src/ui/week-resolve.ts` (`resolveWeekForPlanChanges`, `hasRunningPlanWeek`)
-**Tests**: `src/cross-training/suggester.test.ts`, `src/cross-training/universalLoad.test.ts` (classifier tests), `src/cross-training/matcher.test.ts`, `src/cross-training/boxing-bug.test.ts`, `src/cross-training/km-budget.test.ts` — ✅ Passing
+**Tests**: `src/cross-training/suggester.test.ts`, `src/cross-training/universalLoad.test.ts` (classifier tests), `src/cross-training/boxing-bug.test.ts`, `src/cross-training/km-budget.test.ts` — ✅ Passing
 
 ---
 

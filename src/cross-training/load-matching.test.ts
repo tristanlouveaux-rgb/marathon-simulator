@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   vibeSimilarity,
-  applySaturation,
   calculateReduction,
   reduceWorkoutDistance,
   calculateLoadBudget,
@@ -48,58 +47,6 @@ describe('Load Matching', () => {
       const similarity = vibeSimilarity(0, 0, 100, 20);
       expect(similarity).toBeGreaterThanOrEqual(0);
       expect(similarity).toBeLessThanOrEqual(1);
-    });
-  });
-
-  describe('applySaturation', () => {
-    // Formula: 1500 * (1 - exp(-rawLoad / 800))
-    // tau = 800, maxCredit = 1500
-
-    it('should return 0 for 0 load', () => {
-      expect(applySaturation(0)).toBe(0);
-    });
-
-    it('should saturate high loads', () => {
-      const load100 = applySaturation(100);
-      const load400 = applySaturation(400);
-      const load1600 = applySaturation(1600);
-
-      // Should show diminishing returns
-      expect(load400 / load100).toBeLessThan(4);
-      expect(load1600 / load400).toBeLessThan(4);
-    });
-
-    it('should approach maxCredit (1500) asymptotically', () => {
-      const veryHighLoad = applySaturation(10000);
-      expect(veryHighLoad).toBeLessThan(1500);
-      expect(veryHighLoad).toBeGreaterThan(1490); // Very close to max
-    });
-
-    it('should significantly reduce typical activity loads', () => {
-      // Rugby RPE 9, 60min without Garmin: ~330 raw load
-      // After saturation: 1500 * (1 - exp(-330/800)) ≈ 507
-      const saturated = applySaturation(330);
-      expect(saturated).toBeCloseTo(507, 0);
-    });
-
-    it('should show the saturation effect on RPE 9 vs RPE 3 difference', () => {
-      // This is crucial - saturation may reduce the RPE difference!
-
-      // Approximate loads for 60min rugby:
-      // RPE 9: ~330 weighted load
-      // RPE 3: ~65 weighted load
-
-      const saturatedRPE9 = applySaturation(330);
-      const saturatedRPE3 = applySaturation(65);
-
-      const rawRatio = 330 / 65;        // ~5.1x
-      const saturatedRatio = saturatedRPE9 / saturatedRPE3;
-
-      // Saturation should reduce the ratio
-      expect(saturatedRatio).toBeLessThan(rawRatio);
-
-      // But there should still be meaningful difference
-      expect(saturatedRatio).toBeGreaterThan(2);
     });
   });
 
