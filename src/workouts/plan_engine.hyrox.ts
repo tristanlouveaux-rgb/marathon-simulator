@@ -1389,23 +1389,55 @@ function generateWeekSessions(
   // Deload and race-taper weeks: no station or brick session with more
   // rounds, or a circuit with more stations, than its counterpart in the
   // reference week.
+  // The reference weeks' sessions are as their injury gates left them (the
+  // weeks before this one, current and future), so a session this week
+  // compares with them as the gates leave it too: its rounds, stations,
+  // length and MTL. Before (review round 7), the rounds and stations
+  // compared ungated: the session took the gated reference session's counts
+  // and the gates then cut it again, so weeks with no station work rose from
+  // upper body 50 to 70 (open singles men 55 to 77 of 810, Row Erg only 47 to
+  // 108).
+  const gates = weekIndex < (state.w ?? 1) ? undefined : (state as any).injuryState as InjuryState | undefined;
+  const gatedSeen = new WeakMap<Workout, Workout | undefined>();
+  const asGated = (x: Workout): Workout | undefined => {
+    if (!gates?.active) return x;
+    if (!gatedSeen.has(x)) gatedSeen.set(x, applyHyroxInjuryGates([x], gates, 0, hx.stationAccess)[0]);
+    return gatedSeen.get(x);
+  };
   const capToRef = (w: Workout): Workout => {
     const refCap = sessionCapFor(inputs.sessionCaps, w.t);
     if (!refCap) return w;
+    const stationsOf = (x: Workout): number => (x.hyroxComponents ?? []).filter(c => c.type !== 'run').length;
     let out = w;
-    if ((out.hyroxRounds ?? 0) > refCap.rounds) {
-      // Never under the session's floor (holdsStationFloor).
-      const rounds = floorRounds(out, Math.max(hyroxMinRounds(out), refCap.rounds));
-      if (rounds < (out.hyroxRounds ?? 0)) {
-        adjustments.push(`W${weekIndex}: ${out.n} cut to ${rounds} rounds (${ceilingName}: the reference week's)`);
-        out = withHyroxRounds(out, rounds);
+    if (!gates?.active) {
+      if ((out.hyroxRounds ?? 0) > refCap.rounds) {
+        // Never under the session's floor (holdsStationFloor).
+        const rounds = floorRounds(out, Math.max(hyroxMinRounds(out), refCap.rounds));
+        if (rounds < (out.hyroxRounds ?? 0)) {
+          adjustments.push(`W${weekIndex}: ${out.n} cut to ${rounds} rounds (${ceilingName}: the reference week's)`);
+          out = withHyroxRounds(out, rounds);
+        }
       }
+    } else {
+      // A round at a time while the gated session holds more rounds than the
+      // reference week's (a session the gates leave out needs no cut).
+      for (;;) {
+        const g = asGated(out);
+        if (!g || (g.hyroxRounds ?? 0) <= refCap.rounds || (out.hyroxRounds ?? 0) <= hyroxMinRounds(out)) break;
+        const fewer = withHyroxRounds(out, (out.hyroxRounds ?? 0) - 1);
+        if (!holdsStationFloor(fewer)) break;
+        out = fewer;
+      }
+      if ((out.hyroxRounds ?? 0) < (w.hyroxRounds ?? 0)) adjustments.push(`W${weekIndex}: ${out.n} cut to ${out.hyroxRounds} rounds (${ceilingName}: the reference week's)`);
     }
     const maxStations = Math.max(MIN_CIRCUIT_STATIONS, refCap.stations);
     let cut = 0;
     for (;;) {
-      const st = (out.hyroxComponents ?? []).filter(c => c.type !== 'run');
-      if (st.length <= maxStations) break;
+      if (stationsOf(out) <= maxStations) break;
+      if (gates?.active) {
+        const g = asGated(out);
+        if (!g || stationsOf(g) <= maxStations) break;
+      }
       const next = withoutHyroxStation(out, hyroxStationToCut(out) as HyroxStation);
       if (next === out || !holdsStationFloor(next)) break;
       out = next;
@@ -1416,9 +1448,8 @@ function generateWeekSessions(
       // No longer or heavier than the reference week's session, as the
       // injury gates leave both: rounds go first, then the heaviest stations
       // (the ceilings' station cut).
-      const gates = weekIndex < (state.w ?? 1) ? undefined : (state as any).injuryState as InjuryState | undefined;
       const heavy = (x: Workout) => {
-        const g = gates?.active ? applyHyroxInjuryGates([x], gates, 0, hx.stationAccess)[0] : x;
+        const g = asGated(x);
         return !!g && ((g.estimatedDurationMin ?? 0) > refCap.min + 1e-6 || (g.musculoTendonLoad ?? 0) > refCap.mtl + 1e-6);
       };
       let rounds = 0;
@@ -1618,8 +1649,17 @@ function generateWeekSessions(
     // is sized, from what the size leaves (the strength step, below).
     let out = withHyroxSessionParts(w, { warmup: hyroxSessionWarmup(hx.stationAccess, i + weekIndex, bodyWeightKg) });
     if (maxRounds != null && (out.hyroxRounds ?? 0) > maxRounds) {
-      // Never under the session's floor (holdsStationFloor).
-      const r = floorRounds(out, maxRounds);
+      // Never under the session's floor (holdsStationFloor). The week
+      // before's rounds are as its gates left them, so under an injury the
+      // gated session compares (as capToRef's).
+      let r = gates?.active ? out.hyroxRounds ?? 0 : floorRounds(out, maxRounds);
+      if (gates?.active) {
+        for (;;) {
+          const g = asGated(withHyroxRounds(out, r));
+          if (!g || (g.hyroxRounds ?? 0) <= maxRounds || r <= 1 || !holdsStationFloor(withHyroxRounds(out, r - 1))) break;
+          r--;
+        }
+      }
       if (r < (out.hyroxRounds ?? 0)) {
         adjustments.push(`W${weekIndex}: ${out.n} cut to ${r} rounds (the week before's)`);
         out = withHyroxRounds(out, r);
