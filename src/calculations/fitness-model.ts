@@ -770,19 +770,12 @@ export function computeTodaySignalBTSS(
     }
     const actDurMin = actual.durationSec > 0 ? actual.durationSec / 60 : actual.distanceKm * 6;
     workoutMinutes += actDurMin;
-    // Strength override: Signal B uses full physiological load (no runSpec discount).
-    const ratedVal = wk.rated?.[workoutId];
-    const ratedRpe = (typeof ratedVal === 'number') ? ratedVal : null;
-    const strengthOverride = computeStrengthRpeTSS(actual, false, ratedRpe);
-    if (strengthOverride != null) {
-      tl += strengthOverride;
-      continue;
-    }
-    if (actual.iTrimp != null && actual.iTrimp > 0) {
-      tl += normalizeiTrimp(actual.iTrimp);
-    } else {
-      tl += actDurMin * (TL_PER_MIN[5] ?? 1.15);
-    }
+    // The weekly total's own per-activity rule (signalBActualTSS, the rule
+    // computeWeekRawTSS sums): rated strength override, else iTRIMP, else
+    // minutes x TL_PER_MIN[the rating, else 5]. This loop valued an unmeasured,
+    // non-strength record at RPE 5 whatever its rating, so the day and the week
+    // priced a rated HR-less session differently (D9, 2026-10-21).
+    tl += signalBActualTSS(actual, ratedRpeOf(wk.rated?.[workoutId]));
   }
 
   // adhocWorkouts. Garmin-prefixed filtered by garminTimestamp; non-garmin matched by dayOfWeek
@@ -798,25 +791,13 @@ export function computeTodaySignalBTSS(
       const ts = (w as any).garminTimestamp as string | undefined;
       if (!isOnLocalDay(ts, today)) continue;
       seenGarminIds.add(rawId);
-      const adhocDur = parseDurMinFromDesc(w.d);
-      workoutMinutes += adhocDur;
-      if (w.iTrimp != null && w.iTrimp > 0) {
-        tl += normalizeiTrimp(w.iTrimp, norm);
-      } else {
-        const rpe = w.rpe ?? w.r ?? 5;
-        tl += adhocDur * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
-      }
+      workoutMinutes += parseDurMinFromDesc(w.d);
+      tl += signalBAdhocTSS(w, norm); // the weekly total's adhoc rule
       continue;
     }
     if ((w as any).dayOfWeek !== ourDay) continue;
-    const adhocDur2 = parseDurMinFromDesc(w.d);
-    workoutMinutes += adhocDur2;
-    if (w.iTrimp != null && w.iTrimp > 0) {
-      tl += normalizeiTrimp(w.iTrimp, norm);
-    } else {
-      const rpe = w.rpe ?? w.r ?? 5;
-      tl += adhocDur2 * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
-    }
+    workoutMinutes += parseDurMinFromDesc(w.d);
+    tl += signalBAdhocTSS(w, norm); // the weekly total's adhoc rule
   }
 
   // unspentLoadItems are decision records, never load (see computeWeekRawTSS).

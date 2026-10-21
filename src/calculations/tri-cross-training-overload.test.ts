@@ -457,6 +457,24 @@ describe('detectCrossTrainingOverload — activities with no stored load are val
       .toBe(Math.round(90 * TL_PER_MIN[5]));
   });
 
+  it('a rated gym session with heart rate counts the strength override, as Signal B does (D9)', () => {
+    // An activity record with no adhoc twin: pass 2. Its HR-based iTRIMP is
+    // small (20 TSS); Signal B counts 60 x TL_PER_MIN[7] for a rated strength
+    // session, and so does the detector now.
+    const extras = {
+      garminActuals: {
+        'garmin-gym-1': {
+          garminId: 'gym-1', startTime: '2026-10-20T18:00:00.000Z', durationSec: 3600, distanceKm: 0,
+          avgPaceSecKm: null, avgHR: 120, maxHR: 150, calories: null, iTrimp: 3000, activityType: 'STRENGTH_TRAINING',
+        },
+      },
+      rated: { 'garmin-gym-1': 7 },
+    };
+    const r = detectCrossTrainingOverload(state({ wks: [{ ...canonicalTriWeek(), ...extras }] as any }), 0);
+    expect(r!.crossTrainingTSS).toBe(Math.round(60 * TL_PER_MIN[7])); // 107, was 20
+    expect(r!.crossTrainingTSS).toBe(computeWeekRawTSS({ w: 1, ...extras } as any, extras.rated as any));
+  });
+
   it('a stored load still wins: stamped aerobic + anaerobic is not re-valued', () => {
     const wk = {
       ...canonicalTriWeek(),

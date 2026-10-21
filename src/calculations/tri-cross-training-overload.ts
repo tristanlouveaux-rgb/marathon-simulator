@@ -332,9 +332,13 @@ function computeCrossTrainingTSS(wk: Week): CrossTrainingSummary {
     if (countedIds.has(workoutId)) continue;
     if (planIds.has(workoutId)) continue;
     if (isPlannedAdhocId(workoutId)) continue; // done record of a planned adhoc session
-    const tss = actual.iTrimp != null && actual.iTrimp > 0
-      ? normalizeiTrimp(actual.iTrimp) // personal normalizer (ISSUE-262)
-      : signalBActualTSS(actual, ratedRpeOf(wk.rated?.[workoutId])); // no stored load: Signal B's rule
+    // Signal B's per-activity rule in full (signalBActualTSS: rated strength
+    // override, else iTRIMP through the personal normalizer, else rated
+    // minutes), so an activity record counts what the weekly total counts. The
+    // iTRIMP check that used to come first skipped the strength override: a
+    // 60-min gym session rated 7 with heart rate counted its small HR-based
+    // iTRIMP here and 60 x TL_PER_MIN[7] in Signal B (D9, 2026-10-21).
+    const tss = signalBActualTSS(actual, ratedRpeOf(wk.rated?.[workoutId]));
     if (tss <= 0) continue;
     const affinity = classifyAffinity(actual.activityType, actual.displayName);
     credit(tss, affinity);
