@@ -38,6 +38,8 @@ vi.mock('@/data/supabaseClient', () => ({
 
 import { getDefaultState, setState } from '@/state/store';
 import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
+import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
+import { hyroxRunPaceCaption } from '@/ui/hyrox/forecast-labels';
 import { hyroxCalibrationCoverage } from '@/calculations/hyrox-station-history';
 import { doublesStationSoloSec } from '@/calculations/hyrox-doubles';
 import { shouldShowBenchmarkCard, renderHyroxBenchmarkCard } from './benchmark-card';
@@ -150,12 +152,18 @@ describe('stations calibrated: forecast, benchmark card, Stats, Account and chip
       // Stats renders the same count.
       expect(statsCount(s)).toBe('8 / 8');
       const html = document.getElementById('app-root')!.innerHTML;
-      // No station row on the seed. The run-pace row reads the forecast's own
-      // derivation (deriveHyroxRunPace: VDOT 50, nothing stored yet), so it is
-      // not a seed either (ISSUE-406 (d): one source for the run pace and its
-      // provenance on Forecast and Stats).
-      expect((html.match(/Population est\./g) ?? []).length).toBe(0);
-      expect(html).toContain('Updated from your runs.');
+      // No station row on the seed. The run-pace row carries the forecast's
+      // own provenance caption (ISSUE-406 (d): one source on Forecast and
+      // Stats), whatever it is, so this test asserts agreement, not a caption.
+      // TODO(open question, lane ctd 2026-10-21): this state has the default
+      // VDOT 50 and no runs, and deriveHyroxRunPace's VDOT branch still claims
+      // "Updated from your runs" off that bare baseline (against "gate claims
+      // on hasRealRunningFitnessSignal"). Pin the caption once Tristan decides
+      // whether a bare baseline reads as the seed.
+      const runPaceCaption = hyroxRunPaceCaption(deriveHyroxRunPace(s).provenance);
+      expect(html).toContain(runPaceCaption);
+      const seedCaptions = (html.match(/Population est\./g) ?? []).length;
+      expect(seedCaptions).toBe(runPaceCaption === 'Population est.' ? 1 : 0);
       expect(accountStations(s)).toBe('8/8');
       expect(chipStations(s)).toBe('8/8');
     });
