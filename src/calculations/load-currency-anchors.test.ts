@@ -33,7 +33,8 @@ import {
 } from '@/calculations/fitness-model';
 import { triActivityTss, withTriRatedRpe } from '@/calculations/tri-benchmarks-from-history';
 import { calculateITrimpFromSummary } from '@/calculations/trimp';
-import { computeUniversalLoad } from '@/cross-training/universalLoad';
+import { computeUniversalLoad, saturateCredit } from '@/cross-training/universalLoad';
+import { detectCrossTrainingOverload, overloadReductionBudget } from '@/calculations/tri-cross-training-overload';
 import { EASY_LOAD_PER_KM, TAU, HR_ZONE_TSS_PER_MIN } from '@/cross-training/universal-load-constants';
 import { generateTriathlonPlan } from '@/workouts/plan_engine.triathlon';
 import type { SimulatorState, Workout } from '@/types';
@@ -146,6 +147,8 @@ describe('Anchor 4: replacement credit can never exceed its own load', () => {
     for (const raw of [10, 50, 100, 200, 400, 900]) {
       const credit = TAU * (1 - Math.exp(-raw / TAU));
       expect(credit).toBeLessThanOrEqual(raw);
+      // The exported curve the planners call is this formula.
+      expect(saturateCredit(raw)).toBeCloseTo(credit, 10);
     }
   });
 
@@ -158,6 +161,46 @@ describe('Anchor 4: replacement credit can never exceed its own load', () => {
       const r = computeUniversalLoad(input as any, 'half');
       expect(r.runReplacementCredit).toBeLessThanOrEqual(r.baseLoad + 0.1);
     }
+  });
+});
+
+describe('Anchor 4b: the triathlon overload budget never exceeds the unanswered load', () => {
+  // The triathlon overload detector turns unanswered cross-training TSS into a
+  // budget of planned TSS it may cut. Until 2026-10-21 it kept the old
+  // 1500 × (1 − e^(−load / 800)) curve (slope 1.875 at zero): 50 TSS of tennis
+  // unlocked about 91 TSS of cuts. SCIENCE_LOG §DP.
+  it('overloadReductionBudget(load) ≤ load from 10 to 900 TSS', () => {
+    for (const raw of [10, 25, 50, 100, 200, 400, 900]) {
+      expect(overloadReductionBudget(raw)).toBeLessThanOrEqual(raw);
+      expect(overloadReductionBudget(raw)).toBeGreaterThan(0);
+    }
+    expect(overloadReductionBudget(0)).toBe(0);
+  });
+
+  it('the detector books no more cuts than the unanswered load', () => {
+    // 400 TSS planned. A threshold run whose swap to easy alone would take
+    // 100 TSS (50% of 200), and 62 TSS of tennis (15.5%, heavy).
+    const wk = {
+      w: 1,
+      triWorkouts: [
+        { id: 'mon-r', t: 'threshold', n: 'Run threshold', d: '90min', r: 8, discipline: 'run', aerobic: 150, anaerobic: 50, dayOfWeek: 0, estimatedDurationMin: 90 },
+        { id: 'sat-b', t: 'bike_endurance', n: 'Long bike', d: '4h', r: 5, discipline: 'bike', aerobic: 180, anaerobic: 20, dayOfWeek: 5, estimatedDurationMin: 240 },
+      ],
+      adhocWorkouts: [{ id: 'garmin-tennis', t: 'cross', n: 'tennis', d: '90min', r: 6, iTrimp: 62 * 150 }],
+    };
+    const s = { eventType: 'triathlon', w: 1, wks: [wk] } as unknown as SimulatorState;
+    const r = detectCrossTrainingOverload(s, 0);
+    expect(r).not.toBeNull();
+    expect(r!.crossTrainingTSS).toBe(62);
+    for (const d of ['swim', 'bike', 'run'] as const) {
+      for (const set of [r!.options[d].reduceMods, r!.options[d].replaceMods]) {
+        const booked = set.reduce((a, m) => a + m.tssReduction, 0);
+        expect(booked, `${d}`).toBeLessThanOrEqual(r!.crossTrainingTSS);
+      }
+    }
+    // The swap is still proposed, clipped to the budget (it was 100 TSS).
+    const swap = r!.options.run.replaceMods.find(m => m.action === 'swap_easy');
+    expect(swap?.tssReduction).toBe(Math.round(overloadReductionBudget(62)));
   });
 });
 

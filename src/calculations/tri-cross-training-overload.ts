@@ -35,6 +35,7 @@ import { computeDecayedTriCarry } from './tri-cross-training-carry';
 import { answeredCrossTrainingTSS, isOpenForTriSuggestion } from './tri-suggestion-handled';
 import { canApplyTriSuggestion, isTriQualitySession, triDowngradeTssReduction } from './tri-suggestion-apply';
 import { normalizeiTrimp } from '@/calculations/fitness-model';
+import { saturateCredit } from '@/cross-training/universalLoad';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Constants
@@ -49,10 +50,6 @@ const EXTREME_THRESHOLD = 0.25;
 /** Max number of mods we'll propose per discipline at each severity tier. */
 const MAX_MODS_HEAVY = 2;
 const MAX_MODS_EXTREME = 3;
-
-/** Saturation curve constants (mirror running's `suggester.ts:60-62`). */
-const SATURATION_CAP = 1500;
-const SATURATION_TAU = 800;
 
 /** Trim fraction for endurance reductions (15% off planned duration). */
 const TRIM_FRACTION = 0.15;
@@ -146,6 +143,29 @@ export interface CrossTrainingOverloadResult {
 // Public API
 // ───────────────────────────────────────────────────────────────────────────
 
+/**
+ * How much planned load the overload proposal may take off the week, in TSS,
+ * for `unansweredTSS` of cross-training the athlete has not answered yet.
+ *
+ * Running's replacement-credit curve (saturateCredit, universalLoad.ts):
+ * TAU × (1 − e^(−load / TAU)) with TAU 491 TSS (universal-load-constants.ts).
+ * Slope 1 at the origin and below 1 everywhere else, so the budget never
+ * exceeds the load that unlocked it (Load Currency Law: a credit can't exceed
+ * its load; load-currency anchor 4). A small load unlocks almost its own
+ * size (50 TSS → 47.5); a very large one saturates toward 491.
+ *
+ * Before 2026-10-21 this detector kept the pre-ISSUE-263 two-parameter form,
+ * 1500 × (1 − e^(−load / 800)): slope 1500 / 800 = 1.875 at the origin, so
+ * 50 TSS of cross-training unlocked about 91 TSS of cuts. Running moved off
+ * that form in ISSUE-263; triathlon was missed. SCIENCE_LOG §DP.
+ *
+ * Planning side: it sizes a prescription. Exported for the anchor test.
+ */
+export function overloadReductionBudget(unansweredTSS: number): number {
+  if (!(unansweredTSS > 0)) return 0;
+  return saturateCredit(unansweredTSS);
+}
+
 export function detectCrossTrainingOverload(
   state: SimulatorState,
   /** Today's day-of-week (0=Mon..6=Sun). Defaulted from `new Date()`; tests pass a fixed value. */
@@ -196,8 +216,8 @@ export function detectCrossTrainingOverload(
 
   // Saturation: a single huge cross-training session shouldn't unlock
   // unbounded reductions. Cap the "credit" available per discipline by
-  // running's saturation curve.
-  const reductionCredit = SATURATION_CAP * (1 - Math.exp(-unansweredTSS / SATURATION_TAU));
+  // running's saturation curve (overloadReductionBudget).
+  const reductionCredit = overloadReductionBudget(unansweredTSS);
 
   const options = {
     swim: buildDisciplineOption(state, wk, weekIdx, 'swim', todayDow, maxMods, reductionCredit),

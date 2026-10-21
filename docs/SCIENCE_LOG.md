@@ -9225,3 +9225,24 @@ Likely range (hyroxLikelyRangeSec, the Forecast hero's "Likely X-Y")
 **Guards.** `calculations/hyrox-peer-splits.test.ts` (14: segments sum to the finish; band medians plus the gap by skew at a band's own finish; within 2.5% of each table's median at the median finish; monotone in finish time; the run's gap share under 26 s and below the size share in every cohort; leg shares; floors per sex and division, Pro Mixed pooled), `calculations/hyrox-lose-time.test.ts` (34: a result at the peer profile loses 0; level bands; every-cohort median checks; ranking; segment assembly; headline copy; empty states; cohorts), `calculations/hyrox-race-plan.test.ts` (32: race order, sums and clock, the forecast's own numbers, run fade, floors per sex, Pro and division, the floor-sum monotonicity and 1 s step, Roxzone at the goal, slower goals, unrealistic and stretch goals, the likely-range grading, doubles, `roundToTotal`), `calculations/hyrox-goal-back-calc.test.ts` (18), `ui/hyrox/race-plan-lose-time-render.test.ts` (39, jsdom).
 
 ---
+
+## §DP: Cross-training overload detector: the budget curve has slope 1 (2026-10-21, lane ctd)
+
+**Side.** Planning. The triathlon overload detector (`detectCrossTrainingOverload`, `src/calculations/tri-cross-training-overload.ts`) reads tracked load (cross-training TSS this week) and prescribes plan cuts. It writes nothing; only an accepted Reduce or Push changes state. The same detector feeds triathlon and cycling (cycling reuses `eventType: 'triathlon'`). HYROX does not use it yet (it returns null outside triathlon); the HYROX cross-training design (`docs/research/hyrox-cross-training-design-2026-10.md` §2) reuses it after lane `fix/hyrox-h2b` merges.
+
+**1. Budget curve (Load Currency Law).** The budget of planned TSS a proposal may cut is
+
+```
+budget(U) = TAU x (1 - e^(-U / TAU)),   TAU = 491 TSS   (overloadReductionBudget -> saturateCredit)
+U         = this week's cross-training TSS + decayed carry - load already answered
+```
+
+`saturateCredit` (`src/cross-training/universalLoad.ts`) is running's replacement-credit curve, now exported; TAU is `universal-load-constants.ts` `TAU`, derived in ISSUE-263 from the old 800 time constant re-denominated to TSS (800 / 1.63, the easy-anchor Garmin-to-TSS ratio). Slope at 0 is TAU / TAU = 1 and the slope falls below 1 for any U > 0, so budget(U) < U: a credit never exceeds the load that unlocked it. No new constant.
+
+Before: `1500 x (1 - e^(-U / 800))`, the pre-ISSUE-263 two-parameter form running dropped on 2026-06-04. Slope 1500 / 800 = 1.875 at 0. 50 TSS of tennis unlocked about 91 TSS of cuts; 62 TSS unlocked 112, so a single swap-to-easy (50% of a 200 TSS threshold run, 100 TSS) went through whole. Now 50 TSS unlocks 47.5 and 62 unlocks 58. The change limits (2 cuts heavy, 3 extreme) and the per-session estimates (15% trim, 50% swap, the rung price of a downgrade) usually bind first, so most proposals are unchanged; the curve binds when one session's estimate exceeds the unanswered load.
+
+**Limitations.** The curve is running's single-session saturation applied to a week's sum of sessions; TAU was derived for one session. It is a cap, not a dose-response model.
+
+**Guards.** `load-currency-anchors.test.ts` anchor 4b (budget <= load from 10 to 900 TSS; the detector books no more cuts than the unanswered load).
+
+---

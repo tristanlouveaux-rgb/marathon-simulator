@@ -68,8 +68,12 @@ function defaultRpe(rpe: number | undefined | null): number {
  * credit = TAU × (1 − exp(−rawRRC / TAU)) — slope 1 at the origin, so a
  * credit can never exceed its raw load (see universal-load-constants.ts for
  * the ISSUE-263 history of the old amplifying two-parameter form).
+ *
+ * Exported so every planner that turns an outside load into a reduction
+ * budget saturates on the same curve (the triathlon overload detector,
+ * tri-cross-training-overload.ts). Load currency anchor 4 holds it.
  */
-function saturateCredit(rawRRC: number): number {
+export function saturateCredit(rawRRC: number): number {
   return TAU * (1.0 - Math.exp(-rawRRC / TAU));
 }
 
