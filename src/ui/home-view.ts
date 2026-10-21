@@ -20,7 +20,7 @@ import { computeReadiness, readinessColor, readinessColorStops, computeRecoveryS
 import { computeTriReadiness } from '@/calculations/tri-readiness';
 import { hyroxMtlAcwr } from '@/calculations/mtl';
 import { computeDecayedTriCarry } from '@/calculations/tri-cross-training-carry';
-import { computeDailyCoach, hasTrainedOnDay, type StrainContext } from '@/calculations/daily-coach';
+import { computeDailyCoach, deriveStrainContext } from '@/calculations/daily-coach';
 import { computeCapacityStrain, capacityStrainNote } from '@/calculations/capacity-strain';
 import { getSleepInsight, fmtSleepDuration, sleepScoreColor, buildBarChart, getSleepBank, fmtSleepBank, deriveSleepTarget, buildDailySignalBTSS, computeSleepDebtOutlook, mergeManualSleepHistory } from '@/calculations/sleep-insights';
 import type { PhysiologyDayEntry } from '@/types/state';
@@ -995,16 +995,11 @@ export function buildReadinessRing(s: SimulatorState): string {
   // load lifted the ring to "High for rest day" on a walking day while the
   // Readiness page read the day as fine.
   const isRestDayOverreaching = strainWk ? isRestDayOverreached(strainWk, strainDay, isRestDay, plannedCtx.perSessionAvg) : false;
-  // Strain: two scales for different purposes.
-  // Linear (actual/target × 100). Used for the readiness floor thresholds.
-  //   The floor cares about real physiological load completion, not visual display.
-  // Logarithmic (log(1+actual)/log(1+target) × 100). Used for ring fill only.
+  // Logarithmic strain (log(1+actual)/log(1+target) × 100), for ring fill.
   //   Early effort registers visually (20/100 TSS → ~38% not 20%);
   //   exceeding target grows slowly (130% linear → ~107% log).
-  //   Matches WHOOP/Bevel logarithmic strain display.
-  const strainPctLinear = hasPlannedWorkout && todaySignalBTSS > 0 && plannedDayTSS > 0
-    ? (todaySignalBTSS / plannedDayTSS) * 100
-    : 0;
+  //   Matches WHOOP/Bevel logarithmic strain display. The coach's plan-relative
+  //   percent comes from deriveStrainContext (sessions only), below.
   const strainPctLog = hasPlannedWorkout && todaySignalBTSS > 0 && plannedDayTSS > 0
     ? (Math.log(1 + todaySignalBTSS) / Math.log(1 + plannedDayTSS)) * 100
     : 0;
@@ -1060,40 +1055,13 @@ export function buildReadinessRing(s: SimulatorState): string {
 
   // ── Primary message (single authoritative sentence) ─────────────────────
   // Replaces the old readinessSentence + HRV banner with one coherent message
-  // computed by daily-coach using all available signals.
-  // A logged session, not strain: todaySignalBTSS includes passive step load,
-  // which flipped the coach to "Light session was the right call." before the
-  // day's session (ISSUE-406 (c)). hasTrainedOnDay is deriveStrainContext's rule.
-  const trainedToday = strainWk ? hasTrainedOnDay(strainWk, strainDay) : false;
-  const todayPlannedWorkout = plannedCtx.workoutsForDay(todayDayOfWeek)
-    .find(w => w.status !== 'skip' && w.status !== 'replaced');
-  const todayIsHard = todayPlannedWorkout?.isHard ?? false;
-
-  let upcomingHard: StrainContext['upcomingHard'] = null;
-  for (let offset = 1; offset <= 2; offset++) {
-    const targetDow = (todayDayOfWeek + offset) % 7;
-    if (targetDow < todayDayOfWeek) break;
-    const hit = plannedCtx.workoutsForDay(targetDow)
-      .find(w => w.status !== 'skip' && w.status !== 'replaced' && w.isHard);
-    if (hit) {
-      upcomingHard = { whenLabel: offset === 1 ? 'tomorrow' : 'the day after', type: hit.type };
-      break;
-    }
-  }
-
-  const strainCtx: StrainContext = {
-    strainPct: strainPctLinear,
-    capacityStrainPct: capStrain.pctCapacity,
-    isRestDay,
-    isRestDayOverreaching,
-    trainedToday,
-    todayIsHard,
-    upcomingHard,
-    recentCrossTraining: null, // populated below if found
-    actualTSS: todaySignalBTSS,
-  };
-
-  const coach = computeDailyCoach(s, strainCtx);
+  // computed by daily-coach using all available signals. The coach's context
+  // comes from deriveStrainContext, the source the coach page and the Readiness
+  // page use (D8): it carries today's planned workout, so the line names the
+  // session, and its session fields count logged sessions only (passive step
+  // load is strain, not a session: ISSUE-406 (c)). Home built its own context
+  // before, without the planned workout.
+  const coach = computeDailyCoach(s, deriveStrainContext(s));
   // Tri-mode post-session override: canonical capacityStrainNote — injury-cap
   // overshoot first ("X TSS logged against an injury-capped day of Y…"), then
   // the Big/Solid/Good-training tiers vs the capacity anchor. Same helper the

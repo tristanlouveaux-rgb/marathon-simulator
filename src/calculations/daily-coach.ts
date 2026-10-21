@@ -125,8 +125,15 @@ export interface StrainContext {
   upcomingHard: { whenLabel: string; type: string } | null;
   /** Recent cross-training label + TSS in last 48h (null if none > 25 TSS). */
   recentCrossTraining: { label: string; tss: number } | null;
-  /** Today's raw Signal B TSS (0 if nothing logged). Used to judge session weight on adhoc days. */
+  /** Today's raw Signal B TSS from logged sessions (0 if nothing logged). Used to judge session weight on adhoc days. */
   actualTSS: number;
+  /**
+   * Today's strain TSS: sessions plus passive step and active-minute load
+   * (computeCapacityStrain(s).todayTSS, the Strain ring's number). Gates the
+   * coach's readiness strain input exactly as Home and Readiness gate their own
+   * computeReadiness call. Absent: actualTSS gates.
+   */
+  strainTSS?: number;
   /** Full today-planned workout shape (if any) — used to expose richer context to the LLM. */
   todayPlannedWorkout?: {
     name: string;
@@ -198,7 +205,16 @@ export function hasTrainedOnDay(wk: Week, day: string): boolean {
   return computeTodaySignalBTSS(wk, day) > 0;
 }
 
-function deriveStrainContext(s: SimulatorState): StrainContext {
+/**
+ * The coach's view of today, from state alone: the one source for Home's coach
+ * line, the coach page and the Readiness page's coach sentence (computeDailyCoach
+ * derives it when no context is passed). Home built its own context until
+ * 2026-10-21 (D8): no today's planned workout, so its line said "the session"
+ * where the coach page named it, and its session TSS included passive steps.
+ * Sessions only for the session fields (actualTSS, strainPct, trainedToday,
+ * isRestDayOverreaching); the readiness gate reads the strain TSS (strainTSS).
+ */
+export function deriveStrainContext(s: SimulatorState): StrainContext {
   const wk = (s.wks ?? [])[s.w - 1];
   if (!wk) return { strainPct: 0, isRestDay: true, isRestDayOverreaching: false, trainedToday: false, todayIsHard: false, upcomingHard: null, recentCrossTraining: null, actualTSS: 0 };
 
@@ -267,12 +283,16 @@ function deriveStrainContext(s: SimulatorState): StrainContext {
     }
   }
 
+  // Canonical capacity-anchored strain: the percent the readiness strain floor
+  // reads and the day's strain TSS that gates it. Keeps the coach's internal
+  // readiness consistent with the Home card and the Readiness detail page
+  // (same computeCapacityStrain source, same gate).
+  const capStrain = computeCapacityStrain(s);
+
   return {
     strainPct,
-    // Canonical capacity-anchored percent — what the readiness strain floor
-    // reads. Keeps the coach's internal readiness consistent with the Home
-    // card and the Readiness detail page (same computeCapacityStrain source).
-    capacityStrainPct: computeCapacityStrain(s).pctCapacity,
+    capacityStrainPct: capStrain.pctCapacity,
+    strainTSS: capStrain.todayTSS,
     isRestDay,
     isRestDayOverreaching,
     trainedToday: hasTrainedOnDay(wk, today),
@@ -392,7 +412,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
     // Gated on the day's strain TSS (sessions and passive load), the gate Home
     // and Readiness apply to their own computeReadiness call
     // (capStrain.todayTSS > 0); trainedToday counts sessions only.
-    strainPct: (strain?.actualTSS ?? 0) > 0 ? (strain!.capacityStrainPct ?? strain!.strainPct) : null,
+    strainPct: (strain?.strainTSS ?? strain?.actualTSS ?? 0) > 0 ? (strain!.capacityStrainPct ?? strain!.strainPct) : null,
     acwrSafeUpper: acwr.safeUpper,
     hasUpcomingHardSession: strain?.upcomingHard != null || (strain?.todayIsHard ?? false),
     // HYROX MTL load ratio: the canonical value Home and Readiness feed their

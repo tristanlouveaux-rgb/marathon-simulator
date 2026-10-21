@@ -90,9 +90,9 @@ describe('Home coach line with passive step load before the session', () => {
     setState(state);
     renderHomeView();
     const text = sentenceText();
-    // Home's StrainContext carries no todayPlannedWorkout, so the coach names
-    // "the session" there (deriveStrainContext names it; separate gap).
-    expect(text).toMatch(/Sleep 40\/100 last night\. Consider converting (the session|Tempo Run) to easy effort\./);
+    // Home's coach context is deriveStrainContext's (D8), which carries today's
+    // planned workout, so the line names the Tempo Run.
+    expect(text).toContain('Sleep 40/100 last night. Consider converting Tempo Run to easy effort.');
     expect(text).not.toContain('Light session was appropriate');
     expect(text).not.toContain('Light session was the right call');
   });
