@@ -1426,7 +1426,39 @@ function generateWeekSessions(
     const refCap = sessionCapFor(inputs.sessionCaps, w.t);
     if (!refCap) return w;
     const stationsOf = (x: Workout): number => (x.hyroxComponents ?? []).filter(c => c.type !== 'run').length;
+    // The reference week's own session of this type, at no more rounds than
+    // `x` (with none of that type, the lightest of its class for a deload):
+    // the session a ceiling repeats when its cuts cannot bring `x` under the
+    // reference week's (see the length and MTL step below).
+    const repeatRef = (x: Workout, why: string): Workout | null => {
+      const refs = inputs.sessionRefs ?? [];
+      const sameType = refs.filter(r => r.t === x.t);
+      const pool = sameType.length > 0 || !inputs.capSessionLoad ? sameType : refs.filter(r => sessionCapClass(r.t) === sessionCapClass(x.t));
+      const pick = pool.reduce<Workout | undefined>((m, r) => (!m || (r.musculoTendonLoad ?? 0) < (m.musculoTendonLoad ?? 0) ? r : m), undefined);
+      if (!pick) return null;
+      const { id: _id, dayOfWeek: _dow, dayName: _day, ...copy } = pick;
+      // At this week's own beginner loads, never the heavier loads the
+      // reference week's session held (Tristan 2026-10-20: a deload after a
+      // load step copied the stepped load). Without the reference session's
+      // finisher and strength block: this week's spare minutes size its own
+      // (lane H2b part 2).
+      const rep = withHyroxSessionParts(withHyroxFinisher(withHyroxStationLoads(
+        withHyroxRounds(copy as Workout, floorRounds(copy as Workout, Math.min(pick.hyroxRounds ?? 0, x.hyroxRounds ?? 0))),
+        inputs.stationLoads, loadTier, bodyWeightKg,
+      ), 0, hx.stationAccess, weekIndex, bodyWeightKg), { strength: null });
+      adjustments.push(sameType.length > 0
+        ? `W${weekIndex}: ${rep.n} repeats the reference week's at ${rep.hyroxRounds} rounds (${ceilingName}: ${why})`
+        : `W${weekIndex}: ${x.n} becomes the reference week's ${rep.n} at ${rep.hyroxRounds} rounds (${ceilingName}: ${why})`);
+      return rep;
+    };
     let out = w;
+    // Under an injury, a round or station cut toward the reference week's
+    // counts that the gates would then leave out (no shape within the shares
+    // holds the floor) is not made: the week repeats the reference week's own
+    // session, gated as it was (review round 7: at upper body 70, Row Erg
+    // only deload weeks lost their station session to a station cut, 66 of
+    // 810 weeks with no station work against 47 at upper body 50).
+    let cutLeaves = false;
     if (!gates?.active) {
       if ((out.hyroxRounds ?? 0) > refCap.rounds) {
         // Never under the session's floor (holdsStationFloor).
@@ -1444,6 +1476,9 @@ function generateWeekSessions(
         if (!g || (g.hyroxRounds ?? 0) <= refCap.rounds || (out.hyroxRounds ?? 0) <= hyroxMinRounds(out)) break;
         const fewer = withHyroxRounds(out, (out.hyroxRounds ?? 0) - 1);
         if (!holdsStationFloor(fewer)) break;
+        // A cut the gates would then leave out: the reference week's own
+        // session instead (below).
+        if (!asGated(fewer)) { cutLeaves = true; break; }
         out = fewer;
       }
       if ((out.hyroxRounds ?? 0) < (w.hyroxRounds ?? 0)) adjustments.push(`W${weekIndex}: ${out.n} cut to ${out.hyroxRounds} rounds (${ceilingName}: the reference week's)`);
@@ -1458,10 +1493,15 @@ function generateWeekSessions(
       }
       const next = withoutHyroxStation(out, hyroxStationToCut(out) as HyroxStation);
       if (next === out || !holdsStationFloor(next)) break;
+      if (gates?.active && !asGated(next)) { cutLeaves = true; break; }
       out = next;
       cut++;
     }
     if (cut > 0) adjustments.push(`W${weekIndex}: ${cut} station(s) taken out of the ${out.n} (${ceilingName}: the reference week's ${maxStations})`);
+    if (cutLeaves) {
+      const rep = repeatRef(out, 'the reference week\'s');
+      if (rep) return rep;
+    }
     if (inputs.capSessionLoad || (inputs.capBrickLoad && sessionCapClass(w.t) === 'brick')) {
       // No longer or heavier than the reference week's session, as the
       // injury gates leave both: rounds go first, then the heaviest stations
@@ -1473,10 +1513,13 @@ function generateWeekSessions(
       let rounds = 0;
       let stations = 0;
       // Neither takes a station session under its floor (holdsStationFloor).
+      // Under an injury, no cut the gates would then leave out (the
+      // reference week's own session instead, below).
+      const dropped = (x: Workout): boolean => !!gates?.active && !asGated(x);
       while (heavy(out)) {
         if ((out.hyroxRounds ?? 0) > hyroxMinRounds(out)) {
           const fewer = withHyroxRounds(out, (out.hyroxRounds ?? 0) - 1);
-          if (holdsStationFloor(fewer)) {
+          if (holdsStationFloor(fewer) && !dropped(fewer)) {
             out = fewer;
             rounds++;
             continue;
@@ -1485,7 +1528,7 @@ function generateWeekSessions(
         const st = (out.hyroxComponents ?? []).filter(c => c.type !== 'run');
         if (st.length <= MIN_CIRCUIT_STATIONS) break;
         const next = withoutHyroxStation(out, hyroxStationToCut(out) as HyroxStation);
-        if (next === out || !holdsStationFloor(next)) break;
+        if (next === out || !holdsStationFloor(next) || dropped(next)) break;
         out = next;
         stations++;
       }
@@ -1503,26 +1546,7 @@ function generateWeekSessions(
         // min and 67 MTL.
         // The taper repeats a brick of the same type only (its downgraded
         // mini brick never becomes the reference week's full brick).
-        const refs = inputs.sessionRefs ?? [];
-        const sameType = refs.filter(r => r.t === out.t);
-        const pool = sameType.length > 0 || !inputs.capSessionLoad ? sameType : refs.filter(r => sessionCapClass(r.t) === sessionCapClass(out.t));
-        const pick = pool.reduce<Workout | undefined>((m, r) => (!m || (r.musculoTendonLoad ?? 0) < (m.musculoTendonLoad ?? 0) ? r : m), undefined);
-        if (pick) {
-          const was = out.n;
-          const { id: _id, dayOfWeek: _dow, dayName: _day, ...copy } = pick;
-          // At this week's own beginner loads, never the heavier loads the
-          // reference week's session held (Tristan 2026-10-20: a deload
-          // after a load step copied the stepped load).
-          // Without the reference session's finisher and strength block:
-          // this week's spare minutes size its own (lane H2b part 2).
-          out = withHyroxSessionParts(withHyroxFinisher(withHyroxStationLoads(
-            withHyroxRounds(copy as Workout, floorRounds(copy as Workout, Math.min(pick.hyroxRounds ?? 0, out.hyroxRounds ?? 0))),
-            inputs.stationLoads, loadTier, bodyWeightKg,
-          ), 0, hx.stationAccess, weekIndex, bodyWeightKg), { strength: null });
-          adjustments.push(sameType.length > 0
-            ? `W${weekIndex}: ${out.n} repeats the reference week's at ${out.hyroxRounds} rounds (${ceilingName}: no longer or heavier than the reference week's)`
-            : `W${weekIndex}: ${was} becomes the reference week's ${out.n} at ${out.hyroxRounds} rounds (${ceilingName}: no longer or heavier than the reference week's)`);
-        }
+        out = repeatRef(out, 'no longer or heavier than the reference week\'s') ?? out;
       }
     }
     return out;
