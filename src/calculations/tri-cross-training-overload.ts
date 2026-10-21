@@ -113,7 +113,8 @@ export interface DisciplineOption {
    *  stays within the reduction budget; the floor only warns (belowFloor). */
   reduceMods: OverloadAdjustment[];
   /** Replace-and-reduce mods (swap quality with easy + trim others). Same
-   *  budget rule as reduceMods. */
+   *  budget rule as reduceMods. Empty when the set would hold no swap: it then
+   *  holds the Reduce set's kind of change, so the modal hides the option. */
   replaceMods: OverloadAdjustment[];
 }
 
@@ -407,7 +408,12 @@ function buildDisciplineOption(
   const floorTSS = computeTriDisciplineFloorTSS(state, discipline, weekIdx);
 
   const reduceMods = buildReduceMods(candidates, maxMods, reductionCredit);
-  const replaceMods = buildReplaceMods(candidates, maxMods, reductionCredit);
+  // Replace & Reduce is offered only when it replaces something. A set with no
+  // swap (no quality session the apply step can swap, or every swap larger
+  // than the budget) holds the Reduce set's kind of change and would duplicate
+  // Reduce (Tristan, 2026-10-21).
+  const replaceSet = buildReplaceMods(candidates, maxMods, reductionCredit);
+  const replaceMods = replaceSet.some(m => m.action === 'swap_easy') ? replaceSet : [];
 
   // belowFloor = the proposed Reduce mods would drop remaining below floor.
   // We don't block. The modal warns and lets the user override.

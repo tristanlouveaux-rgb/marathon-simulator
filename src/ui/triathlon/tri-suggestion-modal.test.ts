@@ -105,6 +105,32 @@ describe('tri suggestion modal: overload answers are remembered for the week', (
   });
 });
 
+describe('tri suggestion modal: Replace & Reduce shows only when it replaces something', () => {
+  beforeEach(() => {
+    resetState();
+    const st = triState();
+    // A ride instead of padel: bike is recommended, and bike's only session is
+    // the long endurance ride, so there is nothing to swap.
+    (st.wks[0] as any).adhocWorkouts = [{ id: 'ride', t: 'cross', n: 'cycling', d: '150min', r: 7, iTrimp: 33000 }];
+    setState(st);
+  });
+  afterEach(() => { document.getElementById('tri-suggestion-overlay')?.remove(); });
+
+  it('hidden for a discipline with no swap, shown after flipping to one with a swap', () => {
+    const bundle = collectTriSuggestions(getState());
+    expect(overloadMod()!.overloadOptions!.recommendedDiscipline).toBe('bike');
+    void showTriSuggestionModal(bundle);
+    const replace = document.getElementById('tri-sm-replace') as HTMLElement;
+    expect(replace.style.display).toBe('none');
+    expect(document.getElementById('tri-sm-overload-body')!.textContent).not.toContain('Replace');
+    (document.getElementById('tri-sm-chip-run') as HTMLElement).click();
+    expect(replace.style.display).toBe('');
+    expect(document.getElementById('tri-sm-overload-body')!.textContent).toContain('Replace');
+    (document.getElementById('tri-sm-chip-bike') as HTMLElement).click();
+    expect(replace.style.display).toBe('none');
+  });
+});
+
 describe('tri suggestion modal: generic rows are remembered for the week', () => {
   afterEach(() => {
     document.getElementById('tri-suggestion-overlay')?.remove();

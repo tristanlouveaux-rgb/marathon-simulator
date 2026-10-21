@@ -99,6 +99,7 @@ export function showTriSuggestionModal(bundle: TriSuggestionBundle): Promise<num
             selectedDiscipline = d;
             const target = document.getElementById('tri-sm-overload-body');
             if (target) target.innerHTML = renderOverloadBody(opts, d);
+            syncOverloadButtons(opts.options[d]);
             // Re-render chip styles
             for (const dd of ['swim', 'bike', 'run'] as Discipline[]) {
               const el = document.getElementById(`tri-sm-chip-${dd}`);
@@ -266,6 +267,7 @@ function renderOverloadSection(opts: CrossTrainingOverloadResult, selected: Disc
           flex:1;padding:11px;border-radius:10px;
           border:1px solid var(--c-border);background:transparent;
           font-size:13px;font-weight:500;color:#0F172A;
+          ${opts.options[selected].replaceMods.length > 0 ? '' : 'display:none;'}
         ">Replace &amp; Reduce</button>
         <button id="tri-sm-keep" class="tri-sm-btn" style="
           flex:1;padding:11px;border-radius:10px;
@@ -280,6 +282,16 @@ function renderOverloadSection(opts: CrossTrainingOverloadResult, selected: Disc
       ">Push to next week</button>
     </div>
   `;
+}
+
+/**
+ * Show only the choices the selected discipline can act on. Replace & Reduce
+ * appears when its set holds a swap (the detector leaves it empty otherwise,
+ * since it would repeat Reduce). Re-run when the chip changes.
+ */
+function syncOverloadButtons(opt: DisciplineOption): void {
+  const replace = document.getElementById('tri-sm-replace');
+  if (replace) replace.style.display = opt.replaceMods.length > 0 ? '' : 'none';
 }
 
 function renderOverloadBody(opts: CrossTrainingOverloadResult, selected: Discipline): string {

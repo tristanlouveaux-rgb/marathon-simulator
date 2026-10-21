@@ -251,6 +251,26 @@ describe('detectCrossTrainingOverload — per-discipline options', () => {
     expect(swap).toBeDefined();
     expect(swap!.workoutId).toBe('mon-r');
   });
+
+  it('Replace & Reduce is empty when it would hold no swap (it would repeat Reduce)', () => {
+    // Bike holds only the long endurance ride: nothing to swap, so the replace
+    // set would be the same trim as Reduce. Run holds the threshold session.
+    const s = state({
+      wks: [{
+        ...canonicalTriWeek(),
+        adhocWorkouts: [{ id: 'big', t: 'cross', n: 'tennis', d: '180min', r: 7, iTrimp: 30000 }],
+      }] as any,
+    });
+    const r = detectCrossTrainingOverload(s, 0)!;
+    expect(r.options.bike.reduceMods.length).toBeGreaterThan(0);
+    expect(r.options.bike.replaceMods).toEqual([]);
+    expect(r.options.run.replaceMods.some(m => m.action === 'swap_easy')).toBe(true);
+    // Every non-empty replace set holds a swap.
+    for (const d of ['swim', 'bike', 'run'] as const) {
+      const set = r.options[d].replaceMods;
+      if (set.length) expect(set.some(m => m.action === 'swap_easy'), d).toBe(true);
+    }
+  });
 });
 
 describe('detectCrossTrainingOverload — membership filter (plan-vs-extra)', () => {
