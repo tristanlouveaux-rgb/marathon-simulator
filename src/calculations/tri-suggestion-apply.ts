@@ -120,8 +120,8 @@ export function applyTriSuggestions(state: SimulatorState, mods: TriSuggestionMo
         ok = applyDowngrade(state, week, workout, mod);
         break;
       case 'trim_volume':
-        // 15% shorter at the same intensity (volume-ramp violations).
-        ok = applyTrim(workout);
+        // 15% shorter at the same intensity (volume ramp, cross-training overload).
+        ok = applyTrim(workout, mod);
         break;
     }
     if (ok) {
@@ -569,7 +569,7 @@ function applyDowngrade(state: SimulatorState, week: Week, w: Workout, mod: TriS
   return true;
 }
 
-function applyTrim(w: Workout): boolean {
+function applyTrim(w: Workout, mod: TriSuggestionMod): boolean {
   const oldMin = minutesOf(w);
   const newMin = Math.round(oldMin * TRIM_DURATION_FACTOR);
   stampOriginal(w);
@@ -588,7 +588,11 @@ function applyTrim(w: Workout): boolean {
     if (typeof b.originalAnaerobic === 'number') b.originalAnaerobic = Math.round(b.originalAnaerobic * bf);
   }
   w.status = 'reduced';
-  w.modReason = 'Volume ramp trim';
+  // The reason names what asked for the trim, as applyDowngrade does: an
+  // overload trim read "Volume ramp trim" (volume-ramp suggestions are off,
+  // TRI_VOLUME_RAMP_SUGGESTIONS_LIVE, so every trim was an overload trim).
+  // modReason reaches the AI coach's plan context (coach-context-builder).
+  w.modReason = mod.source === 'volume_ramp' ? 'Volume ramp trim' : 'Manage load';
   return true;
 }
 

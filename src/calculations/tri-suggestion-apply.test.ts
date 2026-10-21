@@ -74,6 +74,22 @@ describe('applyTriSuggestions', () => {
     const w = s.wks![0].triWorkouts![0];
     expect(w.status).toBe('reduced');
     expect(w.estimatedDurationMin).toBe(170);  // 200 × 0.85
+    expect(w.modReason).toBe('Volume ramp trim');
+  });
+
+  it('an overload trim reads "Manage load", not "Volume ramp trim"', () => {
+    const s = state([workout('w1', 'bike_endurance', 'bike', 200)]);
+    const mod: TriSuggestionMod = {
+      id: 'xt_0', source: 'cross_training_overload', discipline: 'bike',
+      headline: 'Test', body: 'Test',
+      severity: 'caution',
+      targetWorkoutId: 'w1',
+      action: 'trim_volume',
+    };
+    applyTriSuggestions(s, [mod]);
+    const w = s.wks![0].triWorkouts![0];
+    expect(w.estimatedDurationMin).toBe(170);
+    expect(w.modReason).toBe('Manage load');
   });
 
   it('skips mods without a targetWorkoutId', () => {
