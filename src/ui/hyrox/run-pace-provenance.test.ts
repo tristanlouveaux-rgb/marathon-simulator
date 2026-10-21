@@ -38,6 +38,7 @@ function hyroxState(): SimulatorState {
   s.w = 1;
   s.tw = 16;
   s.v = 46;
+  s.vo2 = 46; // a measured runner (watch VO2max): the VDOT branch needs a real signal (D5)
   s.hyroxConfig = {
     format: 'open_singles',
     athleteBand: band,

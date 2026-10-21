@@ -26,6 +26,10 @@ function buildState(opts: {
 } = {}): SimulatorState {
   return {
     v: opts.vdot ?? null,
+    // A measured runner: a fresh watch VO2max at the same VDOT is a real
+    // running-fitness signal (hasRealRunningFitnessSignal), which the VDOT
+    // branch needs (D5, 2026-10-21). No VDOT, no signal.
+    vo2: opts.vdot ?? null,
     lt: null,
     hyroxConfig: {
       format: 'open_singles',
@@ -72,6 +76,22 @@ describe('applyHyroxRunPaceDerivation', () => {
     expect(wrote).toBe(true);
     expect(s.hyroxConfig!.hyroxRunPaceSource).toBe('seed');
     expect(s.hyroxConfig!.hyroxRunPaceSecKm).toBeUndefined();
+  });
+
+  it('a stored derived pace with no real running-fitness signal is cleared to the seed (D5)', () => {
+    // An earlier launch stored a pace off the bare-baseline VDOT 50.
+    const s = { ...buildState({ vdot: 50, hyroxRunPaceSecKm: 253, hyroxRunPaceSource: 'derived' }), vo2: null } as SimulatorState;
+    expect(applyHyroxRunPaceDerivation(s)).toBe(true);
+    expect(s.hyroxConfig!.hyroxRunPaceSecKm).toBeUndefined();
+    expect(s.hyroxConfig!.hyroxRunPaceSource).toBe('seed');
+    expect(applyHyroxRunPaceDerivation(s)).toBe(false); // idempotent
+  });
+
+  it('a pace the athlete entered is never cleared, signal or not', () => {
+    const s = { ...buildState({ vdot: 50, hyroxRunPaceSecKm: 330, hyroxRunPaceSource: 'user' }), vo2: null } as SimulatorState;
+    expect(applyHyroxRunPaceDerivation(s)).toBe(false);
+    expect(s.hyroxConfig!.hyroxRunPaceSecKm).toBe(330);
+    expect(s.hyroxConfig!.hyroxRunPaceSource).toBe('user');
   });
 
   it('user pace within 5s margin of derived: source stays user, no write', () => {

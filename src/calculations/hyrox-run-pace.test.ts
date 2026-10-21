@@ -31,6 +31,10 @@ function buildState(opts: {
 } = {}): SimulatorState {
   return {
     v: opts.vdot ?? null,
+    // A measured runner: a fresh watch VO2max at the same VDOT is a real
+    // running-fitness signal (hasRealRunningFitnessSignal), which the VDOT
+    // branch needs (D5, 2026-10-21). No VDOT, no signal.
+    vo2: opts.vdot ?? null,
     lt: opts.ltPace ?? null,
     hyroxConfig: {
       format: opts.format ?? 'open_singles',
@@ -178,6 +182,26 @@ describe('deriveHyroxRunPace — full pipeline', () => {
     expect(result.source).toBe('seed');
     expect(result.paceSecKm).toBe(SEED_RUN_PACE_SEC_KM.intermediate);
     expect(result.derivedSecKm).toBeNull();
+  });
+
+  it('bare-baseline VDOT (no real running-fitness signal) → seed, not a VDOT pace (D5)', () => {
+    // The default VDOT 50 with no runs, PBs or watch data: no claims off it.
+    const bare = { ...buildState({ band: 'intermediate', vdot: 50 }), vo2: null } as SimulatorState;
+    const r = deriveHyroxRunPace(bare);
+    expect(r.source).toBe('seed');
+    expect(r.provenance).toBe('seed');
+    expect(r.paceSecKm).toBe(SEED_RUN_PACE_SEC_KM.intermediate);
+    expect(r.derivedSecKm).toBeNull();
+    expect(r.components).toBeUndefined();
+    // The same VDOT with a real signal derives.
+    const measured = deriveHyroxRunPace(buildState({ band: 'intermediate', vdot: 50 }));
+    expect(measured.source).toBe('derived');
+    expect(measured.paceSecKm).not.toBe(SEED_RUN_PACE_SEC_KM.intermediate);
+  });
+
+  it('bare baseline with a personal offset still reads the seed: the offset is a residual on the VDOT model', () => {
+    const bare = { ...buildState({ band: 'intermediate', vdot: 50, personalOffsetSec: 20, personalOffsetUpdatedAt: new Date().toISOString().slice(0, 10) }), vo2: null } as SimulatorState;
+    expect(deriveHyroxRunPace(bare).paceSecKm).toBe(SEED_RUN_PACE_SEC_KM.intermediate);
   });
 
   it('VDOT out-of-range (15) → seed fallback', () => {

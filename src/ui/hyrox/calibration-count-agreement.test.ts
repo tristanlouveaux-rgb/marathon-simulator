@@ -154,16 +154,14 @@ describe('stations calibrated: forecast, benchmark card, Stats, Account and chip
       const html = document.getElementById('app-root')!.innerHTML;
       // No station row on the seed. The run-pace row carries the forecast's
       // own provenance caption (ISSUE-406 (d): one source on Forecast and
-      // Stats), whatever it is, so this test asserts agreement, not a caption.
-      // TODO(open question, lane ctd 2026-10-21): this state has the default
-      // VDOT 50 and no runs, and deriveHyroxRunPace's VDOT branch still claims
-      // "Updated from your runs" off that bare baseline (against "gate claims
-      // on hasRealRunningFitnessSignal"). Pin the caption once Tristan decides
-      // whether a bare baseline reads as the seed.
-      const runPaceCaption = hyroxRunPaceCaption(deriveHyroxRunPace(s).provenance);
-      expect(html).toContain(runPaceCaption);
+      // Stats). This state has the default VDOT 50 and no runs, PBs or watch
+      // data, so the run pace is the band seed (D5: no claims off the
+      // bare-baseline VDOT) and the one "Population est." is the run pace's.
+      expect(deriveHyroxRunPace(s).provenance).toBe('seed');
+      expect(hyroxRunPaceCaption('seed')).toBe('Population est.');
+      expect(html).not.toContain('Updated from your runs');
       const seedCaptions = (html.match(/Population est\./g) ?? []).length;
-      expect(seedCaptions).toBe(runPaceCaption === 'Population est.' ? 1 : 0);
+      expect(seedCaptions).toBe(1);
       expect(accountStations(s)).toBe('8/8');
       expect(chipStations(s)).toBe('8/8');
     });

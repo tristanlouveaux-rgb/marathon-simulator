@@ -47,6 +47,7 @@ import { SEED_RUN_PACE_SEC_KM, HYROX_RUN_PACE_MIN_SEC_KM, HYROX_STATION_ORDER } 
 import { doublesRatioAt, seedRoxzoneSecForFormat, hyroxDoublesTables, hyroxDoublesTablesForState, type HyroxDoublesTables } from './hyrox-doubles';
 import { hyroxSeedRunPaceSecKm } from './hyrox-results';
 import { resolveHyroxAthleteSex } from './hyrox-division';
+import { hasRealRunningFitnessSignal } from './physiological-vdot';
 import {
   computePersonalRunPaceOffset,
   blendPersonalRunPaceOffset,
@@ -212,8 +213,17 @@ export function deriveHyroxRunPace(state: SimulatorState): HyroxRunPaceResult {
     ? Math.round(singlesSeed * doublesRunPaceFactor(singlesSeed, hyroxDoublesTablesForState(state)))
     : singlesSeed;
 
-  // Population model (no offset).
-  const pop = derivePopulationRunPace(state, targetFormat);
+  // Population model (no offset), only for a measured runner. The model reads
+  // state.v, and without a real running-fitness signal that is the bare
+  // baseline (the default VDOT 50, or a stale carried value): a pace from it
+  // would be captioned "Updated from your runs" for a runner with no runs. The
+  // canonical rule is no claims off the bare-baseline VDOT
+  // (hasRealRunningFitnessSignal, physiological-vdot.ts), so such a runner gets
+  // the band seed, captioned "Population est." (Tristan, 2026-10-21, D5). The
+  // personal offset is a residual against this model, so it goes with it.
+  let measured = false;
+  try { measured = hasRealRunningFitnessSignal(state); } catch { measured = false; }
+  const pop = measured ? derivePopulationRunPace(state, targetFormat) : null;
 
   // Personal offset from logged-race observations, decayed by age.
   const personalOffset = pop ? computePersonalRunPaceOffset(state) : 0;
