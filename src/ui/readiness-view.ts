@@ -26,7 +26,7 @@ import {
 } from '@/calculations/readiness';
 import { getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildDailySignalBTSS, computeSleepDebtOutlook, mergeManualSleepHistory } from '@/calculations/sleep-insights';
 import { computeDailyCoach } from '@/calculations/daily-coach';
-import { computeCapacityStrain, capacityStrainNote, postSessionNote } from '@/calculations/capacity-strain';
+import { computeCapacityStrain, capacityStrainNote, postSessionNote, REST_DAY_OVERREACH_SENTENCE } from '@/calculations/capacity-strain';
 import { computeTriReadiness } from '@/calculations/tri-readiness';
 import { hyroxMtlAcwr, computeWeekActualMTL, computeWeekMTL } from '@/calculations/mtl';
 import { classifyActivity } from '@/calculations/tri-benchmarks-from-history';
@@ -303,7 +303,9 @@ function getReadinessHTML(s: SimulatorState): string {
     // tiers vs the capacity anchor, then the trained-day acknowledgment
     // composed onto the chronic sentence. Without this, Home acknowledges
     // the session and this page lectures about chronic load.
+    // Rest-day overreach leads, the coach line's and the strain card's rule.
     if (isTri) {
+      if (isRestDayOverreaching) return REST_DAY_OVERREACH_SENTENCE;
       const note = capacityStrainNote(capStrain, chronicSentence);
       if (note) return note;
     }

@@ -22,6 +22,8 @@ vi.mock('@/data/supabaseClient', () => ({
 
 import { getDefaultState, setState } from '@/state/store';
 import { generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
+import { generateTriathlonPlan } from '@/workouts/plan_engine.triathlon';
+import { REST_DAY_OVERREACH_SENTENCE } from '@/calculations/capacity-strain';
 import { HYROX_WEEKLY_SESSIONS, HYROX_MTL_CAP, HYROX_HOURS_RANGE } from '@/constants/hyrox-constants';
 import { renderHomeView } from './home-view';
 import { renderReadinessView } from './readiness-view';
@@ -114,4 +116,60 @@ describe('rest day with a logged session over the threshold', () => {
   it('no plan (per-session average 0) never flags', () => {
     expect(isRestDayOverreached(state.wks[0], today, true, 0)).toBe(false);
   });
+});
+
+// Triathlon Home kept the triathlon readiness sentence on a rest day with a
+// logged session over the threshold ("153 TSS logged today. Keep training
+// consistently...") while Readiness said "Overreaching. High load on a rest
+// day." Home and the Readiness hero now lead with the coach's rest-day line
+// (2026-10-22, E2). Ironman and the bike-only (cycling) plan.
+function triState(distance: 'ironman' | '70.3', bikeOnly: boolean, hours: number): SimulatorState {
+  const s = {
+    ...getDefaultState(),
+    eventType: 'triathlon',
+    trackOnly: false,
+    planStartDate: '2026-09-28',
+    w: 1,
+    tw: 24,
+    v: 50,
+    pac: { e: 300, t: 250, i: 230, m: 275, r: 200 },
+    wks: [],
+    triConfig: {
+      distance,
+      ...(bikeOnly ? { disciplines: ['bike'] } : {}),
+      timeAvailableHoursPerWeek: hours,
+      volumeSplit: bikeOnly ? { swim: 0, bike: 1, run: 0 } : { swim: 0.175, bike: 0.475, run: 0.35 },
+      skillRating: { swim: 3, bike: 3, run: 3 },
+      bike: { hasPowerMeter: true, ftp: 220 },
+      swim: { cssSecPer100m: 100 },
+      weeksToRace: 24,
+    },
+  } as unknown as SimulatorState;
+  s.wks = generateTriathlonPlan(s);
+  return s;
+}
+
+describe('triathlon: rest day with a logged session over the threshold', () => {
+  for (const [label, distance, bikeOnly, hours] of [['Ironman', 'ironman', false, 8], ['cycling (bike only)', '70.3', true, 6]] as const) {
+    it(`${label}: Home and the Readiness hero lead with the rest-day overreach line`, () => {
+      const s = triState(distance, bikeOnly, hours);
+      const ctx = getPlannedDayTSSContext(s, 1);
+      const restDow = [0, 1, 2, 3, 4, 5, 6].find(d => ctx.plannedTSSForDay(d) === 0);
+      expect(restDow, 'week 1 holds a rest day').toBeDefined();
+      vi.setSystemTime(new Date(PLAN_MONDAY.getTime() + restDow! * 86400000));
+      const day = localDateKey(new Date());
+      s.physiologyHistory = [{ date: day, sleepScore: 80 } as any];
+      s.wks[0].adhocWorkouts = [...(s.wks[0].adhocWorkouts ?? []), { id: 'garmin-walk-1', t: 'cross', n: 'Walk', d: '90min', r: 5, rpe: 5, garminTimestamp: new Date().toISOString() } as any];
+      expect(isRestDayOverreached(s.wks[0], day, true, ctx.perSessionAvg)).toBe(true);
+      setState(s);
+      expect(computeDailyCoach(s).primaryMessage).toBe(REST_DAY_OVERREACH_SENTENCE);
+      document.body.innerHTML = '<div id="app-root"></div>';
+      renderHomeView();
+      expect(text()).toContain(REST_DAY_OVERREACH_SENTENCE);
+      document.body.innerHTML = '<div id="app-root"></div>';
+      renderReadinessView();
+      expect(text()).toContain(REST_DAY_OVERREACH_SENTENCE);
+      expect(text()).toContain('High load on a rest day. This level of activity impairs recovery');
+    });
+  }
 });

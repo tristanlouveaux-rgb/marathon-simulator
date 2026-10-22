@@ -21,7 +21,7 @@ import { computeTriReadiness } from '@/calculations/tri-readiness';
 import { hyroxMtlAcwr } from '@/calculations/mtl';
 import { computeDecayedTriCarry } from '@/calculations/tri-cross-training-carry';
 import { computeDailyCoach, deriveStrainContext } from '@/calculations/daily-coach';
-import { computeCapacityStrain, capacityStrainNote } from '@/calculations/capacity-strain';
+import { computeCapacityStrain, capacityStrainNote, REST_DAY_OVERREACH_SENTENCE } from '@/calculations/capacity-strain';
 import { getSleepInsight, fmtSleepDuration, sleepScoreColor, buildBarChart, getSleepBank, fmtSleepBank, deriveSleepTarget, buildDailySignalBTSS, computeSleepDebtOutlook, mergeManualSleepHistory } from '@/calculations/sleep-insights';
 import type { PhysiologyDayEntry } from '@/types/state';
 import { generateWeekWorkouts, parseWorkoutDescription } from '@/workouts';
@@ -1072,8 +1072,14 @@ export function buildReadinessRing(s: SimulatorState): string {
   // 2026-05-19 snapshot — lost in the May crash.)
   // Fallback = the chronic sentence this card would otherwise show, so a
   // trained day below the strain tiers still leads with "X TSS logged today."
+  // Rest-day overreach leads, as on the coach line (running, HYROX) and the
+  // Readiness page: Home read "153 TSS logged today. Keep training
+  // consistently..." beside a warn-coloured ring while Readiness said
+  // "Overreaching. High load on a rest day." (2026-10-22, E2).
   const triPostSessionNote = isTri
-    ? capacityStrainNote(capStrain, triReadinessResult?.sentence ?? readiness.sentence)
+    ? (isRestDayOverreaching
+      ? REST_DAY_OVERREACH_SENTENCE
+      : capacityStrainNote(capStrain, triReadinessResult?.sentence ?? readiness.sentence))
     : null;
   // TEMP DEBUG (2026-06-03, remove after dogfood verification)
   console.log('[readiness-debug]', JSON.stringify({
