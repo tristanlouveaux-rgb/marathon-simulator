@@ -475,9 +475,10 @@ describe('detectCrossTrainingOverload — activities with no stored load are val
     expect(r!.crossTrainingTSS).toBe(computeWeekRawTSS({ w: 1, ...extras } as any, extras.rated as any));
   });
 
-  it('a stored load still wins: stamped aerobic + anaerobic is not re-valued', () => {
-    const wk = {
-      ...canonicalTriWeek(),
+  it("the activity record's Signal B value wins over the entry's stamped load (E3)", () => {
+    // The entry's stamped aerobic + anaerobic (100) used to win; Signal B skips
+    // the entry when its record exists and values the record (90 min, unrated).
+    const extras = {
       adhocWorkouts: [{ id: 'garmin-ride-1', t: 'cross', n: 'cycling', d: '90min', r: 6, aerobic: 85, anaerobic: 15 }],
       garminActuals: {
         'garmin-ride-1': {
@@ -486,7 +487,65 @@ describe('detectCrossTrainingOverload — activities with no stored load are val
         },
       },
     };
-    expect(detectCrossTrainingOverload(state({ wks: [wk] as any }), 0)?.crossTrainingTSS).toBe(100);
+    const r = detectCrossTrainingOverload(state({ wks: [{ ...canonicalTriWeek(), ...extras }] as any }), 0);
+    expect(r!.crossTrainingTSS).toBe(Math.round(90 * TL_PER_MIN[5]));
+    expect(r!.crossTrainingTSS).toBe(computeWeekRawTSS({ w: 1, ...extras } as any, {}));
+  });
+});
+
+// The detector and Signal B value every activity alike (2026-10-22, E3). Pass 1
+// read the adhoc entry's own iTRIMP, then its stamped load, before its record,
+// so these synced and legacy cases disagreed: measured over 1,103 detector
+// fires, 12 of 153 rated strength twins, 174 of 201 re-rated HR-less twins,
+// 140 of 160 Strava-upgraded twins and 23 of 199 legacy stamped entries.
+describe('detectCrossTrainingOverload — the detector and Signal B agree on every activity (E3)', () => {
+  const rec = (garminId: string, day: string, min: number, iTrimp: number | null, activityType: string) => ({
+    garminId, startTime: `2026-10-${day}T08:00:00.000Z`, durationSec: min * 60, distanceKm: 0,
+    avgPaceSecKm: null, avgHR: iTrimp ? 120 : null, maxHR: iTrimp ? 150 : null, calories: null, iTrimp, activityType,
+  });
+  const cases: Array<[string, { adhocWorkouts?: any[]; garminActuals?: Record<string, any>; rated?: Record<string, number> }]> = [
+    ['a synced strength session with heart rate, rated 7 (strength override)', {
+      adhocWorkouts: [{ id: 'garmin-gym-2', t: 'cross', n: 'strength', d: '80min', r: 5, iTrimp: 3000 }],
+      garminActuals: { 'garmin-gym-2': rec('gym-2', '19', 80, 3000, 'STRENGTH_TRAINING') },
+      rated: { 'garmin-gym-2': 7 },
+    }],
+    ['a synced HR-less session re-rated 8 after ingest at RPE 5', {
+      adhocWorkouts: [{ id: 'garmin-row-1', t: 'cross', n: 'rowing', d: '75min', r: 5, rpe: 5, aerobic: 75, anaerobic: 0 }],
+      garminActuals: { 'garmin-row-1': rec('row-1', '20', 75, null, 'ROWING') },
+      rated: { 'garmin-row-1': 8 },
+    }],
+    ['a Strava-upgraded twin (the entry keeps the Garmin iTRIMP)', {
+      adhocWorkouts: [{ id: 'garmin-ride-9', t: 'cross', n: 'cycling', d: '120min', r: 5, iTrimp: 9000 }],
+      garminActuals: { 'garmin-ride-9': rec('strava-123', '21', 120, 16500, 'CYCLING') },
+    }],
+    ['a legacy synced entry with a stamped load and no record', {
+      adhocWorkouts: [{ id: 'garmin-legacy-1', t: 'cross', n: 'padel', d: '100min', r: 6, rpe: 6, aerobic: 70, anaerobic: 10, garminTimestamp: '2026-10-22T08:00:00.000Z' }],
+    }],
+    ['a manual entry', {
+      adhocWorkouts: [{ id: 'manual-1', t: 'cross', n: 'hiking', d: '120min', r: 4, rpe: 4 }],
+    }],
+    ['an activity record with no adhoc twin, rated 6', {
+      garminActuals: { 'garmin-tennis-x': rec('tennis-x', '23', 90, null, 'TENNIS') },
+      rated: { 'garmin-tennis-x': 6 },
+    }],
+  ];
+
+  for (const [label, extras] of cases) {
+    it(label, () => {
+      const r = detectCrossTrainingOverload(state({ wks: [{ ...canonicalTriWeek(), ...extras }] as any }), 0);
+      expect(r, 'the activity alone is over the overload threshold').not.toBeNull();
+      expect(r!.crossTrainingTSS).toBe(computeWeekRawTSS({ w: 1, ...extras } as any, (extras.rated ?? {}) as any));
+    });
+  }
+
+  it('all six in one week (separate days, no double-day bonus)', () => {
+    const merged = {
+      adhocWorkouts: cases.flatMap(([, e]) => e.adhocWorkouts ?? []),
+      garminActuals: Object.assign({}, ...cases.map(([, e]) => e.garminActuals ?? {})),
+      rated: Object.assign({}, ...cases.map(([, e]) => e.rated ?? {})),
+    };
+    const r = detectCrossTrainingOverload(state({ wks: [{ ...canonicalTriWeek(), ...merged }] as any }), 0);
+    expect(r!.crossTrainingTSS).toBe(computeWeekRawTSS({ w: 1, ...merged } as any, merged.rated));
   });
 });
 

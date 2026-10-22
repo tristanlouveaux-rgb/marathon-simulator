@@ -34,7 +34,7 @@ import { computeTriDisciplineFloorTSS } from './tri-discipline-floor';
 import { computeDecayedTriCarry } from './tri-cross-training-carry';
 import { answeredCrossTrainingTSS, isOpenForTriSuggestion } from './tri-suggestion-handled';
 import { isTriQualitySession, triSuggestionTssReduction } from './tri-suggestion-apply';
-import { normalizeiTrimp, ratedRpeOf, signalBActualTSS, signalBAdhocTSS } from '@/calculations/fitness-model';
+import { ratedRpeOf, signalBActualTSS, signalBAdhocTSS } from '@/calculations/fitness-model';
 import { saturateCredit } from '@/cross-training/universalLoad';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 
@@ -352,19 +352,24 @@ function computeCrossTrainingTSS(wk: Week): CrossTrainingSummary {
 }
 
 /**
- * One adhoc entry's load, canonical TSS. Its own iTRIMP, else its stamped
- * aerobic + anaerobic (canonical TSS at ingest, addAdhocWorkoutFromPending).
- * With neither (a GPS-recorded extra run, whose entry carries no load and whose
- * activity record has iTrimp null; a manual entry with no load), Signal B's own
- * per-activity rule values it (signalBActualTSS on the activity record under
- * the same id, which carries the measured minutes and the rating; else
- * signalBAdhocTSS on the entry). It used to count 0: this pass marks the id
- * counted, so pass 2 skipped the record too. SCIENCE_LOG §DP item 3.
+ * One adhoc entry's load, canonical TSS, by Signal B's own per-activity rule,
+ * so the detector and the weekly total (computeWeekRawTSS) value every
+ * activity alike:
+ *   - an activity record under the same id (a synced entry's twin, or a
+ *     GPS-recorded run's record) is valued first, with signalBActualTSS and
+ *     its rating, exactly as computeWeekRawTSS values it (it skips the adhoc
+ *     half when the record exists);
+ *   - otherwise the entry itself, with signalBAdhocTSS (its iTRIMP through the
+ *     personal normalizer, else its minutes at its RPE).
+ * This pass used to read the entry's own iTRIMP, then its stamped aerobic +
+ * anaerobic, before the record. So a rated strength session with heart rate
+ * counted its HR iTRIMP (about 20) here and the strength override (107) in
+ * Signal B; an HR-less session re-rated after ingest kept its ingest RPE; a
+ * Strava-upgraded twin kept the Garmin load (the upgrade refreshes the record,
+ * not the entry's load); and a legacy entry's stamped load differed from its
+ * minutes at its RPE (2026-10-22, E3; SCIENCE_LOG §DP item 3).
  */
 function tssOfAdhoc(wk: Week, w: Workout): number {
-  if (w.iTrimp != null && w.iTrimp > 0) return normalizeiTrimp(w.iTrimp); // personal normalizer (ISSUE-262)
-  const stamped = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
-  if (stamped > 0) return stamped;
   const twin: GarminActual | undefined = w.id ? wk.garminActuals?.[w.id] : undefined;
   if (twin) return signalBActualTSS(twin, ratedRpeOf(wk.rated?.[w.id!]));
   return signalBAdhocTSS(w);
