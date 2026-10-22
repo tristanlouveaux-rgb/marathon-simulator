@@ -139,7 +139,7 @@ describe('tri suggestion modal: only choices the discipline can act on', () => {
 
   const swap = { workoutId: 'r-thr', workoutLabel: 'Run threshold', discipline: 'run', action: 'swap_easy', tssReduction: 40 } as const;
   const opt = (discipline: string, reduceMods: any[], replaceMods: any[]) =>
-    ({ discipline, remainingTSS: 100, floorTSS: 0, belowFloor: false, replaceBelowFloor: false, reduceMods, replaceMods });
+    ({ discipline, remainingTSS: 100, floorTSS: 0, belowFloor: false, replaceBelowFloor: false, alreadyBelowFloor: false, reduceMods, replaceMods });
   const bundle = () => ({
     mods: [{
       id: 'xt_overload_run', source: 'cross_training_overload', discipline: 'run', headline: '', body: '', severity: 'caution',
@@ -169,14 +169,26 @@ describe('tri suggestion modal: only choices the discipline can act on', () => {
       .toContain('These changes would push this discipline below your weekly floor (80 TSS).');
   });
 
-  it('a discipline flipped to with no change says so and offers only Keep and Push', () => {
+  it('a chip whose option holds no change is disabled: flipping to it cannot reach "No upcoming workouts to adjust." (E7)', () => {
     void showTriSuggestionModal(bundle());
-    (document.getElementById('tri-sm-chip-bike') as HTMLElement).click();
-    expect(document.getElementById('tri-sm-overload-body')!.textContent).toContain('No upcoming workouts to adjust.');
-    expect((document.getElementById('tri-sm-reduce') as HTMLElement).style.display).toBe('none');
-    expect((document.getElementById('tri-sm-replace') as HTMLElement).style.display).toBe('none');
-    expect(document.getElementById('tri-sm-keep')).not.toBeNull();
-    expect(document.getElementById('tri-sm-push')).not.toBeNull();
+    const bike = document.getElementById('tri-sm-chip-bike') as HTMLButtonElement;
+    expect(bike.disabled).toBe(true);
+    expect(bike.getAttribute('style')).toContain('opacity:0.4');
+    bike.click();
+    const body = document.getElementById('tri-sm-overload-body')!.textContent ?? '';
+    expect(body).not.toContain('No upcoming workouts to adjust.');
+    expect(body).toContain('Replace'); // still the run option
+    expect((document.getElementById('tri-sm-replace') as HTMLElement).style.display).toBe('');
+    expect((document.getElementById('tri-sm-chip-run') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('a chip dims when its only offered set (Replace & Reduce) breaches the floor (E7)', () => {
+    const b = bundle();
+    b.mods[0].overloadOptions.options.bike = { ...opt('bike', [], [{ ...swap, discipline: 'bike', workoutId: 'b-thr' }]), floorTSS: 80, replaceBelowFloor: true };
+    void showTriSuggestionModal(b);
+    const bike = document.getElementById('tri-sm-chip-bike') as HTMLButtonElement;
+    expect(bike.disabled).toBe(false);
+    expect(bike.getAttribute('style')).toContain('opacity:0.6');
   });
 });
 
@@ -241,7 +253,7 @@ describe('tri suggestion modal: the floor warning names the set that breaches it
   const trim = { workoutId: 'b-end', workoutLabel: 'Long bike', discipline: 'bike', action: 'trim_volume', tssReduction: 10 } as const;
   const swap = { workoutId: 'b-thr', workoutLabel: 'Bike threshold', discipline: 'bike', action: 'swap_easy', tssReduction: 40 } as const;
   const opt = (o: Record<string, unknown>) =>
-    ({ discipline: 'bike', remainingTSS: 100, floorTSS: 80, belowFloor: false, replaceBelowFloor: false, reduceMods: [trim], replaceMods: [swap], ...o }) as any;
+    ({ discipline: 'bike', remainingTSS: 100, floorTSS: 80, belowFloor: false, replaceBelowFloor: false, alreadyBelowFloor: false, reduceMods: [trim], replaceMods: [swap], ...o }) as any;
 
   it('no set breaches: no warning', () => {
     expect(floorWarningText(opt({}))).toBeNull();
@@ -257,6 +269,12 @@ describe('tri suggestion modal: the floor warning names the set that breaches it
   it('both breach: one line for either set', () => {
     expect(floorWarningText(opt({ belowFloor: true, replaceBelowFloor: true })))
       .toBe('Either set would push this discipline below your weekly floor (80 TSS).');
+  });
+  it('already below the floor: the offered sets keep it there (E7)', () => {
+    const below = { remainingTSS: 70, alreadyBelowFloor: true, belowFloor: true, replaceBelowFloor: true };
+    expect(floorWarningText(opt(below))).toBe('Either set keeps this discipline below your weekly floor (80 TSS).');
+    expect(floorWarningText(opt({ ...below, replaceMods: [], replaceBelowFloor: false })))
+      .toBe('These changes keep this discipline below your weekly floor (80 TSS).');
   });
   it('nothing offered: no warning beside "No upcoming workouts to adjust."', () => {
     expect(floorWarningText(opt({ belowFloor: true, reduceMods: [], replaceMods: [] }))).toBeNull();
@@ -291,6 +309,10 @@ describe('tri suggestion modal: the floor warning names the set that breaches it
             if (replaceBreach && !reduceBreach) replaceOnlyBreach += 1;
             if (reduceBreach || replaceBreach) expect(floorWarningText(x), `${distance} wk${wi + 1} ${d}`).not.toBeNull();
             else expect(floorWarningText(x)).toBeNull();
+            // Already below the floor: the line says the changes keep it there (E7).
+            if (x.alreadyBelowFloor && (x.reduceMods.length > 0 || x.replaceMods.length > 0)) {
+              expect(floorWarningText(x)).toMatch(/keeps? this discipline below/);
+            }
           }
         }
       }

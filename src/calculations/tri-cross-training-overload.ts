@@ -113,6 +113,9 @@ export interface DisciplineOption {
   /** True if applying the Replace & Reduce set (replaceMods) in full would push
    *  remaining below floorTSS. False when the set is empty. */
   replaceBelowFloor: boolean;
+  /** Remaining already sits below floorTSS before any change: every offered
+   *  set keeps the discipline below its floor (the modal says so). */
+  alreadyBelowFloor: boolean;
   /** Reduce-only mods (downgrade quality, trim endurance). Their summed cut
    *  stays within the reduction budget; the floor only warns (belowFloor). */
   reduceMods: OverloadAdjustment[];
@@ -276,11 +279,12 @@ function pickRecommendedDiscipline(
 ): Discipline | null {
   const affinityOrder: Discipline[] = ['run', 'bike', 'swim'];
   affinityOrder.sort((a, b) => byAffinity[b] - byAffinity[a]);
-  return affinityOrder.find(d => hasChange(options[d])) ?? null;
+  return affinityOrder.find(d => optionHasChange(options[d])) ?? null;
 }
 
-/** The option holds at least one change the user can accept. */
-function hasChange(opt: DisciplineOption): boolean {
+/** The option holds at least one change the user can accept. The modal
+ *  disables a chip whose option holds none. */
+export function optionHasChange(opt: DisciplineOption): boolean {
   return opt.reduceMods.length > 0 || opt.replaceMods.length > 0;
 }
 
@@ -438,6 +442,7 @@ function buildDisciplineOption(
   const belowFloor = floorTSS > 0 && (remainingTSS - cutOf(reduceMods)) < floorTSS;
   const replaceBelowFloor = floorTSS > 0 && replaceMods.length > 0
     && (remainingTSS - cutOf(replaceMods)) < floorTSS;
+  const alreadyBelowFloor = floorTSS > 0 && remainingTSS < floorTSS;
 
   return {
     discipline,
@@ -445,6 +450,7 @@ function buildDisciplineOption(
     floorTSS: Math.round(floorTSS),
     belowFloor,
     replaceBelowFloor,
+    alreadyBelowFloor,
     reduceMods,
     replaceMods,
   };
