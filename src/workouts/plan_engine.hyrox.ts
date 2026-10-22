@@ -508,7 +508,12 @@ import {
 //   the lower of the two RPEs, so its card and planned TSS follow the
 //   decision (it kept the uninjured minutes whatever the capacities); in the
 //   decision's resolved phase it takes the lower capacity's share of its
-//   minutes and reps, as a station session's block does.
+//   minutes and reps, as a station session's block does;
+// - (v2 review) a warm-up moves to the other erg only when that erg's
+//   capacity is strictly higher than the planned one's, so a tie keeps the
+//   planned erg (under an upper-body restriction the Row Erg reads the upper
+//   body too); the gate's note is one sentence a side, opening with the side
+//   that is restricted, and it names the finisher's cut.
 export const HYROX_GENERATOR_VERSION = 19;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
@@ -2792,13 +2797,10 @@ function hyroxInjuryGate(injuryState: InjuryState, stationAccess?: HyroxConfig['
     return r === 'upper' ? 'Upper-body' : r === 'lower' ? 'Lower-body' : 'Upper- and lower-body';
   };
 
-  const scaleWorkout = (w: Workout, cap: number, label: string): Workout => {
+  const scaleWorkout = (w: Workout, cap: number): Workout => {
     const factor = cap / 100;
     const a = w as any;
-    const scaled: any = {
-      ...w,
-      modReason: `Capacity ${cap}%: ${label} duration scaled to match your reported ability`,
-    };
+    const scaled: any = { ...w };
     if (typeof a.estimatedDurationMin === 'number') {
       scaled.estimatedDurationMin = Math.max(1, Math.round(a.estimatedDurationMin * factor));
     }
@@ -2809,47 +2811,70 @@ function hyroxInjuryGate(injuryState: InjuryState, stationAccess?: HyroxConfig['
     return scaled as Workout;
   };
 
-  // The warm-up takes the way with the highest capacity among the athlete's
-  // ways that carry the planned way's MTL a minute (mtl.ts at the easy RPE:
-  // the SkiErg and the Row Erg carry the same, a jog more), ties in the order
-  // the decision moves off the restricted side (an upper-body restriction:
-  // the Row Erg, then the SkiErg; a lower-body one: the SkiErg, then the Row
-  // Erg; equal capacities: the planned way first), at that capacity's share
-  // of the planned minutes (at least 1 min, none at 0). So an erg warm-up
-  // moves only to the other erg and a jog stays a jog: the warm-up's MTL
-  // stays within the planned warm-up's at its share and never falls as a
-  // capacity rises, and no jog appears where the uninjured session planned
-  // an erg (v2 review: a jog in place of an erg raised session MTL above the
-  // uninjured session's in 1.3 to 2.1% of kept states, MTL fell as a
-  // capacity rose, and 37 to 39 injured weeks went over the weekly MTL cap
-  // the uninjured week held). The shared injury engine's aerobic offer gates
-  // the Row erg on the upper body alone (pickAerobicSubstitute,
-  // src/injury/engine.ts), so under a lower-body restriction the two
-  // surfaces differ (a known limitation). Null: the warm-up holds as planned.
+  // The gate's notes: one sentence a side, the most restricted first and the
+  // run last, its opening the side that is restricted ("Upper-body capacity
+  // 50%: SkiErg and Wall Balls sets cut to 50%, SkiErg warm-up cut to 5
+  // min."). A full-body station or the Row Erg reads the lower of the two
+  // sides, so its change sits in that side's sentence; with both sides
+  // equal, one sentence names both. Before (v2 review), every change opened
+  // its own sentence with the same phrase, and a station note led with
+  // "Capacity 50%" with one side at 100.
+  type NoteKey = 'upper' | 'lower' | 'both' | 'run';
+  const keyOf = (mode: WarmMode): NoteKey => {
+    if (mode === 'run') return 'run';
+    if (upperCap === lowerCap) return 'both';
+    const region = HYROX_STATION_REGION[mode];
+    return region === 'full' ? (upperCap < lowerCap ? 'upper' : 'lower') : region;
+  };
+  const keyCap = (k: NoteKey): number => (k === 'run' ? runCap : k === 'lower' ? lowerCap : upperCap);
+  const keyLabel = (k: NoteKey): string => (k === 'run' ? 'Run' : k === 'upper' ? 'Upper-body' : k === 'lower' ? 'Lower-body' : 'Upper- and lower-body');
+  const sideNotes = (clauses: ReadonlyArray<[NoteKey, string]>): string[] => {
+    const by = new Map<NoteKey, string[]>();
+    for (const [k, c] of clauses) by.set(k, [...(by.get(k) ?? []), c]);
+    return [...by.keys()]
+      .sort((a, b) => Number(a === 'run') - Number(b === 'run') || keyCap(a) - keyCap(b))
+      .map(k => `${keyLabel(k)} capacity ${keyCap(k)}%: ${by.get(k)!.join(', ')}.`);
+  };
+  const listOf = (xs: readonly string[]): string => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+
+  // The warm-up moves to another of the athlete's ways only when that way's
+  // capacity is strictly higher than the planned way's, among the ways that
+  // carry the planned way's MTL a minute (mtl.ts at the easy RPE: the SkiErg
+  // and the Row Erg carry the same, a jog more); otherwise it keeps the
+  // planned way. It runs at its way's capacity's share of the planned
+  // minutes (at least 1 min, none at 0). So an erg warm-up moves only to the
+  // other erg, a jog stays a jog, and a tie keeps the planned erg (under an
+  // upper-body restriction the Row Erg reads the lower of the two sides, the
+  // SkiErg's own capacity, so a move gains nothing; v2 review: every SkiErg
+  // warm-up moved at a tie). The warm-up's MTL stays within the planned
+  // warm-up's at its share and never falls as a capacity rises, and no jog
+  // appears where the uninjured session planned an erg (v2 review: a jog in
+  // place of an erg raised session MTL above the uninjured session's in 1.3
+  // to 2.1% of kept states, MTL fell as a capacity rose, and 37 to 39
+  // injured weeks went over the weekly MTL cap the uninjured week held). The
+  // shared injury engine's aerobic offer gates the Row erg on the upper body
+  // alone (pickAerobicSubstitute, src/injury/engine.ts), so under a
+  // lower-body restriction the two surfaces differ (a known limitation).
+  // Null: the warm-up holds as planned.
   const warmupName = (mode: WarmMode): string => (mode === 'run' ? 'warm-up jog' : `${STATION_DISPLAY[mode].name} warm-up`);
   const mtlPerMin = (mode: WarmMode): number => hyroxWarmupOn(mode, 1).mtl;
-  const gatedWarmup = (wu: Warmup): { warmup: Warmup | null; note: string } | null => {
+  const gatedWarmup = (wu: Warmup): { warmup: Warmup | null; notes: Array<[NoteKey, string]> } | null => {
     const has = (m: WarmMode): boolean => m === wu.mode || m === 'run'
       || (m === 'ski_erg' && !!stationAccess?.skiErg) || (m === 'row_erg' && !!stationAccess?.rowErg);
-    const order: WarmMode[] = restricted === 'upper' ? ['row_erg', 'run', 'ski_erg']
-      : restricted === 'lower' ? ['ski_erg', 'run', 'row_erg']
-        : [wu.mode, 'run', 'row_erg', 'ski_erg'];
-    const ways = [...order, wu.mode].filter(m => has(m) && mtlPerMin(m) === mtlPerMin(wu.mode));
-    const top = Math.max(...ways.map(ownCap));
-    const mode = ways.find(m => ownCap(m) === top) ?? wu.mode;
+    const ways = (['ski_erg', 'row_erg', 'run'] as WarmMode[]).filter(m => m !== wu.mode && has(m) && mtlPerMin(m) === mtlPerMin(wu.mode));
+    const top = Math.max(ownCap(wu.mode), ...ways.map(ownCap));
+    const mode = top > ownCap(wu.mode) ? (ways.find(m => ownCap(m) === top) ?? wu.mode) : wu.mode;
     const modeCap = ownCap(mode);
     const min = modeCap >= 100 ? wu.min : modeCap <= 0 ? 0 : Math.max(1, Math.round((wu.min * modeCap) / 100));
     if (mode === wu.mode && min === wu.min) return null;
-    const notes: string[] = [];
-    if (mode !== wu.mode) {
-      notes.push(`${capLabel(wu.mode)} capacity ${ownCap(wu.mode)}%: ${warmupName(mode)} in place of the ${wu.mode === 'run' ? 'jog' : STATION_DISPLAY[wu.mode].name}.`);
-    }
-    if (min <= 0) notes.push(`${capLabel(mode)} capacity ${modeCap}%: no ${warmupName(mode)}. Take the first round at easy effort as the warm-up.`);
-    else if (min < wu.min) notes.push(`${capLabel(mode)} capacity ${modeCap}%: ${warmupName(mode)} cut to ${min} min.`);
+    const notes: Array<[NoteKey, string]> = [];
+    if (mode !== wu.mode) notes.push([keyOf(wu.mode), `${warmupName(mode)} in place of the ${wu.mode === 'run' ? 'jog' : STATION_DISPLAY[wu.mode].name}`]);
+    if (min <= 0) notes.push([keyOf(mode), `no ${warmupName(mode)}, so the first round at easy effort is the warm-up`]);
+    else if (min < wu.min) notes.push([keyOf(mode), `${warmupName(mode)} cut to ${min} min`]);
     const warmup = min <= 0 ? null
       : mode === wu.mode ? { ...wu, min, mtl: (wu.mtl * min) / wu.min }
         : hyroxWarmupOn(mode, min);
-    return { warmup, note: notes.join(' ') };
+    return { warmup, notes };
   };
 
   // Strength (lane H2b part 2): the injury's strength decision, as gym.ts
@@ -2928,21 +2953,42 @@ function hyroxInjuryGate(injuryState: InjuryState, stationAccess?: HyroxConfig['
     const sets = withHyroxPartialSets(w0, st => ownCap(st) / 100);
     const cut = sets !== w0;
     const parts: Parameters<typeof withHyroxSessionParts>[1] = {};
-    const notes: string[] = [];
+    const notes: Array<[NoteKey, string]> = [];
+    // Each restricted side's stations: their sets at its share, a station
+    // with no whole metre or rep left named as left out.
+    if (cut) {
+      const kept = new Set((sets.hyroxComponents ?? []).map(c => c.type));
+      const bySide = new Map<NoteKey, { kept: string[]; gone: string[] }>();
+      for (const c of w0.hyroxComponents ?? []) {
+        if (c.type === 'run' || ownCap(c.type as HyroxStation) >= 100) continue;
+        const k = keyOf(c.type as HyroxStation);
+        const e = bySide.get(k) ?? { kept: [], gone: [] };
+        (kept.has(c.type) ? e.kept : e.gone).push(STATION_DISPLAY[c.type as HyroxStation].name);
+        bySide.set(k, e);
+      }
+      for (const [k, e] of bySide) {
+        if (e.kept.length > 0) notes.push([k, `${listOf(e.kept)} sets cut to ${keyCap(k)}%`]);
+        if (e.gone.length > 0) notes.push([k, `${listOf(e.gone)} left out`]);
+      }
+    }
     const warm = spec.warmup ? gatedWarmup(spec.warmup) : null;
     if (warm) {
       parts.warmup = warm.warmup;
       if (!warm.warmup) parts.warmupRound = true;
-      notes.push(warm.note);
+      notes.push(...warm.notes);
     }
+    let strengthOut = false;
     if (spec.strength && (strengthKind.kind !== 'normal' || stationCap < 100)) {
       parts.strength = strengthKind.kind === 'normal' ? blockAt(spec.strength, stationCap / 100) : null;
-      if (!parts.strength) notes.push('Strength block left out (injury).');
+      if (parts.strength) notes.push([keyOf('row_erg'), `strength block cut to ${stationCap}%`]);
+      else strengthOut = true;
     }
     if (spec.finisher && ownCap(spec.finisher.station) < 100) {
       const f = spec.finisher;
       const min = Math.floor((f.min * Math.max(0, ownCap(f.station))) / 100 + 1e-9);
       parts.finisher = min >= 1 ? { ...f, min, mtl: (f.mtl * min) / f.min } : null;
+      const name = STATION_DISPLAY[f.station].name;
+      notes.push([keyOf(f.station), parts.finisher ? `${name} finisher cut to ${min} min` : `${name} finisher left out`]);
     }
     if (!cut && Object.keys(parts).length === 0) return { w: w0 };
     const w = withHyroxSessionParts(sets, parts);
@@ -2954,10 +3000,7 @@ function hyroxInjuryGate(injuryState: InjuryState, stationAccess?: HyroxConfig['
       const oneRoundAsWarmup = !!w.hyroxSpec?.warmupRound && (w.hyroxRounds ?? 1) <= 1;
       if (cut || holdsStationFloor(w0) || oneRoundAsWarmup) return { w: null, why: 'under the 15-min station floor at the current capacities' };
     }
-    const why = [
-      ...(cut ? [`Capacity ${stationCap}%: each station's sets at its side's capacity (upper body ${upperCap}%, lower body ${lowerCap}%).`] : []),
-      ...notes,
-    ];
+    const why = [...sideNotes(notes), ...(strengthOut ? ['Strength block left out under the injury.'] : [])];
     return { w: why.length > 0 ? { ...w, modReason: why.join(' ') } : w };
   };
 
@@ -2976,8 +3019,8 @@ function hyroxInjuryGate(injuryState: InjuryState, stationAccess?: HyroxConfig['
       const cap = ownCap(erg);
       if (cap <= 0) return { w: null, why: `${capLabel(erg)} capacity 0%` };
       if (cap >= 100) return { w };
-      const s = scaleWorkout(w, cap, 'easy erg');
-      return { w: { ...s, d: (w.d ?? '').replace(/^\d+ min/, `${s.estimatedDurationMin} min`) } };
+      const s = scaleWorkout(w, cap);
+      return { w: { ...s, d: (w.d ?? '').replace(/^\d+ min/, `${s.estimatedDurationMin} min`), modReason: sideNotes([[keyOf(erg), `easy ${STATION_DISPLAY[erg].name} session cut to ${s.estimatedDurationMin} min`]]).join(' ') } };
     }
     // The assessment: none with a side at 0 (its full-body stations load
     // both sides, as a station session's do); otherwise each station whole
@@ -2987,13 +3030,23 @@ function hyroxInjuryGate(injuryState: InjuryState, stationAccess?: HyroxConfig['
       if (stationCap <= 0) return { w: null, why: `${capLabel('row_erg')} capacity 0%` };
       const a = hyroxAssessmentAtCapacities(w, st => ownCap(st));
       if (!a) return { w: null, why: 'every station under 100% capacity' };
-      return { w: a === w ? w : { ...a, modReason: `Capacity under 100% (upper body ${upperCap}%, lower body ${lowerCap}%): those stations left out of the calibration pass` } };
+      if (a === w) return { w };
+      // Each restricted side's stations named in its sentence.
+      const kept = new Set((a.hyroxComponents ?? []).map(c => c.type));
+      const bySide = new Map<NoteKey, string[]>();
+      for (const c of w.hyroxComponents ?? []) {
+        if (c.type === 'run' || kept.has(c.type)) continue;
+        const k = keyOf(c.type as HyroxStation);
+        bySide.set(k, [...(bySide.get(k) ?? []), STATION_DISPLAY[c.type as HyroxStation].name]);
+      }
+      return { w: { ...a, modReason: sideNotes([...bySide].map(([k, names]): [NoteKey, string] => [k, `${listOf(names)} left out of the calibration pass`])).join(' ') } };
     }
     // A station session without a lane H2b spec loads the upper and lower
     // body like a station.
     if (t.startsWith('hyrox_station_')) {
       if (stationCap <= 0) return { w: null, why: `${capLabel('row_erg')} capacity 0%` };
-      return { w: stationCap >= 100 ? w : scaleWorkout(w, stationCap, 'stations') };
+      if (stationCap >= 100) return { w };
+      return { w: { ...scaleWorkout(w, stationCap), modReason: sideNotes([[keyOf('row_erg'), 'station duration scaled to match your reported ability']]).join(' ') } };
     }
     if (isBrick(w)) return brickSafe ? { w } : { w: null, why: 'runs and stations stacked, so any restriction leaves it out' };
     return { w };

@@ -175,23 +175,19 @@ const runTextMin = (w: Workout): number | null => {
 /** MTL a minute of a warm-up way at the easy RPE (mtl.ts). */
 const warmMtlPerMin = (m: Mode) => computeComponentMTL(1, HYROX_EASY_RPE, m === 'run' ? 'run_easy' : m);
 /** The warm-up rule, an independent copy (review rounds 4 to 7, injury gate
- *  v2 and its review): each way the athlete can warm up has a capacity of
+ *  v2 and its reviews): each way the athlete can warm up has a capacity of
  *  its own (a jog the run capacity, the SkiErg the upper body's, the Row Erg
  *  the lower of the two sides', HYROX_STATION_REGION's full-body row); among
  *  the ways that carry the planned way's MTL a minute (an erg moves only to
- *  the other erg, a jog stays a jog) the warm-up takes the highest, ties in
- *  the decision's order (an upper-body restriction: Row Erg, SkiErg; a
- *  lower-body one: SkiErg, Row Erg; equal: the planned way first), and below
- *  100 keeps that capacity's share of the planned minutes (at least 1, at 0
- *  none), equal restrictions too. */
+ *  the other erg, a jog stays a jog) the warm-up moves only to a way whose
+ *  capacity is strictly higher than the planned way's (a tie keeps the
+ *  planned way), and below 100 keeps that capacity's share of the planned
+ *  minutes (at least 1, at 0 none), equal restrictions too. */
 const warmRule = (planned: Mode, run: number, upper: number, lower: number, access: Access): { mode: Mode; min: number } => {
   const capOf = (m: Mode) => (m === 'run' ? run : m === 'ski_erg' ? upper : m === 'row_erg' ? Math.min(upper, lower) : 100);
-  const restricted = upper < lower ? 'upper' : lower < upper ? 'lower' : null;
-  const order: Mode[] = restricted === 'upper' ? ['row_erg', 'run', 'ski_erg'] : restricted === 'lower' ? ['ski_erg', 'run', 'row_erg'] : [planned, 'run', 'row_erg', 'ski_erg'];
   const has = (m: Mode) => m === planned || m === 'run' || (m === 'ski_erg' && access.skiErg) || (m === 'row_erg' && access.rowErg);
-  const ways = [...order, planned].filter(m => has(m) && warmMtlPerMin(m) === warmMtlPerMin(planned));
-  const top = Math.max(...ways.map(capOf));
-  const mode = ways.find(m => capOf(m) === top) as Mode;
+  const better = (['ski_erg', 'row_erg', 'run'] as Mode[]).filter(m => m !== planned && has(m) && warmMtlPerMin(m) === warmMtlPerMin(planned) && capOf(m) > capOf(planned));
+  const mode = better.length > 0 ? better.reduce((x, m) => (capOf(m) > capOf(x) ? m : x)) : planned;
   const c = capOf(mode);
   const W = HYROX_SESSION_WARMUP_MIN;
   return { mode, min: c >= 100 ? W : c <= 0 ? 0 : Math.min(W, Math.max(1, Math.round((W * c) / 100))) };
@@ -848,7 +844,7 @@ describe('a plan rebuilt under an injury is the plan without it through the inju
 });
 
 describe('a station session\'s warm-up under an injury', () => {
-  it('takes, among the ways carrying the planned way\'s MTL a minute (an erg moves only to the other erg, a jog stays a jog), the way with the highest capacity of its own (the SkiErg the upper body\'s, the Row Erg the lower of the two sides\'), ties in the decision\'s order, and keeps that capacity\'s share, equal restrictions too; never opens a session with a jog its uninjured session warmed up for on an erg (v2 review: MTL rose above the uninjured session and fell as a capacity rose); never opens a kept session with a whole SkiErg or Row Erg warm-up under an upper-body restriction; the station floor counts the planned warm-up (review round 5: open singles men under upper body 30, 157 kept sessions opened with 10 min on the SkiErg; review round 6: under the neck default every kept session opened with a whole Row Erg warm-up; review round 7: equal restrictions kept an erg whole, so a jog cut to the run share replaced it as run capacity rose and the session then left)', () => {
+  it('moves, among the ways carrying the planned way\'s MTL a minute (an erg moves only to the other erg, a jog stays a jog), only to a way with a strictly higher capacity of its own (the SkiErg the upper body\'s, the Row Erg the lower of the two sides\'; a tie keeps the planned erg, v2 review: every SkiErg warm-up moved to the Row Erg at a tie under an upper-body restriction), and keeps that capacity\'s share, equal restrictions too, its note one sentence a side (no repeated opening); never opens a session with a jog its uninjured session warmed up for on an erg (v2 review: MTL rose above the uninjured session and fell as a capacity rose); never opens a kept session with a whole SkiErg or Row Erg warm-up under an upper-body restriction; the station floor counts the planned warm-up (review round 5: open singles men under upper body 30, 157 kept sessions opened with 10 min on the SkiErg; review round 6: under the neck default every kept session opened with a whole Row Erg warm-up; review round 7: equal restrictions kept an erg whole, so a jog cut to the run share replaced it as run capacity rose and the session then left)', () => {
     const variants: Array<[string, Partial<OnboardingState>]> = [
       ['both ergs', {}],
       ['SkiErg only', { hyroxHasRowErg: false } as Partial<OnboardingState>],
@@ -880,15 +876,22 @@ describe('a station session\'s warm-up under an injury', () => {
             const want = warmRule(planned, run, upper, lower, access);
             const label = `${name} ${band} ${u.n} run ${run} upper ${upper} lower ${lower}: ${wu ? `${wu.min} min ${wu.mode}` : 'none'}, the rule ${want.min} min ${want.mode}`;
             if (!wu || wu.mode !== want.mode || wu.min !== want.min) off.push(label);
+            const capOfWay = (m: Mode) => (m === 'run' ? run : m === 'ski_erg' ? upper : Math.min(upper, lower));
             if (want.mode !== planned) {
               moved++;
               if (!(g.modReason ?? '').includes('in place of the')) off.push(`${label}: no note`);
+              if (!(capOfWay(want.mode) > capOfWay(planned))) off.push(`${label}: moved at a tie`);
             }
             if (want.min < HYROX_SESSION_WARMUP_MIN) {
               shared++;
               if (upper === lower && want.mode !== 'run') equalShared++;
-              if (!(g.modReason ?? '').includes(` cut to ${want.min} min.`)) off.push(`${label}: no cut note`);
+              if (!new RegExp(` cut to ${want.min} min[.,]`).test(g.modReason ?? '')) off.push(`${label}: no cut note`);
             }
+            // One sentence a side: no two sentences open alike, none leads
+            // with a bare "Capacity", no em dash.
+            const openings = (g.modReason ?? '').split(/(?:^|\. )(?=[A-Z])/).filter(Boolean).map(x => x.split(' ').slice(0, 2).join(' '));
+            if (new Set(openings).size !== openings.length) off.push(`${label}: repeated opening in "${g.modReason}"`);
+            if (/(^|\. )Capacity /.test(g.modReason ?? '') || (g.modReason ?? '').includes('\u2014')) off.push(`${label}: note "${g.modReason}"`);
             if (upper < 100 && upper < lower && wu && wu.mode !== 'run' && wu.min >= HYROX_SESSION_WARMUP_MIN) off.push(`${label}: a whole erg warm-up under an upper-body restriction`);
             if (wu && (wu.mode === 'run') !== (planned === 'run')) off.push(`${label}: moved between a jog and an erg`);
             if (!floorHolds(g) || !holdsStationFloor(g)) off.push(`${label}: under the station floor`);
@@ -897,7 +900,7 @@ describe('a station session\'s warm-up under an injury', () => {
       }
     }
     expect(kept).toBeGreaterThan(3000);
-    expect(moved).toBeGreaterThan(1000);
+    expect(moved).toBeGreaterThan(500);
     expect(shared).toBeGreaterThan(300);
     expect(equalShared).toBeGreaterThan(50);
     expect(off.slice(0, 10)).toEqual([]);
@@ -935,26 +938,42 @@ describe('a station session\'s warm-up under an injury', () => {
     expect(off.slice(0, 10)).toEqual([]);
   }, 300000);
 
-  it('reaches the rebuilt plan: under a shoulder restriction every current and future station session opens with a Row Erg warm-up at the shared capacity\'s 5 min, never a SkiErg one and never a jog, at run capacity 100 and 50 (the plan passes the athlete\'s ergs to the gates)', () => {
-    let sessions = 0;
+  it('reaches the rebuilt plan: under a shoulder restriction every current and future station session keeps its planned erg warm-up at the shared capacity\'s 5 min (the SkiErg and the Row Erg both read the upper body there, so neither move gains), never a jog and never a whole erg; under a lower-body restriction a planned Row Erg warm-up moves to a whole SkiErg one; at run capacity 100 and 50 (the plan passes the athlete\'s ergs to the gates)', () => {
+    let sessions = 0; let ski = 0; let row = 0; let movedToSki = 0;
     for (const band of BANDS) {
       const s = build(band, HYROX_HOURS_RANGE[band].default, 12);
+      const planned = new Map(s.wks.flatMap(wk => prescribed(wk)).map(w => [w.id, w] as const));
       for (const run of [100, 50]) {
-        const st = structuredClone(s);
-        st.w = 1;
-        (st as unknown as { injuryState: unknown }).injuryState = { active: true, runCapacity: run, upperLoadCapacity: 50, lowerLoadCapacity: 100, location: 'shoulder' };
-        for (const wk of regenerateHyroxWeeksFrom(st, 1)) {
-          for (const w of prescribed(wk ?? undefined)) {
-            if (w.t !== 'hyrox_station_technique' && w.t !== 'hyrox_station_density') continue;
-            sessions++;
-            const label = `${band} W${wk?.w} ${w.n} run ${run}`;
-            expect(w.hyroxSpec?.warmup?.mode, label).toBe('row_erg');
-            expect(w.hyroxSpec?.warmup?.min, label).toBe(Math.round(HYROX_SESSION_WARMUP_MIN * 0.5));
+        for (const [up, lo] of [[50, 100], [100, 50]]) {
+          const st = structuredClone(s);
+          st.w = 1;
+          (st as unknown as { injuryState: unknown }).injuryState = { active: true, runCapacity: run, upperLoadCapacity: up, lowerLoadCapacity: lo, location: up < 100 ? 'shoulder' : 'knee' };
+          for (const wk of regenerateHyroxWeeksFrom(st, 1)) {
+            for (const w of prescribed(wk ?? undefined)) {
+              if (w.t !== 'hyrox_station_technique' && w.t !== 'hyrox_station_density') continue;
+              const label = `${band} W${wk?.w} ${w.n} run ${run} at ${up}/${lo}`;
+              const was = planned.get(w.id)!.hyroxSpec!.warmup!.mode;
+              if (up < 100) {
+                sessions++;
+                expect(w.hyroxSpec?.warmup?.mode, label).toBe(was);
+                expect(w.hyroxSpec?.warmup?.min, label).toBe(Math.round(HYROX_SESSION_WARMUP_MIN * 0.5));
+                if (was === 'ski_erg') ski++; else if (was === 'row_erg') row++;
+              } else if (was === 'row_erg') {
+                movedToSki++;
+                expect(w.hyroxSpec?.warmup?.mode, label).toBe('ski_erg');
+                expect(w.hyroxSpec?.warmup?.min, label).toBe(HYROX_SESSION_WARMUP_MIN);
+                expect(w.modReason ?? '', label).toContain('Lower-body capacity 50%: ');
+                expect(w.modReason ?? '', label).toContain('SkiErg warm-up in place of the Row Erg');
+              }
+            }
           }
         }
       }
     }
     expect(sessions).toBeGreaterThan(50);
+    expect(ski).toBeGreaterThan(0);
+    expect(row).toBeGreaterThan(0);
+    expect(movedToSki).toBeGreaterThan(0);
   }, 120000);
 });
 
@@ -992,7 +1011,7 @@ describe('a station session\'s jog warm-up under a run restriction', () => {
               expect(g.modReason ?? '').toMatch(/^Run capacity /);
               if (runCap === 0) {
                 expect(g.hyroxRounds ?? 1).toBeGreaterThan(1);
-                expect(g.modReason ?? '').toContain('Take the first round at easy effort as the warm-up.');
+                expect(g.modReason ?? '').toContain('no warm-up jog, so the first round at easy effort is the warm-up.');
                 // Written into the session: round 1's sets at the easy RPE,
                 // in its spec, its text, its MTL (linear in the RPE) and its
                 // planned TSS.
@@ -1029,7 +1048,7 @@ describe('a station session\'s jog warm-up under a run restriction', () => {
               const label = `${fmt} ${band} ${len}w W${wk?.w} ${w.n} run ${runCap} lower ${lower}`;
               const wu = w.hyroxSpec?.warmup;
               if (runCap === 0 && wu) off.push(`${label}: ${wu.min}-min ${wu.mode} warm-up`);
-              if (runCap === 0 && !(w.modReason ?? '').includes('Take the first round at easy effort as the warm-up.')) off.push(`${label}: no warm-up note`);
+              if (runCap === 0 && !(w.modReason ?? '').includes('so the first round at easy effort is the warm-up')) off.push(`${label}: no warm-up note`);
               if (runCap === 0 && (!w.hyroxSpec?.warmupRound || !(w.d ?? '').startsWith('Warm-up: round 1 at easy effort'))) off.push(`${label}: round 1 not written as the warm-up`);
               if (runCap === 0 && (w.hyroxRounds ?? 1) <= 1) off.push(`${label}: one round, all of it the warm-up`);
               if (runCap === 50 && !(wu?.mode === 'run' && wu.min === 5)) off.push(`${label}: warm-up ${wu ? `${wu.min} min ${wu.mode}` : 'none'}`);
