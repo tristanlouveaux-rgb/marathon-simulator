@@ -12,7 +12,7 @@
  * So one session read "Solid session today. 58 TSS logged." on Home and "Big
  * session logged (58 TSS). Daily target well exceeded." on Readiness. Every
  * surface now calls postSessionNote (capacity-strain.ts): gated on a logged
- * session, tier from pctCapacity, the ring's number quoted.
+ * session, tier from sessionPctCapacity, the ring's number quoted.
  *
  * Real generators and resolver, real Home and Readiness renders (jsdom); the
  * coach page prints computeDailyCoach(s).primaryMessage verbatim
@@ -241,7 +241,7 @@ function expectOneTierEverywhere(s: SimulatorState): { word: string; tss: number
 }
 
 for (const [mode, build] of [['running', runningState], ['HYROX', hyroxState], ['triathlon', triState]] as const) {
-  describe(`${mode}: one session, one tier word and number on every surface`, () => {
+  describe(`${mode}: one session, one tier word and number on every surface`, { timeout: 30_000 }, () => {
     it('a session at 1.1x the plan plus 14,000 steps', () => {
       const s = build();
       sessionDay(s, 1.1, 14000);

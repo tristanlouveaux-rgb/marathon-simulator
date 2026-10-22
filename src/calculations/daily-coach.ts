@@ -110,7 +110,7 @@ export interface StrainContext {
   /**
    * Today's TSS as % of the capacity anchor (max(planned, CTL/7)) — the
    * canonical `computeCapacityStrain(s).pctCapacity`. This is what feeds the
-   * readiness strain floor and picks the post-session tier (postSessionNote).
+   * readiness strain floor. The post-session tier reads sessionPctCapacity (postSessionNote).
    */
   capacityStrainPct?: number;
   /** True when no planned workout AND no matched activity today. */
@@ -930,7 +930,7 @@ function derivePrimaryMessage(
   // Today's canonical capacity strain: the post-session sentence (injury-cap
   // overshoot, then the Big / Solid / Good training tiers) comes from
   // postSessionNote, the helper Home and the Readiness page call. It gates on
-  // a logged session, reads one percent (pctCapacity) and quotes the Strain
+  // a logged session, reads the session alone (sessionPctCapacity) and quotes the Strain
   // ring's number.
   const cs = strain?.capacity ?? null;
   const dailyCTL = sig.ctlNow > 0 ? sig.ctlNow : null;
@@ -947,11 +947,12 @@ function derivePrimaryMessage(
   // an injury-capped day of Y..."), then the tier. The Readiness Today's
   // Strain card and triathlon Home print the same helper with no blocker
   // check, so the coach printing "Injury is active..." here gave one session
-  // two different post-session lines (2026-10-22). With no logged session in
-  // a tier, the blocker sentence stands.
-  const blockerPostNote = (blockers.includes('injury') || blockers.includes('illness')) && cs
-    ? postSessionNote(cs)
-    : null;
+  // two different post-session lines (2026-10-22). Tier 1's order applies:
+  // a rest-day overreach leads, then the post-session note. With no logged
+  // session in a tier, the blocker sentence stands.
+  const hasBlocker = blockers.includes('injury') || blockers.includes('illness');
+  if (hasBlocker && strain?.isRestDayOverreaching) return REST_DAY_OVERREACH_SENTENCE;
+  const blockerPostNote = hasBlocker && cs ? postSessionNote(cs) : null;
   if (blockerPostNote) return blockerPostNote;
   if (blockers.includes('injury')) {
     // Tailor the message to whether the user actually has training options.

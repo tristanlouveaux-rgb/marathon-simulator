@@ -1061,7 +1061,7 @@ export function buildReadinessRing(s: SimulatorState): string {
   // Tri-mode post-session override: capacityStrainNote, which calls
   // postSessionNote: gated on a logged session, injury-cap overshoot first
   // ("X TSS logged against an injury-capped day of Y…"), then the Big / Solid /
-  // Good training tier from pctCapacity, quoting the ring's number. Running,
+  // Good training tier from sessionPctCapacity, quoting the ring's number. Running,
   // HYROX and Just-Track get the same sentence from the same helper through
   // coach.primaryMessage, and the Readiness page calls it too, so one session
   // reads one tier word on every surface. (Override restored from the

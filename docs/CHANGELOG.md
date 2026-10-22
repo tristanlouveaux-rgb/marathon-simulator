@@ -54,6 +54,12 @@ Branch `fix/ct-detector-hyrox-polish` off `fix/load-accounting`, one commit per 
 
 - **Onboarding title "HYROX setup" (ISSUE-406 (h)).** `src/ui/wizard/steps/hyrox-setup.ts` read "Hyrox setup". The plain strip in the top safe area and the Back pill overlapping hint text mid-scroll are not trivially fixable without a device check and are left for a UI pass.
 
+### Final review fixes (orchestrator, same day)
+
+- **Rest-day overreach leads under an injury or illness flag** (`derivePrimaryMessage`, `src/calculations/daily-coach.ts`): the blocker branch that prints the post-session note now runs Tier 1's rest-day overreach check first, so an injured or ill athlete with heavy load on a rest day reads the same line on the coach page, Home and Readiness. Test: `daily-coach.test.ts` ("a rest-day overreach leads under a blocker too"); it fails on the previous commit (the coach printed "Injury is active...").
+- **The HYROX race offset refits on every fitness refresh** (`refreshBlendedFitness`, `src/calculations/blended-fitness.ts`): in HYROX mode it calls `refreshHyroxPersonalRunPaceOffset`, so when a first real running signal arrives mid-session (a synced run, a watch VO2max, a FIT import, onboarding) the past race's offset is refitted against the new run base at once instead of at the next launch. Test: `hyrox-run-pace.test.ts` ("refreshBlendedFitness refits the offset when the run base changes, with no relaunch").
+- Stale comments now say the post-session tier reads `sessionPctCapacity`; the one-tier jsdom suite has a 30 s timeout (cold Home and Readiness renders under load).
+
 ### Second round: orchestrator decisions D1 to D15 (same day)
 
 Tristan's decisions on the first round's open questions, one commit each (D6 needed none). Unit-tested only; nothing device-verified; no OPEN_ISSUES item marked fixed. Full suite, tsc and lint:ui pass, except five tests that also fail at the base commit `d754a16b` when run between 00:00 and 01:00 BST and pass under `TZ=UTC`: they build dates from the UTC day (`toISOString`) while the code reads the local day (`readiness-strain-sensitivity.test.ts` x3, `hyrox-injury.test.ts` x1, `benchmark-checkin-planned.test.ts` x1).

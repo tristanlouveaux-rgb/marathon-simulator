@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { computeDailyCoach, getTodayFeeling, buildCoachSignalsPayload, postSessionSentence, injuryCapOvershootSentence, type StrainContext } from './daily-coach';
+import { REST_DAY_OVERREACH_SENTENCE } from './capacity-strain';
 import type { SimulatorState, Week } from '@/types';
 
 // ─── Minimal state factory ───────────────────────────────────────────────────
@@ -453,5 +454,15 @@ describe('computeDailyCoach — HYROX hard sessions', () => {
   it('an easy run day keeps the easy copy', () => {
     const coach = computeDailyCoach(hyroxDay('hyrox_run_easy', 'Easy Run'));
     expect(coach.primaryMessage).toBe('Poor sleep last night. Rest or easy movement is appropriate.');
+  });
+});
+
+describe('computeDailyCoach: a rest-day overreach leads under a blocker too', () => {
+  it('injured or ill, heavy load on a rest day: the coach line is the rest-day overreach sentence, as on Readiness', () => {
+    const strain: StrainContext = { ...REST_STRAIN, isRestDayOverreaching: true, trainedToday: true, actualTSS: 150 };
+    const injured = computeDailyCoach(makeState({ injuryState: { active: true } as any }), strain);
+    expect(injured.primaryMessage).toBe(REST_DAY_OVERREACH_SENTENCE);
+    const ill = computeDailyCoach(makeState({ illnessState: { active: true, severity: 'resting', startDate: todayISO() } as any }), strain);
+    expect(ill.primaryMessage).toBe(REST_DAY_OVERREACH_SENTENCE);
   });
 });

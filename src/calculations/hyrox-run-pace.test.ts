@@ -25,6 +25,7 @@ import type { SimulatorState } from '@/types/state';
 import type { AbilityBand, HyroxConfig } from '@/types/triathlon';
 import { gp } from './paces';
 import { computePersonalRunPaceOffset } from './hyrox-personal-pace';
+import { refreshBlendedFitness } from './blended-fitness';
 
 function buildState(opts: {
   band?: AbilityBand;
@@ -380,6 +381,18 @@ describe('personal race offset: fitted against the base in use', () => {
     const after = deriveHyroxRunPace(st);
     expect(after.components!.personalOffsetSec).toBe(computePersonalRunPaceOffset(st));
     expect(after.paceSecKm).toBe(derivePopulationRunPace(st, 'singles')!.paceSecKm + computePersonalRunPaceOffset(st));
+  });
+
+  it('refreshBlendedFitness refits the offset when the run base changes, with no relaunch', () => {
+    const st = unmeasured('beginner', 105 * 60);
+    Object.assign(st, { eventType: 'hyrox', wks: [], w: 1, tw: 12 });
+    refreshBlendedFitness(st);
+    expect(hyroxRunPaceOffsetBase(st.hyroxConfig)).toBe('seed');
+    (st as any).vo2 = 40; // a fresh watch VO2max arrives mid-session: measured
+    (st as any).v = 40;
+    refreshBlendedFitness(st);
+    expect(hyroxRunPaceOffsetBase(st.hyroxConfig)).toBe('vdot');
+    expect(deriveHyroxRunPace(st).components!.personalOffsetSec).toBe(computePersonalRunPaceOffset(st));
   });
 
   it('a legacy offset (no base stamp) is not applied to the seed and is refitted against it', () => {
