@@ -563,14 +563,17 @@ export function withoutHyroxStation(w: Workout, station: HyroxStation): Workout 
  * The same station session with every set of each station cut to
  * `fractionOf(station)` of its amount (null or 1 or more: kept whole; 0 or
  * less: none), rounded down to a whole metre or rep (a set with no amount:
- * its time, to the whole second). Each set's time, the station's MTL (its
- * component total) and each set's share of the race volume follow in
+ * its time, to the whole second). Each set's time, the rest after it
+ * (restScale: the round's rest and a transition jog too), the station's MTL
+ * (its component total) and each set's share of the race volume follow in
  * proportion, so a set never runs above its share (the injury gates,
  * applyHyroxInjuryGates: every set at its side's capacity share, as a run
- * keeps the run capacity's share of its duration). A station left with no
- * whole metre or rep leaves the session, its rounds shrinking to the last
- * round a station left still holds (withoutHyroxStation's rule). Its MTL,
- * duration and text again; the session itself when nothing is cut.
+ * keeps the run capacity's share of its duration) and a heavily cut session
+ * is not mostly rest (v2 review: at upper and lower body 25, 218 of 230 kept
+ * singles circuits held under 25% of their minutes as work). A station left
+ * with no whole metre or rep leaves the session, its rounds shrinking to the
+ * last round a station left still holds (withoutHyroxStation's rule). Its
+ * MTL, duration and text again; the session itself when nothing is cut.
  */
 export function withHyroxPartialSets(w: Workout, fractionOf: (st: HyroxStation) => number | null): Workout {
   if (!w.hyroxSpec) return w;
@@ -592,6 +595,7 @@ export function withHyroxPartialSets(w: Workout, fractionOf: (st: HyroxStation) 
       ...(was > 0 ? (reps ? { reps: amount } : { distanceM: amount }) : {}),
       durationSec: Math.floor(sec * ratio + 1e-9),
       mtl: c.mtl * ratio,
+      restScale: (c.restScale ?? 1) * ratio,
       ...(c.raceFraction != null ? { raceFraction: c.raceFraction * ratio } : {}),
     } as HyroxComponent);
   }
@@ -820,12 +824,16 @@ export function hyroxSessionText(w: Workout): string {
     // Not every station in every round (a beginner session's sleds): the
     // rounds say which stations they hold, so the header matches the lines.
     const breakdown = hyroxRoundsBreakdown(w);
+    // The injury gates' cut scales each set's rest with its set (restScale):
+    // each station's line then says its own rest.
+    const ownRests = hyroxRestsScaled(w);
+    const restAll = ownRests ? '' : `, ${fmtRestPhrase(spec.restSec)} rest after every set`;
     const shape = rounds === 1
-      ? `1 round, one set of each station, ${fmtRestPhrase(spec.restSec)} rest after every set.`
+      ? `1 round, one set of each station${restAll}.`
       : breakdown
-        ? `${rounds} rounds, ${fmtRestPhrase(spec.restSec)} rest after every set. ${breakdown}`
-        : `${rounds} rounds, one set of each station a round, ${fmtRestPhrase(spec.restSec)} rest after every set.`;
-    const lines = stations.map(c => `${STATION_DISPLAY[c.type as HyroxStation].name}: ${hyroxComponentSets(c, rounds)} × ${stationPrescription(c, spec, !tech)}.`);
+        ? `${rounds} rounds${restAll}. ${breakdown}`
+        : `${rounds} rounds, one set of each station a round${restAll}.`;
+    const lines = stations.map(c => `${STATION_DISPLAY[c.type as HyroxStation].name}: ${hyroxComponentSets(c, rounds)} × ${stationPrescription(c, spec, !tech)}${ownRests ? `, ${fmtRestPhrase(hyroxSetRestSec(c, spec))} rest after each set` : ''}.`);
     const weakest = spec.weakest && stations.some(c => c.type === spec.weakest)
       ? [`${STATION_DISPLAY[spec.weakest].name} is the forecast's weakest station.`]
       : [];
@@ -895,7 +903,23 @@ export function hyroxSessionText(w: Workout): string {
 export function hyroxStationRowText(c: HyroxComponent, w: Workout, withTarget = true): string {
   const sets = hyroxComponentSets(c, Math.max(1, w.hyroxRounds ?? 1));
   if (!w.hyroxSpec) return hyroxComponentAmount(c);
-  return `${sets} × ${stationPrescription(c, w.hyroxSpec, withTarget && w.hyroxSpec.format === 'race_pace')}`;
+  const rest = hyroxRestsScaled(w) ? `, ${fmtRestPhrase(hyroxSetRestSec(c, w.hyroxSpec))} rest after each set` : '';
+  return `${sets} × ${stationPrescription(c, w.hyroxSpec, withTarget && w.hyroxSpec.format === 'race_pace')}${rest}`;
+}
+
+/** True when the injury gates scaled a station session's rests with its
+ *  sets (restScale on a station), so its rests differ by station. */
+export function hyroxRestsScaled(w: Pick<Workout, 'hyroxComponents'>): boolean {
+  return (w.hyroxComponents ?? []).some(c => c.type !== 'run' && c.restScale != null);
+}
+
+/** The rest after each set of a station session's component (seconds): the
+ *  session's rest after every set at the component's restScale, rounded
+ *  down to the whole second (the walk's rule; a station session's rest
+ *  between sets and between rounds are the same, spec.restSec). */
+export function hyroxSetRestSec(c: HyroxComponent, spec: Pick<HyroxSessionSpec, 'restSec'>): number {
+  const base = Math.max(0, Math.round(spec.restSec));
+  return c.restScale == null ? base : Math.floor(base * Math.max(0, c.restScale) + 1e-9);
 }
 
 /** What a lane H2b station session adds below its stations: the weakest

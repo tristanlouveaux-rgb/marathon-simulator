@@ -74,14 +74,18 @@ export function hyroxSessionWalk(w: Pick<Workout, 'hyroxComponents' | 'hyroxRoun
     for (let ci = 0; ci < comps.length; ci++) if (roundSets[ci].has(r)) inRound.push({ c: comps[ci], ci });
     inRound.forEach((x, k) => {
       const next = inRound[k + 1];
+      // A set the injury gates cut takes their share of the rest after it
+      // (restScale), rounded down to the whole second.
+      const scale = x.c.restScale;
+      const scaled = (sec: number) => (scale == null ? sec : Math.floor(sec * Math.max(0, scale) + 1e-9));
       out.push({
         ci: x.ci,
         component: x.c,
         round: r,
         setIndex: seen[x.ci]++,
         setCount: setCount[x.ci],
-        restSec: next ? Math.max(0, Math.round(x.c.restAfterSec ?? 0)) : roundRest,
-        transitionSec: next && x.c.type === 'run' && next.c.type !== 'run' ? transition : 0,
+        restSec: scaled(next ? Math.max(0, Math.round(x.c.restAfterSec ?? 0)) : roundRest),
+        transitionSec: next && x.c.type === 'run' && next.c.type !== 'run' ? scaled(transition) : 0,
       });
     });
   }

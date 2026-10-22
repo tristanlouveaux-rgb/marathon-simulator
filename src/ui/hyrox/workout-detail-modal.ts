@@ -15,7 +15,7 @@ import { noteRatingSource } from '@/calculations/athlete-rating';
 import { intensityTargetLabel } from '@/ui/workout-adjust-overlay';
 import { parseStrengthSession, type GuidedSet, type StrengthSession } from '@/guided/strength-model';
 import { dropInAppActual, recordPlannedSessionDone } from '@/calculations/in-app-activity';
-import { isHyroxEasyErg, hyroxStationRowText, hyroxSessionNotes, hyroxRoundsBreakdown } from '@/workouts/hyrox-generators';
+import { isHyroxEasyErg, hyroxStationRowText, hyroxSessionNotes, hyroxRoundsBreakdown, hyroxRestsScaled } from '@/workouts/hyrox-generators';
 import { ftRounded } from '@/utils/format';
 import { HYROX_EASY_RPE } from '@/constants/hyrox-constants';
 
@@ -493,9 +493,10 @@ function renderSessionBody(workout: Workout, components: HyroxComponent[] | unde
     const rounds = workout.hyroxRounds ?? 3;
     const interStation = stationComponents[0]?.restAfterSec ?? 60;
     const interRound = workout.hyroxRoundRestSec ?? 180;
-    // Lane H2b: one rest after every set, and the session's closing notes.
+    // Lane H2b: one rest after every set (each station's own when the
+    // injury gates scaled them, shown on its row), and the closing notes.
     const restLine = workout.hyroxSpec
-      ? `${fmtRest(workout.hyroxSpec.restSec)} rest after every set · Technique, RPE ${workout.rpe ?? 5}`
+      ? `${hyroxRestsScaled(workout) ? 'Rest after each set as listed' : `${fmtRest(workout.hyroxSpec.restSec)} rest after every set`} · Technique, RPE ${workout.rpe ?? 5}`
       : `${fmtRest(interStation)} between stations · ${fmtRest(interRound)} between rounds · Technique pace`;
     const notes = hyroxSessionNotes(workout);
     // Not every station in every round (a beginner session's sleds).
@@ -531,9 +532,10 @@ function renderSessionBody(workout: Workout, components: HyroxComponent[] | unde
     const rounds = workout.hyroxRounds ?? 2;
     const interStation = stationComponents[0]?.restAfterSec ?? 30;
     const interRound = workout.hyroxRoundRestSec ?? 120;
-    // Lane H2b: one rest after every set, and the session's closing notes.
+    // Lane H2b: one rest after every set (each station's own when the
+    // injury gates scaled them, shown on its row), and the closing notes.
     const restLine = workout.hyroxSpec
-      ? `${fmtRest(workout.hyroxSpec.restSec)} rest after every set · RPE ${workout.rpe ?? 7}`
+      ? `${hyroxRestsScaled(workout) ? 'Rest after each set as listed' : `${fmtRest(workout.hyroxSpec.restSec)} rest after every set`} · RPE ${workout.rpe ?? 7}`
       : `${fmtRest(interStation)} between stations · ${fmtRest(interRound)} between rounds · Stations only`;
     const notes = hyroxSessionNotes(workout);
 

@@ -513,7 +513,13 @@ import {
 //   capacity is strictly higher than the planned one's, so a tie keeps the
 //   planned erg (under an upper-body restriction the Row Erg reads the upper
 //   body too); the gate's note is one sentence a side, opening with the side
-//   that is restricted, and it names the finisher's cut.
+//   that is restricted, and it names the finisher's cut;
+// - (v2 review) the rest after each cut set takes its set's share
+//   (restScale; the round's rest and a transition jog too), so a heavily cut
+//   session is not mostly rest and the 15-min floor (still counting the
+//   planned warm-up) weighs training content; each station's line then
+//   names its own rest. A finisher scaled under HYROX_FINISHER_MIN_MIN, the
+//   uninjured plan's shortest, leaves (a 25-min finisher at 5% was 1 min).
 export const HYROX_GENERATOR_VERSION = 19;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
@@ -2701,18 +2707,21 @@ type HyroxGateResult = { w: Workout | null; why?: string };
  *   rewritten to match), none at run capacity 0;
  * - a lane H2b station session: every set at its station's side's share
  *   (HYROX_STATION_REGION: upper, lower, or full-body at the lower of the two
- *   capacities; withHyroxPartialSets rounds each set down), its easy erg
- *   finisher at its erg's share (rounded down to the minute), its strength
+ *   capacities; withHyroxPartialSets rounds each set down, a set with no
+ *   whole metre or rep leaves, and the rest after each set takes its set's
+ *   share), its easy erg finisher at its erg's share (rounded down to the
+ *   minute, left out under HYROX_FINISHER_MIN_MIN), its strength
  *   block as the injury's strength decision takes it (injury-strength.ts:
  *   under an active injury it pauses or adapts strength, so the block leaves
  *   and the adapted session is the strength work; only an injury in its
  *   resolved phase keeps a block, at the lower capacity's share of its
  *   minutes and reps, blockAt, as no map gives its exercises a side), and
- *   its warm-up on the way with the highest capacity among the athlete's
- *   ways that carry the planned way's MTL a minute (an erg moves only to the
- *   other erg, a jog stays a jog; the SkiErg: the upper body's capacity; the
- *   Row Erg: the lower of the two; a jog: the run capacity) at that
- *   capacity's share of the planned minutes. With no way left, round 1 at
+ *   its warm-up on its planned way, moving to another of the athlete's ways
+ *   that carry the planned way's MTL a minute only when that way's capacity
+ *   is strictly higher (an erg moves only to the other erg, a jog stays a
+ *   jog; the SkiErg: the upper body's capacity; the Row Erg: the lower of the
+ *   two; a jog: the run capacity), at its way's capacity's share of the
+ *   planned minutes. With no way left, round 1 at
  *   easy effort is the warm-up (hyroxSpec.warmupRound). The session stays
  *   when no station's side is at 0 and it holds the 15-min floor
  *   (holdsStationFloor: its station work with the planned warm-up), or when
@@ -2729,11 +2738,15 @@ type HyroxGateResult = { w: Workout | null; why?: string };
  * - bricks and race simulations stack runs and stations: any restriction
  *   leaves them out;
  * - a standalone strength session as the injury's strength decision takes
- *   it: paused, or the region-safe session at its length.
+ *   it: paused, or the region-safe session at the decision's own length
+ *   capped at the uninjured minutes (standaloneStrength).
  * Every part only shrinks and every share rises with its capacity, so the
  * gated week holds no session the uninjured week does not, no part above its
- * capacity's share of the uninjured part, no more MTL than the uninjured
- * part, and nothing less at a higher capacity. Rounding aside: a run's and
+ * capacity's share of the uninjured part (an adapted standalone strength
+ * session: each region's block at its capacity's share of the shared
+ * decision's, the core block whole, so it can sit above the lower of the two
+ * capacities' shares), no more minutes, planned TSS or MTL than the
+ * uninjured part, and nothing less at a higher capacity. Rounding aside: a run's and
  * an easy erg session's minutes round to the nearest minute (up to half a
  * minute above the exact share; a run's distance and MTL stay exact), a
  * warm-up's to the nearest minute at least 1.
@@ -2967,7 +2980,7 @@ function hyroxInjuryGate(injuryState: InjuryState, stationAccess?: HyroxConfig['
         bySide.set(k, e);
       }
       for (const [k, e] of bySide) {
-        if (e.kept.length > 0) notes.push([k, `${listOf(e.kept)} sets cut to ${keyCap(k)}%`]);
+        if (e.kept.length > 0) notes.push([k, `${listOf(e.kept)} sets and their rests cut to ${keyCap(k)}%`]);
         if (e.gone.length > 0) notes.push([k, `${listOf(e.gone)} left out`]);
       }
     }
@@ -2983,10 +2996,13 @@ function hyroxInjuryGate(injuryState: InjuryState, stationAccess?: HyroxConfig['
       if (parts.strength) notes.push([keyOf('row_erg'), `strength block cut to ${stationCap}%`]);
       else strengthOut = true;
     }
+    // The finisher at its erg's share, rounded down to the minute; under
+    // HYROX_FINISHER_MIN_MIN, the uninjured plan's own shortest finisher, it
+    // leaves (v2 review: a 25-min finisher at 5% became 1 min).
     if (spec.finisher && ownCap(spec.finisher.station) < 100) {
       const f = spec.finisher;
       const min = Math.floor((f.min * Math.max(0, ownCap(f.station))) / 100 + 1e-9);
-      parts.finisher = min >= 1 ? { ...f, min, mtl: (f.mtl * min) / f.min } : null;
+      parts.finisher = min >= HYROX_FINISHER_MIN_MIN ? { ...f, min, mtl: (f.mtl * min) / f.min } : null;
       const name = STATION_DISPLAY[f.station].name;
       notes.push([keyOf(f.station), parts.finisher ? `${name} finisher cut to ${min} min` : `${name} finisher left out`]);
     }

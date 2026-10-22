@@ -279,6 +279,12 @@ export interface HyroxComponent {
    *  (inter-station rest). The guided parser overrides this with the
    *  inter-round rest on the last component of each round. Absent = 0. */
   restAfterSec?: number;
+  /** Share of the planned rest that follows each of this component's sets
+   *  (the injury gates' cut, withHyroxPartialSets: a set at a share of its
+   *  amount takes the same share of the rest after it, the round's rest and
+   *  a transition jog included; hyrox-session-shape's walk applies it).
+   *  Absent: the rest as planned. */
+  restScale?: number;
   /** The 1-based rounds this component appears in (lane H2b), ascending.
    *  Absent: every round (hyroxRounds). A beginner's sled takes 4 sets of one
    *  lane while the session's other stations take 2; a brick's two stations

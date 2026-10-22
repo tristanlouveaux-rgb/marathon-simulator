@@ -63,10 +63,11 @@ import {
 } from '@/constants/hyrox-constants';
 import { isHyroxDeloadWeek } from './plan_engine';
 import { generateHyroxPlanDetailed, regenerateHyroxWeeksFrom, applyHyroxInjuryGates, holdsStationFloor, HYROX_MIN_STATION_SESSION_MIN } from './plan_engine.hyrox';
-import { hyroxSessionWorkMin, withHyroxRounds, hyroxRunLengthKm, withoutHyroxStation, hyroxStationToCut, withHyroxSessionParts, hyroxWarmupOn, isHyroxEasyErg, generateHyroxEasyErg } from './hyrox-generators';
+import { hyroxSessionWorkMin, withHyroxRounds, hyroxRunLengthKm, withoutHyroxStation, hyroxStationToCut, withHyroxSessionParts, hyroxWarmupOn, isHyroxEasyErg, generateHyroxEasyErg, hyroxRestsScaled, hyroxSetRestSec, hyroxStationRowText } from './hyrox-generators';
+import { parseHyroxSession } from '@/guided/strength-model';
 import { hyroxSessionWalk, hyroxComponentSets, hyroxComponentRounds, hyroxSessionPlannedTss } from './hyrox-session-shape';
 import { plannedTssPerMin } from '@/constants/sports';
-import { HYROX_EASY_RPE, HYROX_SESSION_WARMUP_MIN } from '@/constants/hyrox-constants';
+import { HYROX_EASY_RPE, HYROX_SESSION_WARMUP_MIN, HYROX_FINISHER_MIN_MIN } from '@/constants/hyrox-constants';
 import { computeComponentMTL } from '@/calculations/mtl';
 import { HYROX_STATION_REGION } from '@/calculations/hyrox-injury';
 import type { InjuryState } from '@/types/injury';
@@ -220,7 +221,9 @@ function ruleV2(u: Workout, [run, up, lo]: Caps, access: Access): { kept: boolea
     if (amount < 1) continue;
     const ratio = amount / amountOf(c);
     amounts.set(c.type, amount);
-    left.push({ ...c, durationSec: Math.floor((c.durationSec ?? 0) * ratio + 1e-9) });
+    // The rest after each set at the set's share (v2 review: rests stayed
+    // whole, so a heavily cut session was mostly rest).
+    left.push({ ...c, durationSec: Math.floor((c.durationSec ?? 0) * ratio + 1e-9), restScale: ratio });
   }
   const rounds = Math.min(rounds0, Math.max(1, ...left.map(c => { const rs = hyroxComponentRounds(c, rounds0); return rs.length > 0 ? rs[rs.length - 1] : 0; })));
   const warm = warmRule(u.hyroxSpec!.warmup!.mode, run, up, lo, access);
@@ -228,7 +231,10 @@ function ruleV2(u: Workout, [run, up, lo]: Caps, access: Access): { kept: boolea
   const oneRound = warm.min <= 0 && rounds <= 1;
   const kept = !zero && (floorHolds(shape) || (!cut && !floorHolds(u) && !oneRound));
   const f = u.hyroxSpec!.finisher;
-  const finisherMin = f ? Math.floor((f.min * Math.min(100, capOfStation(f.station, up, lo))) / 100 + 1e-9) : 0;
+  // Under HYROX_FINISHER_MIN_MIN, the uninjured plan's shortest finisher,
+  // the finisher leaves.
+  const fm = f ? Math.floor((f.min * Math.min(100, capOfStation(f.station, up, lo))) / 100 + 1e-9) : 0;
+  const finisherMin = fm >= HYROX_FINISHER_MIN_MIN ? fm : 0;
   return { kept, amounts, rounds, warm, finisherMin };
 }
 
@@ -521,6 +527,17 @@ describe('injury gate v2: a station session at its capacities\' shares of the un
         if (fullSecOf(g) > (Math.min(up, lo) / 100) * fullSecOf(u) + 1e-6) off.push(`${l}: full-body work above its share`);
         const fu = u.hyroxSpec?.finisher;
         if (fu && (g.hyroxSpec?.finisher?.min ?? 0) > (fu.min * capOfStation(fu.station, up, lo)) / 100 + 1e-9) off.push(`${l}: finisher above its share`);
+        const fg = g.hyroxSpec?.finisher?.min ?? 0;
+        if (fg > 0 && fg < HYROX_FINISHER_MIN_MIN) off.push(`${l}: a ${fg}-min finisher`);
+        // Each set's rest at most its set's share of the planned rest, and no
+        // set of 0 (v2 review: rests stayed whole).
+        for (const x of hyroxSessionWalk(g)) {
+          if (x.component.type === 'run') continue;
+          const uc = u.hyroxComponents!.find(c => c.type === x.component.type)!;
+          const share = amountOf(uc) > 0 ? amountOf(x.component) / amountOf(uc) : (uc.durationSec ? (x.component.durationSec ?? 0) / uc.durationSec : 1);
+          if (x.restSec > share * u.hyroxSpec!.restSec + 1e-9) off.push(`${l}: ${x.component.type} rest ${x.restSec} s above its set's share`);
+          if (amountOf(uc) > 0 && amountOf(x.component) < 1) off.push(`${l}: a ${x.component.type} set of 0`);
+        }
         // The warm-up: its way's share of the planned minutes (warmRule).
         if (warmMin(g) !== warmRule(u.hyroxSpec!.warmup!.mode, run, up, lo, access).min || warmMin(g) > warmMin(u)) off.push(`${l}: warm-up ${warmMin(g)} min off its share`);
         if ((g.estimatedDurationMin ?? 0) > (u.estimatedDurationMin ?? 0)) off.push(`${l}: longer than the uninjured session`);
@@ -546,6 +563,7 @@ describe('injury gate v2: a station session at its capacities\' shares of the un
           }
           for (const [what, f] of [['upper body', (w: Workout) => sideSecOf(w, 'upper')], ['lower body', (w: Workout) => sideSecOf(w, 'lower')], ['full body', fullSecOf],
             ['station work', hyroxSessionWorkMin], ['warm-up', warmMin], ['finisher', (w: Workout) => w.hyroxSpec?.finisher?.min ?? 0],
+            ['rest', (w: Workout) => hyroxSessionWalk(w).reduce((a, x) => a + x.restSec, 0)],
             ['length', (w: Workout) => w.estimatedDurationMin ?? 0], ['planned TSS', hyroxSessionPlannedTss]] as Array<[string, (w: Workout) => number]>) {
             if (f(h) < f(g) - 1e-6) off.push(`${m}: ${what} ${f(g)} to ${f(h)}`);
           }
@@ -559,6 +577,36 @@ describe('injury gate v2: a station session at its capacities\' shares of the un
     expect(moved).toBeGreaterThan(1000);
     expect(off.slice(0, 10)).toEqual([]);
   }, 600000);
+
+  it('a cut station session says each station\'s own rest, as the walk and the guided player run it, and an uncut one keeps its one rest after every set (v2 review: rests stayed whole, so a heavily cut session was mostly rest)', () => {
+    const sessions = stationSessionsOf([V_SINGLES, V_DOUBLES], [12]);
+    let cutChecked = 0;
+    for (const { label, u, access } of sessions) {
+      for (const st of [[100, 50, 100], [100, 100, 50], [100, 25, 25]] as Caps[]) {
+        const [g] = applyHyroxInjuryGates([u], injOf(st), 0, access);
+        if (!g) continue;
+        const l = `${label} at ${st.join('/')}`;
+        const walk = hyroxSessionWalk(g);
+        const player = parseHyroxSession(g)!.sets.map(x => x.restSec);
+        expect(player, l).toEqual(walk.map(x => x.restSec));
+        if (!hyroxRestsScaled(g)) { expect(g.d ?? '', l).toContain('rest after every set'); continue; }
+        cutChecked++;
+        expect(g.d ?? '', l).not.toContain('rest after every set');
+        for (const c of (g.hyroxComponents ?? []).filter(x => x.type !== 'run')) {
+          const rest = hyroxSetRestSec(c, g.hyroxSpec!);
+          // Every set's rest but the session's last is that station's rest.
+          const own = walk.filter((x, i) => x.component.type === c.type && i < walk.length - 1).map(x => x.restSec);
+          for (const r of own) expect(r, `${l} ${c.type}`).toBe(rest);
+          const phrase = `${rest >= 60 && rest % 60 === 0 ? `${rest / 60} min` : `${rest} s`} rest after each set`;
+          expect(hyroxStationRowText(c, g), `${l} ${c.type}`).toContain(phrase);
+          expect(g.d ?? '', `${l} ${c.type}`).toContain(phrase);
+        }
+      }
+      expect(u.d ?? '', label).toContain('rest after every set');
+      expect(hyroxRestsScaled(u)).toBe(false);
+    }
+    expect(cutChecked).toBeGreaterThan(200);
+  }, 120000);
 
   it('the other sessions: runs at the run capacity\'s share, none at 0, quality runs too, their text, run component and MTL agreeing with the badge; easy erg work at its erg\'s side\'s share with its text; bricks and race simulations only with every capacity at 100; the assessment keeping each station whole at 100% and leaving out the rest, none with a side at 0', () => {
     const s = build('intermediate', 8, 18, V_SINGLES[1]);
