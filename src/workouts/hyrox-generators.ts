@@ -512,28 +512,54 @@ export function withoutHyroxStation(w: Workout, station: HyroxStation): Workout 
  * is not under 1, or the amount would fall under one metre or rep.
  */
 export function withHyroxPartialSet(w: Workout, station: HyroxStation, fraction: number): Workout | null {
-  if (!w.hyroxSpec || !(fraction > 0) || fraction >= 1) return null;
+  const comps = hyroxPartialComponents(w, st => (st === station ? fraction : null));
+  return comps ? finishHyroxSession({ ...w, hyroxComponents: comps }) : null;
+}
+
+/**
+ * The components of a station session with each station's sets cut to
+ * `fractionOf(station)` of their amount (null or 1 or more: kept whole), as
+ * withHyroxPartialSet cuts one station's: rounded down to a whole metre or
+ * rep, each set's time, the station's MTL and its share of the race volume in
+ * proportion. A station whose amount would fall under one metre or rep keeps
+ * its sets whole. Null when no station is cut. The injury gate evaluates its
+ * candidates on these components (their work and each side's) and finishes
+ * only the one it keeps (withHyroxPartialSets).
+ */
+export function hyroxPartialComponents(w: Workout, fractionOf: (st: HyroxStation) => number | null): HyroxComponent[] | null {
+  if (!w.hyroxSpec) return null;
   const rounds = Math.max(1, w.hyroxRounds ?? 1);
-  const comps = w.hyroxComponents ?? [];
-  const idx = comps.findIndex(c => c.type === station);
-  if (idx < 0) return null;
-  const c = comps[idx];
-  if (hyroxComponentSets(c, rounds) < 1) return null;
-  const reps = typeof c.reps === 'number';
-  const old = reps ? (c.reps as number) : (c.distanceM ?? 0);
-  if (!(old > 0)) return null;
-  const amount = Math.floor(old * fraction + 1e-9);
-  if (amount < 1) return null;
-  const ratio = amount / old;
-  const next: HyroxComponent = {
-    ...c,
-    ...(reps ? { reps: amount } : { distanceM: amount }),
-    // Rounded down, as the amount is: the set never runs above its share.
-    durationSec: Math.floor((c.durationSec ?? 0) * ratio + 1e-9),
-    mtl: c.mtl * ratio,
-    ...(c.raceFraction != null ? { raceFraction: c.raceFraction * ratio } : {}),
-  };
-  return finishHyroxSession({ ...w, hyroxComponents: comps.map((x, i) => (i === idx ? next : x)) });
+  let cut = false;
+  const comps = (w.hyroxComponents ?? []).map(c => {
+    if (c.type === 'run') return c;
+    const fraction = fractionOf(c.type as HyroxStation);
+    if (fraction == null || !(fraction > 0) || fraction >= 1) return c;
+    if (hyroxComponentSets(c, rounds) < 1) return c;
+    const reps = typeof c.reps === 'number';
+    const old = reps ? (c.reps as number) : (c.distanceM ?? 0);
+    if (!(old > 0)) return c;
+    const amount = Math.floor(old * fraction + 1e-9);
+    if (amount < 1) return c;
+    const ratio = amount / old;
+    cut = true;
+    return {
+      ...c,
+      ...(reps ? { reps: amount } : { distanceM: amount }),
+      // Rounded down, as the amount is: the set never runs above its share.
+      durationSec: Math.floor((c.durationSec ?? 0) * ratio + 1e-9),
+      mtl: c.mtl * ratio,
+      ...(c.raceFraction != null ? { raceFraction: c.raceFraction * ratio } : {}),
+    } as HyroxComponent;
+  });
+  return cut ? comps : null;
+}
+
+/** The same station session with each station's sets cut to
+ *  `fractionOf(station)` of their amount (hyroxPartialComponents), its MTL,
+ *  duration and text again; the session itself when none is cut. */
+export function withHyroxPartialSets(w: Workout, fractionOf: (st: HyroxStation) => number | null): Workout {
+  const comps = hyroxPartialComponents(w, fractionOf);
+  return comps ? finishHyroxSession({ ...w, hyroxComponents: comps }) : w;
 }
 
 /**

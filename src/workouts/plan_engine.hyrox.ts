@@ -129,7 +129,7 @@ import {
   generateHyroxRun, generateHyroxStation, generateHyroxBrick, generateHyroxAssessment, hyroxEasyRunPaceSecKm, raceWeekCircuitStations, MIN_CIRCUIT_STATIONS, MIN_CIRCUIT_ROUNDS, hyroxRunLengthKm,
   withHyroxRounds, withoutHyroxStation, generateHyroxEasyErg, hyroxEasyErgMtlPerMin, isHyroxEasyErg, HYROX_EASY_ERG_TYPE,
   hyroxStationToCut, hyroxMinRounds, withHyroxStationLoads,
-  hyroxSessionWarmup, hyroxWarmupOn, withHyroxSessionParts, withHyroxFinisher, hyroxSessionWorkMin, generateHyroxSim, isHyroxSim, withHyroxPartialSet,
+  hyroxSessionWarmup, hyroxWarmupOn, withHyroxSessionParts, withHyroxFinisher, hyroxSessionWorkMin, generateHyroxSim, isHyroxSim, hyroxPartialComponents, withHyroxPartialSets,
 } from './hyrox-generators';
 import { hyroxStrengthContent, hyroxStrengthLength } from './gym';
 import type { HyroxStrengthBlock } from '@/types/triathlon';
@@ -153,7 +153,7 @@ import {
 import { loggedRuns, longestRunMinBetween, RECENT_LONGEST_WINDOW_DAYS } from './sharpening-block';
 import { stampTriWorkoutIds } from './plan_engine.triathlon';
 import { STATION_DISPLAY, HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
-import { fmtAmount, hyroxRoundOneSec, hyroxSessionPlannedTss, hyroxSessionWalk } from './hyrox-session-shape';
+import { fmtAmount, hyroxComponentSets, hyroxRoundOneSec, hyroxSessionPlannedTss, hyroxSessionWalk } from './hyrox-session-shape';
 import { athleteRatedRpe } from '@/calculations/athlete-rating';
 import {
   hyroxRacePaceSets, hyroxTechniqueSets, hyroxBeginnerStationLoadKg, hyroxBeginnerRaceWeightWeek, HYROX_LOADED_STATIONS,
@@ -1109,6 +1109,14 @@ export function holdsStationFloor(w: Workout): boolean {
   if (!(w.t === 'hyrox_station_technique' || w.t === 'hyrox_station_density') || !w.hyroxSpec) return true;
   const work = hyroxSessionWorkMin(w) - (w.hyroxSpec.warmupRound ? hyroxRoundOneSec(w) / 60 : 0);
   return Math.round(work + HYROX_SESSION_WARMUP_MIN) >= HYROX_MIN_STATION_SESSION_MIN;
+}
+
+/** A station session's work seconds on one side (HYROX_STATION_REGION: its
+ *  upper- or lower-body stations' sets; full-body stations count on
+ *  neither), the injury gates' per-side measure. */
+function hyroxSideWorkSec(w: Workout, region: 'upper' | 'lower'): number {
+  return hyroxSessionWalk(w).reduce((a, set) =>
+    a + (set.component.type !== 'run' && HYROX_STATION_REGION[set.component.type as HyroxStation] === region ? (set.component.durationSec ?? 0) : 0), 0);
 }
 
 /** True when a circuit holds no station a cut may take: MIN_CIRCUIT_STATIONS
@@ -2707,6 +2715,10 @@ function generateWeekSessions(
   return scheduled;
 }
 
+/** applyHyroxInjuryGates' station sessions by session and gate state (the
+ *  capacities, the athlete's ergs and the strength decision). */
+const hyroxGateCache = new WeakMap<Workout, Map<string, Workout | null>>();
+
 /**
  * Apply per-discipline capacity scaling to a HYROX week. The slider model
  * (0–100 per discipline) replaces the prior 3-tier enum:
@@ -2807,8 +2819,10 @@ export function applyHyroxInjuryGates(
     .filter(region => sideCap[region] < 100)
     .sort((a, b) => sideCap[a] - sideCap[b])
     .map(region => [region, sideCap[region]] as const);
-  const sideSec = (x: Workout, region: 'upper' | 'lower'): number => hyroxSessionWalk(x).reduce((a, set) =>
-    a + (set.component.type !== 'run' && HYROX_STATION_REGION[set.component.type as HyroxStation] === region ? (set.component.durationSec ?? 0) : 0), 0);
+  // Both sides by capacity, the lower body first at a tie: the station
+  // choice's order (scaleStationSession).
+  const keyOrder: ReadonlyArray<'upper' | 'lower'> = (['lower', 'upper'] as const).slice().sort((a, b) => sideCap[a] - sideCap[b]);
+  const sideSec = hyroxSideWorkSec;
   /** A station on a restricted side (under 100). */
   const onRestrictedSide = (st: HyroxStation): boolean => {
     const region = HYROX_STATION_REGION[st];
@@ -2839,25 +2853,36 @@ export function applyHyroxInjuryGates(
   // 2026-10-20): its station work holds the capacity's share of the ungated
   // session's station work, as a run keeps the capacity's share of its
   // duration (scaleWorkout), and each restricted side's stations hold the
-  // share of their own. Candidates: every combination of its stations (cut in
-  // hyroxStationToCut order by cutRank, the restricted side first, down to
-  // MIN_CIRCUIT_STATIONS) and its rounds (down to one), and every shape the
-  // partial walk reaches (the full-body and an unrestricted side's stations
-  // cut in the same order, a restricted side's kept) with every set of a
-  // restricted side's station at its side's capacity share of its amount
-  // (withHyroxPartialSet), the rule a run follows. A candidate fits when its
-  // station work is at or under the share and each restricted side's stations
-  // at or under the share of their own. Among the fits that hold the station
-  // floor (holdsStationFloor: 15 min with the planned warm-up), the session
-  // keeps the one with the most work on the lowest-capacity side, then on the
-  // other restricted side, then the most station work (review round 5). With
-  // no such fit it leaves the week, as at station capacity 0 (review round
-  // 7), so a kept session is never above the share or a side's share. Every
-  // candidate family nests as the capacity rises (a partial set grows with
-  // it), so the most restricted side's work within the shares never falls as
-  // it heals. Its warm-up stays (as gatedWarmup leaves it), its finisher goes
-  // (none is planned under an injury) and the strength decision below takes
-  // its block.
+  // share of their own. Candidates:
+  //   - the cut walk: every combination of its stations, cut in
+  //     hyroxStationToCut order down to MIN_CIRCUIT_STATIONS, at every round
+  //     count down to one, in each of three orders (both sides' stations
+  //     first, the lower body's first, the upper body's first; the full-body
+  //     ones between), whichever sides are restricted;
+  //   - the partial walk: the full-body stations cut first, then an
+  //     unrestricted side's (a restricted side's stay), at every round
+  //     count, each shape twice: the lowest-capacity side's sets (both
+  //     sides' at a tie) at the station capacity's share, the full-body
+  //     stations' sets whole or at that share too, and the other side's sets
+  //     (a higher-capacity side, or one at 100) at the largest share that
+  //     fits, never above its own capacity's (withHyroxPartialSets: each set
+  //     rounded down to a whole metre or rep).
+  // A candidate fits when its station work is at or under the share and
+  // each restricted side's stations at or under the share of their own.
+  // Among the fits that hold the station floor (holdsStationFloor: 15 min
+  // with the planned warm-up), the session keeps the one with the most work
+  // on the lowest-capacity side, then on the other restricted side, then the
+  // most station work (review round 5). With no such fit it leaves the week,
+  // as at station capacity 0 (review round 7), so a kept session is never
+  // above the share or a side's share. Each candidate family nests as any one
+  // capacity rises while the lowest-capacity side stays the lowest: the cut
+  // walk does not change, the partial walk's shapes only grow (a side
+  // reaching 100 adds its stations to the cut), the lowest side's sets grow
+  // with its share and the other side's share that fits only grows. So no
+  // kept session leaves and the most restricted side's work never falls as a
+  // capacity rises, a side clearing to 100 included. Its warm-up stays (as
+  // gatedWarmup leaves it), its finisher goes (none is planned under an
+  // injury) and the strength decision below takes its block.
   // Before: round 4 kept the most station work first, which from about 60
   // dropped the restricted side's stations whole (singles under lower body:
   // 145 min at 50, 80 at 70, 455 at 100, summed over a grid). Rounds 5 and 6
@@ -2866,10 +2891,15 @@ export function applyHyroxInjuryGates(
   // with the injured side's whole set; burpee broad jumps whole at lower body
   // 10). Round 6 cut a restricted side's single sets only, so a 2-set station
   // went by whole rounds: singles kept a flat 50% of the restricted side from
-  // 50 to 95 and doubled it at 100 (review round 7). Earlier, the duration
-  // alone was scaled (an 11-min session kept its 10-min warm-up and full sets
-  // in its description); round 2 sized the whole session, warm-up included,
-  // to the share; round 3 cut whole rounds only.
+  // 50 to 95 and doubled it at 100. Round 7 cut a side's sets only while it
+  // was restricted and walked one cut order under a one-sided restriction,
+  // so shapes kept at upper body 30 and lower body 95 were out of reach at
+  // 30/100 (review round 8: open doubles mixed sessions kept at upper body 40
+  // fell from 174 to 86 as the lower body cleared, and the restricted side's
+  // work stepped up to 2.2x from 90 to 100). Earlier, the duration alone was
+  // scaled (an 11-min session kept its 10-min warm-up and full sets in its
+  // description); round 2 sized the whole session, warm-up included, to the
+  // share; round 3 cut whole rounds only.
   const scaleStationSession = (w: Workout, cap: number): Workout | null => {
     const target = (hyroxSessionWorkMin(w) * cap) / 100;
     const sideMax = sides.map(([region, c]) => [region, (sideSec(w, region) * c) / 100] as const);
@@ -2880,9 +2910,14 @@ export function applyHyroxInjuryGates(
       const { finisher: _f, ...spec } = s0.hyroxSpec;
       s0 = withHyroxSessionParts({ ...s0, hyroxSpec: spec }, {});
     }
-    // The choice's order: each restricted side's work (lowest capacity
-    // first), then the station work.
-    const keyOf = (c: Workout, work: number): number[] => [...sides.map(([region]) => sideSec(c, region) / 60), work];
+    // The choice's order: each side's work, the lowest capacity first (the
+    // lower body first at a tie), a side at 100 too, then the station work
+    // (review round 8: with a side at 100 left out, a one-sided choice took
+    // the most station work among near ties, full-body sets cut to a few
+    // metres, and the other side's work fell as it cleared: open doubles
+    // mixed at upper body 30, sandbag lunges 19 m at lower body 95 and 7 m at
+    // 100).
+    const keyOf = (c: Workout, work: number): number[] => [...keyOrder.map(region => sideSec(c, region) / 60), work];
     const above = (a: number[], b: number[]): boolean => {
       for (let i = 0; i < a.length; i++) {
         if (a[i] > b[i] + 1e-9) return true;
@@ -2890,9 +2925,6 @@ export function applyHyroxInjuryGates(
       }
       return false;
     };
-    /** Every candidate of a cut order: its station sets (cut by `rank`,
-     *  down to MIN_CIRCUIT_STATIONS; `stop`: a station the walk keeps), each
-     *  at every round count down to one. */
     // The walks reach the same station sets by several orders: each shape is
     // built once (its stations and rounds decide it).
     const shapes = new Map<string, Workout>();
@@ -2902,6 +2934,9 @@ export function applyHyroxInjuryGates(
       return x;
     };
     const sigOf = (x: Workout): string => `${(x.hyroxComponents ?? []).map(c => c.type).join(',')}#${x.hyroxRounds ?? 1}`;
+    /** Every shape of a cut order: its station sets (cut by `rank`, down to
+     *  MIN_CIRCUIT_STATIONS; `stop`: a station the walk keeps), each at every
+     *  round count down to one. */
     const walk = (rank: (st: HyroxStation) => number, visit: (c: Workout) => void, stop?: (st: HyroxStation) => boolean): void => {
       for (let st = s0; ;) {
         const sig = sigOf(st);
@@ -2914,53 +2949,74 @@ export function applyHyroxInjuryGates(
         st = next;
       }
     };
+    // A candidate is evaluated on its components (work and each side's) and
+    // finished (text, MTL, duration) only when kept (`make`).
     let best: Workout | null = null;
     let bestKey: number[] = [];
-    const consider = (c: Workout): void => {
+    let bestMake: (() => Workout) | null = null;
+    const consider = (c: Workout, make?: () => Workout): void => {
       const work = hyroxSessionWorkMin(c);
       if (!fits(c, work) || !holdsStationFloor(c)) return;
       const key = keyOf(c, work);
-      if (!best || above(key, bestKey)) { best = c; bestKey = key; }
+      if (!best || above(key, bestKey)) { best = c; bestKey = key; bestMake = make ?? null; }
     };
-    // Under two restricted sides the cut walk takes each order the sides
-    // allow (the lower capacity's side first, the other side's first, both
-    // first), so the whole shapes do not change as one capacity rises past
-    // the other: one order alone (cutRank) changes at a tie, and the shape
-    // kept at equal capacities was out of reach just past them (open singles
-    // men at upper and lower body 30: 26 sessions kept at 30/30 left at
-    // 30/35, review round 7).
+    // The cut walk: each order (review rounds 7 and 8), so the whole shapes
+    // do not change as one capacity rises past the other or a side clears.
     const orderOf = (first: 'upper' | 'lower' | null) => (st: HyroxStation): number => {
       const region = HYROX_STATION_REGION[st];
       if (region === 'full') return 1;
       return first == null || region === first ? 0 : 2;
     };
-    const orders = sides.length === 2 ? [null, 'lower', 'upper'] as const : [restricted] as const;
-    for (const first of orders) walk(orderOf(first), consider);
+    for (const first of [null, 'lower', 'upper'] as const) walk(orderOf(first), c => consider(c));
     // The partial walk: the full-body stations go first, then an
     // unrestricted side's (cutRank's order); a restricted side's stay.
     const partialRank = (st: HyroxStation): number => (onRestrictedSide(st) ? 3 : cutRank(st));
-    // Every set of a restricted side's station at its own side's capacity
-    // share and, under two unequal restrictions, at the station capacity's
-    // too: the session's share follows the lower capacity, so a
-    // higher-capacity side's sets at its own share can leave a shape that
-    // fits at the lower one.
-    const partialAt = (c: Workout, own: boolean): Workout | null => {
-      let p: Workout | null = null;
-      for (const comp of c.hyroxComponents ?? []) {
-        const st = comp.type as HyroxStation;
-        if (comp.type === 'run' || !onRestrictedSide(st)) continue;
-        const region = HYROX_STATION_REGION[st] as 'upper' | 'lower';
-        p = withHyroxPartialSet(p ?? c, st, (own ? sideCap[region] : stationCap) / 100) ?? p;
-      }
-      return p;
-    };
+    const share = stationCap / 100;
+    const regionOf = (st: HyroxStation) => HYROX_STATION_REGION[st];
     walk(partialRank, c => {
-      for (const own of sides.length === 2 && restricted != null ? [true, false] : [true]) {
-        const p = partialAt(c, own);
-        if (p) consider(p);
+      const rounds = c.hyroxRounds ?? 1;
+      /** One region's set seconds in the shape (`full`: the full-body stations). */
+      const regionSec = (region: 'upper' | 'lower' | 'full'): number => (c.hyroxComponents ?? []).reduce((a, x) => a
+        + (x.type !== 'run' && regionOf(x.type as HyroxStation) === region ? (x.durationSec ?? 0) * hyroxComponentSets(x, rounds) : 0), 0);
+      /** The shape with `fixedOf`'s shares and `fill`'s sets at the largest
+       *  share that fits the session's share, at most `fillCap` (sets round
+       *  down, so the work stays at or under it): a candidate. */
+      const variant = (fixedOf: (st: HyroxStation) => number | null, fill: 'upper' | 'lower' | 'full' | undefined, fillCap: number): void => {
+        let s: number | null = null;
+        const fillSec = fill ? regionSec(fill) : 0;
+        if (fill && fillSec > 0) {
+          const fixed = hyroxPartialComponents(c, fixedOf) ?? c.hyroxComponents ?? [];
+          const rest = hyroxSessionWorkMin({ ...c, hyroxComponents: fixed.map(x => (x.type !== 'run' && regionOf(x.type as HyroxStation) === fill ? { ...x, durationSec: 0 } : x)) });
+          const room = (target - rest) * 60;
+          if (room <= 0) return;
+          s = Math.min(fillCap, room / fillSec);
+        }
+        const fractionOf = (st: HyroxStation): number | null => (fill && regionOf(st) === fill ? s : fixedOf(st));
+        const comps = hyroxPartialComponents(c, fractionOf);
+        // Nothing cut: a shape of the cut walk, already a candidate.
+        if (!comps) return;
+        consider({ ...c, hyroxComponents: comps }, () => withHyroxPartialSets(c, fractionOf));
+      };
+      // Each side pinned at the station share with the other side's sets at
+      // the largest share that fits, at most its own capacity's (the
+      // full-body sets whole, then at the station share). Pinning either
+      // side, whichever is lower, keeps the families the same through a tie.
+      for (const pinned of ['upper', 'lower'] as const) {
+        const free = pinned === 'upper' ? 'lower' : 'upper';
+        const freeCap = sideCap[free] / 100;
+        variant(st => (regionOf(st) === pinned ? share : null), free, freeCap);
+        variant(st => (regionOf(st) === pinned || regionOf(st) === 'full' ? share : null), free, freeCap);
       }
+      // Then both sides pinned with the full-body sets at the largest share
+      // that fits, at most the station share ([SkiErg, Row Erg] x2 at upper
+      // body 90 keeps both rounds, its SkiErg sets at 90%; round 7 kept one
+      // round, half of them). A fill can leave a set of a few metres (no
+      // minimum set size, decision D5).
+      variant(st => (regionOf(st) === 'full' ? null : share), 'full', share);
     }, onRestrictedSide);
-    const kept = best as Workout | null;
+    const found = best as Workout | null;
+    const make = bestMake as (() => Workout) | null;
+    const kept = found && make ? make() : found;
     if (!kept?.hyroxSpec) return null;
     return { ...kept, hyroxSpec: { ...kept.hyroxSpec, gatedAt: { upper: upperCap, lower: lowerCap } }, modReason: `Capacity ${cap}%: less station work to match your reported ability` };
   };
@@ -3043,8 +3099,58 @@ export function applyHyroxInjuryGates(
   // swaps a standalone session for the region-safe one; a station session's
   // block leaves under either (the adapted session is the strength work).
   const strengthKind = injuryStrengthDecision(injuryState);
+  // A station session as these gates leave it (null: left out), kept per
+  // session and gate state: a week's size search gates the same sessions
+  // many times (hyroxGateCache).
+  const gateKey = `${runCap}|${upperCap}|${lowerCap}|${stationAccess?.skiErg ? 1 : 0}${stationAccess?.rowErg ? 1 : 0}|${strengthKind.kind}`;
+  const gateStationSession = (w0: Workout): Workout | null => {
+    let w = strengthKind.kind !== 'normal' && w0.hyroxSpec?.strength ? withHyroxSessionParts(w0, { strength: null }) : w0;
+    const planned = w;
+    // A station session's warm-up follows the capacity of what it loads, as
+    // its station work does (gatedWarmup); the 15-min rule follows.
+    const warm = w.hyroxSpec?.warmup && stationCap > 0 ? gatedWarmup(w.hyroxSpec.warmup) : null;
+    let warmNote: string | undefined;
+    if (warm) {
+      // No warm-up left: round 1 at easy effort is it (hyroxSpec.warmupRound).
+      w = withHyroxSessionParts(w, warm.warmup ? { warmup: warm.warmup } : { warmup: null, warmupRound: true });
+      warmNote = warm.note;
+    }
+    if (stationCap <= 0) return null;
+    if (stationCap >= 100) {
+      if (!warmNote) return w;
+      // The station floor (the planned warm-up; with round 1 as the
+      // warm-up, the station work after it): the gates never take a session
+      // under it. A session planned under it (race week's circuit, a short
+      // primer the floor exempts) stays as planned, unless round 1 as its
+      // warm-up leaves nothing at the session's effort (one round). Before
+      // (review round 8), such a circuit left whenever its warm-up changed
+      // way and stayed when it did not, so the warm-up decided whether it
+      // stayed.
+      const oneRoundAsWarmup = !!w.hyroxSpec?.warmupRound && (w.hyroxRounds ?? 1) <= 1;
+      if (!holdsStationFloor(w) && (holdsStationFloor(planned) || oneRoundAsWarmup)) return null;
+      return { ...w, modReason: warmNote };
+    }
+    // A deload or taper week's copy of the reference week's session as
+    // these gates cut it (capToRef) passes uncut: the gates cut its
+    // reference once (review round 7: the copy was cut again, a share of a
+    // share).
+    const at = w.hyroxSpec?.gatedAt;
+    if (at && at.upper === upperCap && at.lower === lowerCap) {
+      return holdsStationFloor(w) ? { ...w, modReason: `Capacity ${stationCap}%: less station work to match your reported ability${warmNote ? `. ${warmNote}` : ''}` } : null;
+    }
+    const scaled = scaleStationSession(w, stationCap);
+    return scaled && warmNote ? { ...scaled, modReason: `${scaled.modReason}. ${warmNote}` } : scaled;
+  };
   const out: Workout[] = [];
   for (const w0 of workouts) {
+    if ((w0.t === 'hyrox_station_technique' || w0.t === 'hyrox_station_density') && w0.hyroxSpec) {
+      let byKey = hyroxGateCache.get(w0);
+      if (!byKey) { byKey = new Map(); hyroxGateCache.set(w0, byKey); }
+      let g = byKey.get(gateKey);
+      if (g === undefined) { g = gateStationSession(w0); byKey.set(gateKey, g); }
+      if (g) out.push({ ...g });
+      continue;
+    }
     if (isHyroxStrengthSession(w0)) {
       if (strengthKind.kind === 'none') continue;
       if (strengthKind.kind === 'adapted') {
@@ -3054,17 +3160,7 @@ export function applyHyroxInjuryGates(
       out.push(w0);
       continue;
     }
-    let w = strengthKind.kind !== 'normal' && w0.hyroxSpec?.strength ? withHyroxSessionParts(w0, { strength: null }) : w0;
-    // A station session's warm-up follows the capacity of what it loads, as
-    // its station work does (gatedWarmup); the 15-min rule follows.
-    const isStationSession = (w.t === 'hyrox_station_technique' || w.t === 'hyrox_station_density') && !!w.hyroxSpec;
-    const warm = isStationSession && w.hyroxSpec?.warmup && stationCap > 0 ? gatedWarmup(w.hyroxSpec.warmup) : null;
-    let warmNote: string | undefined;
-    if (warm) {
-      // No warm-up left: round 1 at easy effort is it (hyroxSpec.warmupRound).
-      w = withHyroxSessionParts(w, warm.warmup ? { warmup: warm.warmup } : { warmup: null, warmupRound: true });
-      warmNote = warm.note;
-    }
+    const w = strengthKind.kind !== 'normal' && w0.hyroxSpec?.strength ? withHyroxSessionParts(w0, { strength: null }) : w0;
     if (isRun(w)) {
       if (runCap <= 0) continue;
       if (runCap >= 100) { out.push(w); continue; }
@@ -3073,28 +3169,7 @@ export function applyHyroxInjuryGates(
     }
     if (isStation(w)) {
       if (stationCap <= 0) continue;
-      if (stationCap >= 100) {
-        if (!warmNote) { out.push(w); continue; }
-        // The station floor (the planned warm-up; with round 1 as the
-        // warm-up, the station work after it).
-        if (!holdsStationFloor(w)) continue;
-        out.push({ ...w, modReason: warmNote });
-        continue;
-      }
-      if (isStationSession) {
-        // A deload or taper week's copy of the reference week's session as
-        // these gates cut it (capToRef) passes uncut: the gates cut its
-        // reference once (review round 7: the copy was cut again, a share
-        // of a share).
-        const at = w.hyroxSpec?.gatedAt;
-        if (at && at.upper === upperCap && at.lower === lowerCap) {
-          if (holdsStationFloor(w)) out.push({ ...w, modReason: `Capacity ${stationCap}%: less station work to match your reported ability${warmNote ? `. ${warmNote}` : ''}` });
-          continue;
-        }
-        const scaled = scaleStationSession(w, stationCap);
-        if (scaled) out.push(warmNote ? { ...scaled, modReason: `${scaled.modReason}. ${warmNote}` } : scaled);
-        continue;
-      }
+      if (stationCap >= 100) { out.push(w); continue; }
       out.push(scaleWorkout(w, stationCap, 'stations'));
       continue;
     }
