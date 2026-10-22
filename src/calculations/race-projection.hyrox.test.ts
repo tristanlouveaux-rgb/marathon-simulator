@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { hyroxRunBaseVdot } from './hyrox-run-pace';
 import { buildHyroxProjection } from './race-projection.hyrox';
 import { predictHyroxRace } from './race-prediction.hyrox';
 import { getDefaultState } from '@/state/store';
@@ -151,6 +152,26 @@ describe('buildHyroxProjection', () => {
     const runTraj = proj.factors.find(f => f.name === 'Running fitness trajectory');
     expect(runTraj).toBeDefined();
     expect(runTraj!.deltaSec).toBeLessThan(0);
+  });
+
+  it('an unmeasured runner: the run horizon projects from the band seed, not the bare VDOT 50 (E5)', () => {
+    // The run leg is the band seed for a runner with no real running-fitness
+    // signal (D5); the horizon now projects its gain from the same base
+    // (hyroxRunBaseVdot: the CP-model VDOT of the seed), not state.v.
+    const sixteenWeeks = new Date();
+    sixteenWeeks.setDate(sixteenWeeks.getDate() + 16 * 7);
+    const raceDate = sixteenWeeks.toISOString().slice(0, 10);
+    const gainPct = (st: SimulatorState) => {
+      const p = predictHyroxRace(st)!;
+      return buildHyroxProjection(st, p).byDiscipline.run.deltaSec / p.runSec;
+    };
+    const bare = buildState({ raceDate, athleteBand: 'beginner' }, { v: 50, vo2: null, wkm: 30, typ: 'Balanced' } as Partial<SimulatorState>);
+    const base = hyroxRunBaseVdot(bare)!;
+    expect(base).toBeLessThan(40);
+    const atBase = buildState({ raceDate, athleteBand: 'beginner' }, { v: base, vo2: base, wkm: 30, typ: 'Balanced' } as Partial<SimulatorState>);
+    const at50 = buildState({ raceDate, athleteBand: 'beginner' }, { v: 50, vo2: 50, wkm: 30, typ: 'Balanced' } as Partial<SimulatorState>);
+    expect(gainPct(bare)).toBeCloseTo(gainPct(atBase), 3); // the run legs round to whole seconds
+    expect(gainPct(bare)).toBeLessThan(gainPct(at50)); // a larger gain (more negative) than at VDOT 50
   });
 
   it('does not project a run-fitness gain when the race has already passed', () => {

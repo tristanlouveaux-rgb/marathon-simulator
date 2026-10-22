@@ -11,6 +11,7 @@ import {
   deriveHyroxRunPace,
   derivePopulationRunPace,
   refreshHyroxPersonalRunPaceOffset,
+  hyroxRunBaseVdot,
   hyroxRunPaceOffsetBase,
   hyroxSeedRunPaceForFormat,
   cpRatioForVdot,
@@ -22,6 +23,7 @@ import { SEED_RUN_PACE_SEC_KM } from '@/constants/hyrox-benchmarks';
 import { HYROX_S89_POOLED_PERCENTILES, type HyroxPercentileTable } from '@/data/hyrox-results-s79';
 import type { SimulatorState } from '@/types/state';
 import type { AbilityBand, HyroxConfig } from '@/types/triathlon';
+import { gp } from './paces';
 import { computePersonalRunPaceOffset } from './hyrox-personal-pace';
 
 function buildState(opts: {
@@ -398,5 +400,23 @@ describe('personal race offset: fitted against the base in use', () => {
     const r = deriveHyroxRunPace(st);
     expect(r.source).toBe('user');
     expect(r.paceSecKm).toBe(400);
+  });
+});
+
+describe('hyroxRunBaseVdot: the VDOT the run horizon projects from', () => {
+  it('a measured runner: state.v', () => {
+    expect(hyroxRunBaseVdot(buildState({ band: 'beginner', vdot: 47 }))).toBe(47);
+  });
+
+  it('an unmeasured runner: the CP model VDOT whose singles pace is the band seed', () => {
+    for (const band of ['total_beginner', 'beginner', 'novice', 'intermediate', 'advanced', 'competitive'] as AbilityBand[]) {
+      const st = { ...buildState({ band, vdot: 50 }), vo2: null } as SimulatorState;
+      const v = hyroxRunBaseVdot(st)!;
+      expect(v).toBeGreaterThanOrEqual(25);
+      expect(v).toBeLessThanOrEqual(85);
+      const seed = hyroxSeedRunPaceForFormat(st, band, 'singles');
+      if (v > 25 && v < 85) expect(Math.abs(gp(v, null).t * cpRatioForVdot(v) - seed)).toBeLessThan(2); // VDOT rounded to 0.1
+      expect(v, `${band}: not the bare baseline`).not.toBe(50);
+    }
   });
 });

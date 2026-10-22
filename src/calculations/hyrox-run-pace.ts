@@ -319,6 +319,34 @@ export function deriveHyroxRunPace(state: SimulatorState): HyroxRunPaceResult {
 }
 
 /**
+ * The VDOT the run horizon projects from: the base the forecast's run pace
+ * uses. A measured runner (hasRealRunningFitnessSignal): state.v. Otherwise
+ * the band seed (D5), expressed as the VDOT at which the forecast's own CP
+ * model (gp(v).t x cpRatioForVdot(v), the singles pace derivePopulationRunPace
+ * gives without LT) equals the band's singles seed pace, found by bisection
+ * over the model's VDOT range [25, 85]. No new constant: the model and the
+ * seed are the forecast's own. Null without a HYROX config. Tracking side.
+ */
+export function hyroxRunBaseVdot(state: SimulatorState): number | null {
+  const hx = state.hyroxConfig;
+  if (!hx) return null;
+  if (hyroxRunVdotIsMeasured(state)) {
+    return typeof state.v === 'number' && state.v > 0 ? state.v : null;
+  }
+  const seed = hyroxSeedRunPaceSecKm(state, hx.athleteBand);
+  if (!Number.isFinite(seed) || seed <= 0) return null;
+  const modelPace = (v: number) => gp(v, null).t * cpRatioForVdot(v);
+  let lo = 25, hi = 85; // modelPace falls as VDOT rises
+  if (seed >= modelPace(lo)) return lo;
+  if (seed <= modelPace(hi)) return hi;
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    if (modelPace(mid) > seed) lo = mid; else hi = mid;
+  }
+  return Math.round(((lo + hi) / 2) * 10) / 10;
+}
+
+/**
  * Legacy export. Kept for tests and callers that read the discrete ratio
  * directly. The continuous interpolation via `cpRatioForVdot()` is the
  * canonical lookup; this table just exposes the anchor values for

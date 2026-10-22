@@ -35,6 +35,7 @@ import { HYROX_TAPER_DAYS } from '@/constants/hyrox-constants';
 import { applyTrainingHorizonAdjustment } from './training-horizon';
 import { hyroxMtlChronicVsPlan, isMtlSessionCompleted } from './mtl';
 import { bandFromVdot } from './hyrox-staleness';
+import { hyroxRunBaseVdot } from './hyrox-run-pace';
 import { runInjuryBuildWeeks } from './hyrox-injury';
 import { raceForecastHorizonISO } from '@/workouts/race-week-layout';
 import { hyroxImprovementCeiling } from './hyrox-results';
@@ -258,18 +259,26 @@ export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPre
   // inside `predictHyroxRace` via `buildStationProjection`). Run uses the
   // VDOT horizon: there's no station-class curve for "running an 8 km race
   // portion", so we map to a 10k VDOT projection.
+  //
+  // The horizon projects from the run base the forecast's run pace uses
+  // (hyroxRunBaseVdot): state.v for a measured runner, else the band seed
+  // expressed as the CP model's VDOT. It read state.v ungated, so an
+  // unmeasured athlete's run leg came from the band seed (D5) while its gain
+  // came from the default VDOT 50 (beginners -71 s over 16 weeks against
+  // -207 s at the band's VDOT; E5, 2026-10-22).
   let runHorizonProjectedSec = prediction.runSec;
   let runHorizonImprovementPct = 0;
   let runSessions = 0;
-  if (weeksRemaining > 0 && state.v > 0) {
-    const runVdotBand = toRunAbilityBand(bandFromVdot(state.v) ?? band);
+  const runBaseVdot = hyroxRunBaseVdot(state) ?? 0;
+  if (weeksRemaining > 0 && runBaseVdot > 0) {
+    const runVdotBand = toRunAbilityBand(bandFromVdot(runBaseVdot) ?? band);
     runSessions = (hx.runsPerWeek ?? 0) + 0.5 * (hx.bricksPerWeek ?? 0);
     // Injury debit: the run portion only banks build time for the weeks the
     // athlete can run. A blocked run → 0 build weeks → no projected run gain.
     // Unchanged when there is no active injury (returns full weeksRemaining).
     const runBuildWeeks = runInjuryBuildWeeks(state.injuryState, weeksRemaining);
     const runHorizon = applyTrainingHorizonAdjustment({
-      baseline_vdot: state.v,
+      baseline_vdot: runBaseVdot,
       target_distance: '10k',
       weeks_remaining: runBuildWeeks,
       sessions_per_week: runSessions,
