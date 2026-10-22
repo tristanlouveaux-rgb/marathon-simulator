@@ -456,10 +456,11 @@ import {
 //   the station share with the other side's sets (a side at 100 included)
 //   at the largest share that fits, and both pinned with the full-body sets
 //   at the largest share that fits; the choice ranks both sides, a side at
-//   100 too. So no kept session leaves, and the lower-capacity side's work
-//   never falls while it stays the lower, as any capacity rises, a side
-//   clearing to 100 included (round 7: open doubles sessions kept at upper
-//   body 40 fell from 174 to 86 as the lower body cleared);
+//   100 too, then the station work. So no kept session leaves, and the
+//   lower-capacity side's work never falls while it stays the lower, as any
+//   capacity rises, a side clearing to 100 included (round 7: open doubles
+//   sessions kept at upper body 40 fell from 174 to 86 as the lower body
+//   cleared);
 // - under a partial station capacity each current and future week's station
 //   sessions start from the sessions the same slots hold in the plan built
 //   without the injury, so no injured week holds more station work, or more
@@ -1816,13 +1817,18 @@ function generateWeekSessions(
     }
     out = capToRef(out, uninjured ? start : undefined);
     if (omit.has('stations')) {
-      // The ceiling's station cut: the heaviest stations leave first.
+      // The ceiling's station cut: the heaviest stations leave first. Under
+      // an injury, no cut the gates would then leave out, as for the
+      // reference week's caps (capToRef; review round 8: open doubles mixed
+      // novice 6 h 12 weeks at upper and lower body 50, taper week 1 kept its
+      // circuit at run capacity 70 and lost it at 100 to this cut).
       let cut = 0;
       for (;;) {
         const st = (out.hyroxComponents ?? []).filter(c => c.type !== 'run');
         if (st.length <= MIN_CIRCUIT_STATIONS) break;
         const next = withoutHyroxStation(out, hyroxStationToCut(out) as HyroxStation);
         if (next === out || !holdsStationFloor(next)) break;
+        if (gates?.active && asGated(out) && !asGated(next)) break;
         out = next;
         cut++;
       }
@@ -3021,15 +3027,17 @@ export function applyHyroxInjuryGates(
   // on the lowest-capacity side, then on the other restricted side, then the
   // most station work (review round 5). With no such fit it leaves the week,
   // as at station capacity 0 (review round 7), so a kept session is never
-  // above the share or a side's share. Each candidate family nests as any one
-  // capacity rises while the lowest-capacity side stays the lowest: the cut
-  // walk does not change, the partial walk's shapes only grow (a side
-  // reaching 100 adds its stations to the cut), the lowest side's sets grow
-  // with its share and the other side's share that fits only grows. So no
-  // kept session leaves and the most restricted side's work never falls as a
-  // capacity rises, a side clearing to 100 included. Its warm-up stays (as
-  // gatedWarmup leaves it), its finisher goes (none is planned under an
-  // injury) and the strength decision below takes its block.
+  // above the share or a side's share. As any one capacity rises, the cut
+  // walk does not change and the partial walk's shapes only grow (a side
+  // reaching 100 adds its stations to the cut), so every candidate that fits
+  // has a counterpart that fits at the higher capacity with as much work on
+  // the lowest-capacity side and as much station work (its pinned sets grow
+  // with their share, its filled sets take what the share leaves). So no
+  // kept session leaves, and the lowest-capacity side's work never falls
+  // while it stays the lowest, as a capacity rises, a side clearing to 100
+  // included. Its warm-up stays (as gatedWarmup leaves it), its finisher goes
+  // (none is planned under an injury) and the strength decision below takes
+  // its block.
   // Before: round 4 kept the most station work first, which from about 60
   // dropped the restricted side's stations whole (singles under lower body:
   // 145 min at 50, 80 at 70, 455 at 100, summed over a grid). Rounds 5 and 6
@@ -3058,12 +3066,17 @@ export function applyHyroxInjuryGates(
       s0 = withHyroxSessionParts({ ...s0, hyroxSpec: spec }, {});
     }
     // The choice's order: each side's work, the lowest capacity first (the
-    // lower body first at a tie), a side at 100 too, then the station work
-    // (review round 8: with a side at 100 left out, a one-sided choice took
-    // the most station work among near ties, full-body sets cut to a few
-    // metres, and the other side's work fell as it cleared: open doubles
-    // mixed at upper body 30, sandbag lunges 19 m at lower body 95 and 7 m at
-    // 100).
+    // lower body first at a tie), a side at 100 too, then the station work.
+    // A side at 100 ranks before the station work: its stations load none of
+    // the restricted side, while the full-body stations load it too and count
+    // in the session's share only, so the session keeps the healthy side's
+    // stations before the full-body ones; and the order does not change as a
+    // side clears to 100. Review round 8: ranked after the station work (the
+    // round 5 order for two restricted sides, applied to one), the choice
+    // changed at clearance and the taper's station-work cap then left 2 taper
+    // weeks without a circuit at upper body 40 as the lower body went 95 to
+    // 100; the cost of this order: open singles men at upper body 90 keep a
+    // median 0.63 of their station work (0.90 the other way).
     const keyOf = (c: Workout, work: number): number[] => [...keyOrder.map(region => sideSec(c, region) / 60), work];
     const above = (a: number[], b: number[]): boolean => {
       for (let i = 0; i < a.length; i++) {
