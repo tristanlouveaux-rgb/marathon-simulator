@@ -38,6 +38,7 @@ import { bandFromVdot } from './hyrox-staleness';
 import { hyroxRunBaseVdot } from './hyrox-run-pace';
 import { runInjuryBuildWeeks } from './hyrox-injury';
 import { raceForecastHorizonISO } from '@/workouts/race-week-layout';
+import { localDateKey } from '@/utils/local-date';
 import { hyroxImprovementCeiling } from './hyrox-results';
 import { doublesTotalInSinglesTermsSec, hyroxDoublesTablesForState } from './hyrox-doubles';
 import { isHyroxDoublesFormat, resolveHyroxAthleteSex } from './hyrox-division';
@@ -127,7 +128,10 @@ function daysBetween(fromISO: string, toISO: string): number {
 function computeWeeksRemaining(state: SimulatorState): number {
   const raceDate = state.hyroxConfig?.raceDate ?? state.onboarding?.customRaceDate;
   if (!raceDate) return 0;
-  const today = new Date().toISOString().slice(0, 10);
+  // The athlete's local calendar day, the day plan weeks and race dates are
+  // kept in. The UTC day read one day early between 00:00 and 01:00 BST, so
+  // weeks remaining ran a day long for that hour (E9, 2026-10-22).
+  const today = localDateKey(new Date());
   const days = daysBetween(today, raceForecastHorizonISO(state, raceDate));
   if (days <= 0) return 0;
   return days / 7;
@@ -137,7 +141,7 @@ function computeWeeksRemaining(state: SimulatorState): number {
 function raceStillAhead(state: SimulatorState): boolean {
   const raceDate = state.hyroxConfig?.raceDate ?? state.onboarding?.customRaceDate;
   if (!raceDate) return false;
-  return daysBetween(new Date().toISOString().slice(0, 10), raceDate) > 0;
+  return daysBetween(localDateKey(new Date()), raceDate) > 0;
 }
 
 /**
