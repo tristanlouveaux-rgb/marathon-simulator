@@ -563,7 +563,7 @@ describe('injury gate v2: a station session at its capacities\' shares of the un
     expect(off.slice(0, 10)).toEqual([]);
   }, 600000);
 
-  it('the other sessions: runs at the run capacity\'s share, none at 0, quality runs too, their text, run component and MTL agreeing with the badge; easy erg work at its erg\'s side\'s share with its text; bricks and race simulations only with every capacity at 100; the assessment keeping each station whole at 100% and leaving out the rest; a standalone strength session paused or adapted at its length', () => {
+  it('the other sessions: runs at the run capacity\'s share, none at 0, quality runs too, their text, run component and MTL agreeing with the badge; easy erg work at its erg\'s side\'s share with its text; bricks and race simulations only with every capacity at 100; the assessment keeping each station whole at 100% and leaving out the rest, none with a side at 0; a standalone strength session paused or adapted at its length', () => {
     const s = build('intermediate', 8, 18, V_SINGLES[1]);
     const ws = s.wks.flatMap(wk => prescribed(wk));
     const access = s.hyroxConfig!.stationAccess;
@@ -613,12 +613,13 @@ describe('injury gate v2: a station session at its capacities\' shares of the un
     const assess = prescribed(s.wks[0]).find(w => w.t === 'hyrox_assessment')!;
     const all = assess.hyroxComponents ?? [];
     let partialPass = 0;
-    for (const caps of [[100, 100, 0], [100, 0, 100], [100, 100, 50], [100, 80, 40], [100, 95, 100], [0, 100, 100], [100, 100, 100]] as Caps[]) {
+    for (const caps of [[100, 100, 0], [100, 0, 100], [100, 100, 50], [100, 50, 100], [100, 80, 40], [100, 95, 100], [0, 100, 100], [100, 100, 100]] as Caps[]) {
       const [, up, lo] = caps;
       const [g] = applyHyroxInjuryGates([assess], injOf(caps), 0, access);
       const keep = all.filter(c => capOfStation(c.type as HyroxStation, up, lo) >= 100);
       const label = `assessment at ${caps.join('/')}`;
-      if (keep.length === 0) { expect(g, label).toBeUndefined(); continue; }
+      // None with a side at 0 (its full-body stations load both sides).
+      if (keep.length === 0 || Math.min(up, lo) <= 0) { expect(g, label).toBeUndefined(); continue; }
       expect(g, label).toBeDefined();
       if (keep.length === all.length) { expect(g, label).toBe(assess); continue; }
       partialPass++;

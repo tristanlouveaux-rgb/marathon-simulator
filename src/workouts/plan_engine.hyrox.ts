@@ -500,8 +500,8 @@ import {
 //   distance and MTL at the exact share), so the card prescribes what the
 //   badge shows and the km-based single-run rule keeps the uninjured ratios;
 // - the week 1 assessment keeps each station whole at 100% capacity and
-//   leaves out and names the others (it was scaled by length alone, every
-//   station at full volume).
+//   leaves out and names the others, none with a side at 0 (it was scaled by
+//   length alone, every station at full volume).
 export const HYROX_GENERATOR_VERSION = 19;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
@@ -2710,7 +2710,8 @@ type HyroxGateResult = { w: Workout | null; why?: string };
  * - easy erg work at its erg's share (scaleWorkout); a station session
  *   without a lane H2b spec at the station capacity's share; none at a
  *   capacity of 0;
- * - the assessment: each station whole at 100%, left out under it
+ * - the assessment: none with a side at 0 (its full-body stations load both
+ *   sides); otherwise each station whole at 100%, left out under it
  *   (hyroxAssessmentAtCapacities: a time at reduced volume is no
  *   calibration);
  * - bricks and race simulations stack runs and stations: any restriction
@@ -2929,10 +2930,12 @@ function hyroxInjuryGate(injuryState: InjuryState, stationAccess?: HyroxConfig['
       const s = scaleWorkout(w, cap, 'easy erg');
       return { w: { ...s, d: (w.d ?? '').replace(/^\d+ min/, `${s.estimatedDurationMin} min`) } };
     }
-    // The assessment: each station whole at 100%, left out under it
-    // (hyroxAssessmentAtCapacities: a time at reduced volume is no
-    // calibration).
+    // The assessment: none with a side at 0 (its full-body stations load
+    // both sides, as a station session's do); otherwise each station whole
+    // at 100%, left out under it (hyroxAssessmentAtCapacities: a time at
+    // reduced volume is no calibration).
     if (t === 'hyrox_assessment') {
+      if (stationCap <= 0) return { w: null, why: `${capLabel('row_erg')} capacity 0%` };
       const a = hyroxAssessmentAtCapacities(w, st => ownCap(st));
       if (!a) return { w: null, why: 'every station under 100% capacity' };
       return { w: a === w ? w : { ...a, modReason: `Capacity under 100% (upper body ${upperCap}%, lower body ${lowerCap}%): those stations left out of the calibration pass` } };
