@@ -130,6 +130,7 @@ import {
   withHyroxRounds, withoutHyroxStation, generateHyroxEasyErg, hyroxEasyErgMtlPerMin, isHyroxEasyErg, HYROX_EASY_ERG_TYPE,
   hyroxStationToCut, hyroxMinRounds, withHyroxStationLoads,
   hyroxSessionWarmup, hyroxWarmupOn, withHyroxSessionParts, withHyroxFinisher, hyroxSessionWorkMin, generateHyroxSim, isHyroxSim, withHyroxPartialSets, hyroxEasyErgStation,
+  withHyroxRunShare, hyroxAssessmentAtCapacities,
 } from './hyrox-generators';
 import { hyroxStrengthContent, hyroxStrengthLength } from './gym';
 import type { HyroxStrengthBlock } from '@/types/triathlon';
@@ -1114,7 +1115,7 @@ const BRICK_SESSION_FLOOR_MIN = 20;
 /** No station session under 15 min (lane H2b part 2 brief, decision 8: part
  *  1 held 582 sessions of 15 min or less, Q11). The injury gates leave out a
  *  station session their capacity cuts under it. */
-const HYROX_MIN_STATION_SESSION_MIN = 15;
+export const HYROX_MIN_STATION_SESSION_MIN = 15;
 
 /**
  * A station session's floor (lane H2b part 2 review, 2026-10-20): its
@@ -2659,35 +2660,46 @@ type HyroxGateResult = { w: Workout | null; why?: string };
  * changes:
  * - runs (standalone and commute runs, the quality runs too: the slider is
  *   volume-only, intensity is not capped and the athlete self-regulates RPE):
- *   duration, load and MTL at the run capacity's share (scaleWorkout), none at
- *   run capacity 0;
+ *   at the run capacity's share (withHyroxRunShare: the minutes rounded, the
+ *   run component's distance, time and MTL at the exact share, the text
+ *   rewritten to match), none at run capacity 0;
  * - a lane H2b station session: every set at its station's side's share
  *   (HYROX_STATION_REGION: upper, lower, or full-body at the lower of the two
  *   capacities; withHyroxPartialSets rounds each set down), its easy erg
  *   finisher at its erg's share (rounded down to the minute), its strength
- *   block as the injury's strength decision takes it (injury-strength.ts; a
- *   block it keeps takes the lower capacity's share of its minutes and reps,
- *   as no map gives its exercises a side), and its warm-up on the way with
- *   the highest capacity among the athlete's (a jog: the run capacity; the
- *   SkiErg: the upper body's; the Row Erg: the lower of the two) at that
- *   capacity's share of the planned minutes (scaleWorkout's rounding). With
- *   no way left (a jog at run capacity 0 and no erg), round 1 at easy effort
- *   is the warm-up (hyroxSpec.warmupRound). The session stays when no
- *   station's side is at 0 and it holds the 15-min floor (holdsStationFloor:
- *   its station work with the planned warm-up), or when the gates cut none of
- *   its station work and the plan holds it under the floor (race week's short
- *   circuit), unless round 1 as its warm-up leaves it one round;
- * - easy erg work at its erg's share (scaleWorkout); the assessment and a
- *   station session without a lane H2b spec at the station capacity's share
- *   (scaleWorkout: their sets carry no side); none at a capacity of 0;
+ *   block as the injury's strength decision takes it (injury-strength.ts:
+ *   under an active injury it pauses or adapts strength, so the block leaves
+ *   and the adapted session is the strength work; only an injury in its
+ *   resolved phase keeps a block, at the lower capacity's share of its
+ *   minutes and reps, blockAt, as no map gives its exercises a side), and
+ *   its warm-up on the way with the highest capacity among the athlete's
+ *   ways that carry the planned way's MTL a minute (an erg moves only to the
+ *   other erg, a jog stays a jog; the SkiErg: the upper body's capacity; the
+ *   Row Erg: the lower of the two; a jog: the run capacity) at that
+ *   capacity's share of the planned minutes. With no way left, round 1 at
+ *   easy effort is the warm-up (hyroxSpec.warmupRound). The session stays
+ *   when no station's side is at 0 and it holds the 15-min floor
+ *   (holdsStationFloor: its station work with the planned warm-up), or when
+ *   the gates cut none of its station work and the plan holds it under the
+ *   floor (race week's short circuit), unless round 1 as its warm-up leaves
+ *   it one round;
+ * - easy erg work at its erg's share (scaleWorkout); a station session
+ *   without a lane H2b spec at the station capacity's share; none at a
+ *   capacity of 0;
+ * - the assessment: each station whole at 100%, left out under it
+ *   (hyroxAssessmentAtCapacities: a time at reduced volume is no
+ *   calibration);
  * - bricks and race simulations stack runs and stations: any restriction
  *   leaves them out;
  * - a standalone strength session as the injury's strength decision takes
  *   it: paused, or the region-safe session at its length.
  * Every part only shrinks and every share rises with its capacity, so the
  * gated week holds no session the uninjured week does not, no part above its
- * capacity's share of the uninjured part (the rounding above aside), and
- * nothing less at a higher capacity.
+ * capacity's share of the uninjured part, no more MTL than the uninjured
+ * part, and nothing less at a higher capacity. Rounding aside: a run's and
+ * an easy erg session's minutes round to the nearest minute (up to half a
+ * minute above the exact share; a run's distance and MTL stay exact), a
+ * warm-up's to the nearest minute at least 1.
  * Rounds 1 to 8 searched session shapes (whole-station cuts, cut orders,
  * partial walks, a ranked choice) and checked the shares, the floor and the
  * ceilings afterwards; each round traded one of those invariants for another.
@@ -2695,8 +2707,8 @@ type HyroxGateResult = { w: Workout | null; why?: string };
  *
  * `weeksFromCurrent` retained for API compatibility; slider is the
  * gradient so no separate ramp-window logic. `stationAccess`: the athlete's
- * ergs (hyroxConfig.stationAccess), which a warm-up can move to; without it a
- * warm-up keeps its mode or moves to a jog.
+ * ergs (hyroxConfig.stationAccess), which an erg warm-up can move between;
+ * without it a warm-up keeps its way.
  */
 export function applyHyroxInjuryGates(
   workouts: Workout[],
@@ -2760,29 +2772,37 @@ function hyroxInjuryGate(injuryState: InjuryState, stationAccess?: HyroxConfig['
     }
     if (typeof a.aerobic === 'number')   scaled.aerobic   = Math.round(a.aerobic   * factor);
     if (typeof a.anaerobic === 'number') scaled.anaerobic = Math.round(a.anaerobic * factor);
-    if (typeof a.musculoTendonLoad === 'number') {
-      scaled.musculoTendonLoad = Math.round(a.musculoTendonLoad * factor);
-    }
+    // MTL at the exact share (rounding could put it above the share).
+    if (typeof a.musculoTendonLoad === 'number') scaled.musculoTendonLoad = a.musculoTendonLoad * factor;
     return scaled as Workout;
   };
 
-  // The warm-up takes the way with the highest capacity among the athlete's,
-  // ties in the order the decision moves off the restricted side (an
-  // upper-body restriction: the Row Erg, a jog, the SkiErg; a lower-body one:
-  // the SkiErg, a jog, the Row Erg; equal capacities: the planned way first),
-  // at that capacity's share of the planned minutes (at least 1 min, none at
-  // 0). The shared injury engine's aerobic offer gates the Row erg on the
-  // upper body alone (pickAerobicSubstitute, src/injury/engine.ts), so under a
-  // lower-body restriction the two surfaces differ (a known limitation).
-  // Null: the warm-up holds as planned.
+  // The warm-up takes the way with the highest capacity among the athlete's
+  // ways that carry the planned way's MTL a minute (mtl.ts at the easy RPE:
+  // the SkiErg and the Row Erg carry the same, a jog more), ties in the order
+  // the decision moves off the restricted side (an upper-body restriction:
+  // the Row Erg, then the SkiErg; a lower-body one: the SkiErg, then the Row
+  // Erg; equal capacities: the planned way first), at that capacity's share
+  // of the planned minutes (at least 1 min, none at 0). So an erg warm-up
+  // moves only to the other erg and a jog stays a jog: the warm-up's MTL
+  // stays within the planned warm-up's at its share and never falls as a
+  // capacity rises, and no jog appears where the uninjured session planned
+  // an erg (v2 review: a jog in place of an erg raised session MTL above the
+  // uninjured session's in 1.3 to 2.1% of kept states, MTL fell as a
+  // capacity rose, and 37 to 39 injured weeks went over the weekly MTL cap
+  // the uninjured week held). The shared injury engine's aerobic offer gates
+  // the Row erg on the upper body alone (pickAerobicSubstitute,
+  // src/injury/engine.ts), so under a lower-body restriction the two
+  // surfaces differ (a known limitation). Null: the warm-up holds as planned.
   const warmupName = (mode: WarmMode): string => (mode === 'run' ? 'warm-up jog' : `${STATION_DISPLAY[mode].name} warm-up`);
+  const mtlPerMin = (mode: WarmMode): number => hyroxWarmupOn(mode, 1).mtl;
   const gatedWarmup = (wu: Warmup): { warmup: Warmup | null; note: string } | null => {
     const has = (m: WarmMode): boolean => m === wu.mode || m === 'run'
       || (m === 'ski_erg' && !!stationAccess?.skiErg) || (m === 'row_erg' && !!stationAccess?.rowErg);
     const order: WarmMode[] = restricted === 'upper' ? ['row_erg', 'run', 'ski_erg']
       : restricted === 'lower' ? ['ski_erg', 'run', 'row_erg']
         : [wu.mode, 'run', 'row_erg', 'ski_erg'];
-    const ways = [...order, wu.mode].filter(has);
+    const ways = [...order, wu.mode].filter(m => has(m) && mtlPerMin(m) === mtlPerMin(wu.mode));
     const top = Math.max(...ways.map(ownCap));
     const mode = ways.find(m => ownCap(m) === top) ?? wu.mode;
     const modeCap = ownCap(mode);
@@ -2874,7 +2894,8 @@ function hyroxInjuryGate(injuryState: InjuryState, stationAccess?: HyroxConfig['
     const w = strengthKind.kind !== 'normal' && w0.hyroxSpec?.strength ? withHyroxSessionParts(w0, { strength: null }) : w0;
     if (isRun(w)) {
       if (runCap <= 0) return { w: null, why: 'run capacity 0%' };
-      return { w: runCap >= 100 ? w : scaleWorkout(w, runCap, 'run') };
+      if (runCap >= 100) return { w };
+      return { w: { ...withHyroxRunShare(w, runCap / 100), modReason: `Capacity ${runCap}%: run duration scaled to match your reported ability` } };
     }
     if (isHyroxEasyErg(w)) {
       const erg = hyroxEasyErgStation(w) ?? 'row_erg';
@@ -2884,9 +2905,17 @@ function hyroxInjuryGate(injuryState: InjuryState, stationAccess?: HyroxConfig['
       const s = scaleWorkout(w, cap, 'easy erg');
       return { w: { ...s, d: (w.d ?? '').replace(/^\d+ min/, `${s.estimatedDurationMin} min`) } };
     }
-    // Easy erg work loads the upper and lower body like a station, and so do
-    // the assessment and a station session without a lane H2b spec.
-    if (t.startsWith('hyrox_station_') || t === 'hyrox_assessment') {
+    // The assessment: each station whole at 100%, left out under it
+    // (hyroxAssessmentAtCapacities: a time at reduced volume is no
+    // calibration).
+    if (t === 'hyrox_assessment') {
+      const a = hyroxAssessmentAtCapacities(w, st => ownCap(st));
+      if (!a) return { w: null, why: 'every station under 100% capacity' };
+      return { w: a === w ? w : { ...a, modReason: `Capacity under 100% (upper body ${upperCap}%, lower body ${lowerCap}%): those stations left out of the calibration pass` } };
+    }
+    // A station session without a lane H2b spec loads the upper and lower
+    // body like a station.
+    if (t.startsWith('hyrox_station_')) {
       if (stationCap <= 0) return { w: null, why: `${capLabel('row_erg')} capacity 0%` };
       return { w: stationCap >= 100 ? w : scaleWorkout(w, stationCap, 'stations') };
     }

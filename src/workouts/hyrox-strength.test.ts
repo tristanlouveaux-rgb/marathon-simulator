@@ -62,11 +62,12 @@ import {
   HYROX_STRENGTH_BLOCK_MIN, hyroxTier, hyroxBaseMultiplier,
 } from '@/constants/hyrox-constants';
 import { isHyroxDeloadWeek } from './plan_engine';
-import { generateHyroxPlanDetailed, regenerateHyroxWeeksFrom, applyHyroxInjuryGates, holdsStationFloor } from './plan_engine.hyrox';
+import { generateHyroxPlanDetailed, regenerateHyroxWeeksFrom, applyHyroxInjuryGates, holdsStationFloor, HYROX_MIN_STATION_SESSION_MIN } from './plan_engine.hyrox';
 import { hyroxSessionWorkMin, withHyroxRounds, hyroxRunLengthKm, withoutHyroxStation, hyroxStationToCut, withHyroxSessionParts, hyroxWarmupOn, isHyroxEasyErg, generateHyroxEasyErg } from './hyrox-generators';
 import { hyroxSessionWalk, hyroxComponentSets, hyroxComponentRounds, hyroxSessionPlannedTss } from './hyrox-session-shape';
 import { plannedTssPerMin } from '@/constants/sports';
-import { HYROX_EASY_RPE } from '@/constants/hyrox-constants';
+import { HYROX_EASY_RPE, HYROX_SESSION_WARMUP_MIN } from '@/constants/hyrox-constants';
+import { computeComponentMTL } from '@/calculations/mtl';
 import { HYROX_STATION_REGION } from '@/calculations/hyrox-injury';
 import type { InjuryState } from '@/types/injury';
 import { planTrainingWeeks } from './race-week-layout';
@@ -127,7 +128,7 @@ const sigOf = (w: Workout | undefined) => (w ? `${(w.hyroxComponents ?? []).map(
  *  the warm-up; with round 1 as the warm-up, the station work after round 1. */
 const floorHolds = (c: Workout) => {
   const roundOne = c.hyroxSpec?.warmupRound ? hyroxSessionWalk(c).filter(x => x.round === 1).reduce((a, x) => a + (x.component.durationSec ?? 0) + x.restSec + x.transitionSec, 0) / 60 : 0;
-  return Math.round(hyroxSessionWorkMin(c) - roundOne + 10) >= 15;
+  return Math.round(hyroxSessionWorkMin(c) - roundOne + HYROX_SESSION_WARMUP_MIN) >= HYROX_MIN_STATION_SESSION_MIN;
 };
 
 type Caps = [number, number, number];
@@ -147,25 +148,52 @@ const fullSecOf = (w: Workout | undefined) => (w ? hyroxSessionWalk(w)
   .filter(x => x.component.type !== 'run' && HYROX_STATION_REGION[x.component.type as HyroxStation] === 'full')
   .reduce((a, x) => a + (x.component.durationSec ?? 0), 0) : 0);
 const amountOf = (c: HyroxComponent) => (typeof c.reps === 'number' ? c.reps : (c.distanceM ?? 0));
+/** Seconds of a run text span: "12 min 30 s", "5 min", "45 s". */
+const spanSec = (x: string): number => {
+  const m = /^(?:(\d+) min)?(?: ?(\d+) s)?$/.exec(x.trim());
+  return m ? Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0) : NaN;
+};
+/** The minutes a run's text prescribes (generateHyroxRun's templates; a
+ *  race-pace rep at its pace), or null for a text it does not match. */
+const runTextMin = (w: Workout): number | null => {
+  const d = w.d ?? '';
+  let m = /^(\d+) min easy at /.exec(d);
+  if (m) return Number(m[1]);
+  m = /^(.+?) easy warm-up\. (.+?) at (?:threshold pace|HYROX race pace) \(~\d+:\d+\/km\), comfortably hard, short phrases only\. (.+?) easy cool-down\.$/.exec(d);
+  if (m) return (spanSec(m[1]) + spanSec(m[2]) + spanSec(m[3])) / 60;
+  m = /^(.+?) easy warm-up\. (\d+) × (.+?) at about \d+% of max HR(?: \(~\d+ bpm\))?, (.+?) easy jog between reps\. (.+?) easy cool-down\.$/.exec(d);
+  if (m) { const n = Number(m[2]); return (spanSec(m[1]) + n * spanSec(m[3]) + (n - 1) * spanSec(m[4]) + spanSec(m[5])) / 60; }
+  m = /^(.+?) easy warm-up\. (\d+) × (\d+(?:\.\d+)?) (m|km) at HYROX race pace \(~(\d+):(\d+)\/km\), (.+?) rest between reps\. (.+?) easy cool-down\.$/.exec(d);
+  if (m) {
+    const n = Number(m[2]); const km = Number(m[3]) / (m[4] === 'm' ? 1000 : 1); const pace = Number(m[5]) * 60 + Number(m[6]);
+    return (spanSec(m[1]) + n * km * pace + (n - 1) * spanSec(m[7]) + spanSec(m[8])) / 60;
+  }
+  return null;
+};
 
+/** MTL a minute of a warm-up way at the easy RPE (mtl.ts). */
+const warmMtlPerMin = (m: Mode) => computeComponentMTL(1, HYROX_EASY_RPE, m === 'run' ? 'run_easy' : m);
 /** The warm-up rule, an independent copy (review rounds 4 to 7, injury gate
- *  v2): each way the athlete can warm up has a capacity of its own (a jog
- *  the run capacity, the SkiErg the upper body's, the Row Erg the lower of
- *  the two sides', HYROX_STATION_REGION's full-body row); the warm-up takes
- *  the highest, ties in the decision's order (an upper-body restriction: Row
- *  Erg, jog, SkiErg; a lower-body one: SkiErg, jog, Row Erg; equal: the
- *  planned way first), and below 100 keeps that capacity's share of the
- *  planned 10 min (at least 1, at 0 none), equal restrictions too. */
+ *  v2 and its review): each way the athlete can warm up has a capacity of
+ *  its own (a jog the run capacity, the SkiErg the upper body's, the Row Erg
+ *  the lower of the two sides', HYROX_STATION_REGION's full-body row); among
+ *  the ways that carry the planned way's MTL a minute (an erg moves only to
+ *  the other erg, a jog stays a jog) the warm-up takes the highest, ties in
+ *  the decision's order (an upper-body restriction: Row Erg, SkiErg; a
+ *  lower-body one: SkiErg, Row Erg; equal: the planned way first), and below
+ *  100 keeps that capacity's share of the planned minutes (at least 1, at 0
+ *  none), equal restrictions too. */
 const warmRule = (planned: Mode, run: number, upper: number, lower: number, access: Access): { mode: Mode; min: number } => {
   const capOf = (m: Mode) => (m === 'run' ? run : m === 'ski_erg' ? upper : m === 'row_erg' ? Math.min(upper, lower) : 100);
   const restricted = upper < lower ? 'upper' : lower < upper ? 'lower' : null;
   const order: Mode[] = restricted === 'upper' ? ['row_erg', 'run', 'ski_erg'] : restricted === 'lower' ? ['ski_erg', 'run', 'row_erg'] : [planned, 'run', 'row_erg', 'ski_erg'];
   const has = (m: Mode) => m === planned || m === 'run' || (m === 'ski_erg' && access.skiErg) || (m === 'row_erg' && access.rowErg);
-  const ways = [...order, planned].filter(has);
+  const ways = [...order, planned].filter(m => has(m) && warmMtlPerMin(m) === warmMtlPerMin(planned));
   const top = Math.max(...ways.map(capOf));
   const mode = ways.find(m => capOf(m) === top) as Mode;
   const c = capOf(mode);
-  return { mode, min: c >= 100 ? 10 : c <= 0 ? 0 : Math.min(10, Math.max(1, Math.round(c / 10))) };
+  const W = HYROX_SESSION_WARMUP_MIN;
+  return { mode, min: c >= 100 ? W : c <= 0 ? 0 : Math.min(W, Math.max(1, Math.round((W * c) / 100))) };
 };
 
 /**
@@ -467,7 +495,7 @@ describe('injury gate v2: a station session at its capacities\' shares of the un
     expect(off.slice(0, 10)).toEqual([]);
   }, 300000);
 
-  it('holds each side\'s station work, the full-body work, the finisher and the warm-up to their capacities\' shares of the uninjured session, is never longer or above its planned TSS, and as any one capacity (run, upper body, lower body) rises by 5 a kept session stays and no station\'s amount, side\'s work, warm-up, finisher, length or planned TSS falls: one-sided, equal and unequal restrictions, the other side at 25, 50 and 75, run capacity swept at 100/100, 50/50 and 30/70', () => {
+  it('holds each side\'s station work, the full-body work, the finisher and the warm-up to their capacities\' shares of the uninjured session, is never longer or above its planned TSS or MTL, and as any one capacity (run, upper body, lower body) rises by 5 a kept session stays and no station\'s amount, side\'s work, warm-up, finisher, length, planned TSS or MTL falls: one-sided, equal and unequal restrictions, the other side at 25, 50 and 75, run capacity swept at 100/100, 50/50 and 30/70 (v2 review: a jog in place of an erg warm-up raised MTL above the uninjured session in 1.3 to 2.1% of kept states and let it fall as a capacity rose)', () => {
     const all = stationSessionsOf([V_SINGLES, V_DOUBLES, V_ROW, V_NOERG], [12]);
     const seen = new Set<string>();
     const sessions = all.filter(x => { const k = JSON.stringify([x.u.hyroxComponents, x.u.hyroxRounds, x.u.hyroxSpec, x.access]); if (seen.has(k)) return false; seen.add(k); return true; });
@@ -479,7 +507,7 @@ describe('injury gate v2: a station session at its capacities\' shares of the un
     for (const [up, lo] of [[100, 100], [50, 50], [30, 70]]) for (const r of steps) add([r, up, lo]);
     const states = [...byKey.values()];
     const warmMin = (w: Workout) => w.hyroxSpec?.warmup?.min ?? 0;
-    let kept = 0; let steppedUp = 0; let mtlFalls = 0; let mtlAbove = 0;
+    let kept = 0; let steppedUp = 0; let moved = 0;
     const off: string[] = [];
     for (const { label, u, access } of sessions) {
       const memo = new Map<string, Workout | undefined>();
@@ -500,9 +528,13 @@ describe('injury gate v2: a station session at its capacities\' shares of the un
         if (warmMin(g) !== warmRule(u.hyroxSpec!.warmup!.mode, run, up, lo, access).min || warmMin(g) > warmMin(u)) off.push(`${l}: warm-up ${warmMin(g)} min off its share`);
         if ((g.estimatedDurationMin ?? 0) > (u.estimatedDurationMin ?? 0)) off.push(`${l}: longer than the uninjured session`);
         if (hyroxSessionPlannedTss(g) > hyroxSessionPlannedTss(u) + 1e-6) off.push(`${l}: planned TSS above the uninjured session's`);
-        // The warm-up's way can change (a jog's MTL a minute differs from an
-        // erg's): counted, not a rule.
-        if ((g.musculoTendonLoad ?? 0) > (u.musculoTendonLoad ?? 0) + 1e-6) mtlAbove++;
+        if ((g.musculoTendonLoad ?? 0) > (u.musculoTendonLoad ?? 0) + 1e-6) off.push(`${l}: MTL above the uninjured session's`);
+        const wg = g.hyroxSpec?.warmup; const wu0 = u.hyroxSpec!.warmup!;
+        if (wg && wg.mode !== wu0.mode) {
+          moved++;
+          if ((wg.mode === 'run') !== (wu0.mode === 'run')) off.push(`${l}: warm-up moved from ${wu0.mode} to ${wg.mode}`);
+          if (wg.mtl > (wu0.mtl * wg.min) / wu0.min + 1e-9) off.push(`${l}: warm-up MTL above the planned way's at its minutes`);
+        }
         for (let d = 0; d < 3; d++) {
           if (st[d] >= 100) continue;
           const nx = [...st] as Caps;
@@ -520,30 +552,47 @@ describe('injury gate v2: a station session at its capacities\' shares of the un
             ['length', (w: Workout) => w.estimatedDurationMin ?? 0], ['planned TSS', hyroxSessionPlannedTss]] as Array<[string, (w: Workout) => number]>) {
             if (f(h) < f(g) - 1e-6) off.push(`${m}: ${what} ${f(g)} to ${f(h)}`);
           }
-          if ((h.musculoTendonLoad ?? 0) < (g.musculoTendonLoad ?? 0) - 1e-6) mtlFalls++;
+          if ((h.musculoTendonLoad ?? 0) < (g.musculoTendonLoad ?? 0) - 1e-6) off.push(`${m}: MTL ${g.musculoTendonLoad} to ${h.musculoTendonLoad}`);
         }
       }
     }
-    console.info(`[hyrox injury v2] ${sessions.length} distinct sessions, ${kept} kept states, ${steppedUp} steps; MTL above the uninjured session in ${mtlAbove} kept states, MTL falling in ${mtlFalls} steps (the warm-up's way)`);
     expect(sessions.length).toBeGreaterThan(200);
     expect(kept).toBeGreaterThan(30000);
+    expect(steppedUp).toBeGreaterThan(30000);
+    expect(moved).toBeGreaterThan(1000);
     expect(off.slice(0, 10)).toEqual([]);
   }, 600000);
 
-  it('the other sessions: runs at the run capacity\'s share (scaleWorkout), none at 0, quality runs too; easy erg work at its erg\'s side\'s share with its text; bricks and race simulations only with every capacity at 100; the assessment at the station capacity\'s share; a standalone strength session paused or adapted at its length', () => {
+  it('the other sessions: runs at the run capacity\'s share, none at 0, quality runs too, their text, run component and MTL agreeing with the badge; easy erg work at its erg\'s side\'s share with its text; bricks and race simulations only with every capacity at 100; the assessment keeping each station whole at 100% and leaving out the rest; a standalone strength session paused or adapted at its length', () => {
     const s = build('intermediate', 8, 18, V_SINGLES[1]);
     const ws = s.wks.flatMap(wk => prescribed(wk));
     const access = s.hyroxConfig!.stationAccess;
     const runs = ws.filter(w => w.discipline === 'run');
-    expect(runs.some(w => w.t === 'hyrox_run_tempo' || w.t === 'hyrox_run_intervals')).toBe(true);
+    expect(runs.some(w => w.t === 'hyrox_run_tempo')).toBe(true);
+    expect(runs.some(w => w.t === 'hyrox_run_intervals')).toBe(true);
+    let quality = 0;
     for (const run of [0, 35, 50, 100]) {
       for (const u of runs) {
         const [g] = applyHyroxInjuryGates([u], injOf([run, 100, 100]), 0, access);
         if (run === 0) { expect(g).toBeUndefined(); continue; }
-        expect(g!.estimatedDurationMin).toBe(run >= 100 ? u.estimatedDurationMin : Math.max(1, Math.round((u.estimatedDurationMin ?? 0) * run / 100)));
+        const f = run / 100;
+        const label = `${u.n} at run ${run}: ${g!.estimatedDurationMin}m "${g!.d}"`;
+        expect(g!.estimatedDurationMin, label).toBe(run >= 100 ? u.estimatedDurationMin : Math.max(1, Math.round((u.estimatedDurationMin ?? 0) * f)));
         expect(g!.t).toBe(u.t);
+        // The run component and the session's MTL at the exact share.
+        expect(hyroxRunLengthKm(g!), label).toBeCloseTo(hyroxRunLengthKm(u) * f, 9);
+        expect(g!.musculoTendonLoad ?? 0, label).toBeCloseTo((u.musculoTendonLoad ?? 0) * f, 9);
+        // The text says what the badge does.
+        const implied = runTextMin(g!);
+        expect(implied, label).not.toBeNull();
+        expect(Math.abs((implied as number) - (g!.estimatedDurationMin ?? 0)), label).toBeLessThanOrEqual(u.t === 'hyrox_run_easy' ? 0 : 0.6);
+        if (u.t === 'hyrox_run_easy') {
+          const km = Number(/~(\d+(?:\.\d+)?) km/.exec(g!.d ?? '')?.[1]);
+          expect(km, label).toBeCloseTo(Math.round(hyroxRunLengthKm(g!) * 10) / 10, 9);
+        } else if (run < 100) quality++;
       }
     }
+    expect(quality).toBeGreaterThan(0);
     const bricks = ws.filter(w => w.discipline === 'brick');
     expect(bricks.some(w => w.t === 'hyrox_sim')).toBe(true);
     for (const caps of [[100, 100, 95], [95, 100, 100], [100, 50, 100]] as Caps[]) expect(applyHyroxInjuryGates(bricks, injOf(caps), 0, access)).toEqual([]);
@@ -562,8 +611,26 @@ describe('injury gate v2: a station session at its capacities\' shares of the un
       }
     }
     const assess = prescribed(s.wks[0]).find(w => w.t === 'hyrox_assessment')!;
-    expect(applyHyroxInjuryGates([assess], injOf([100, 100, 0]), 0, access)).toEqual([]);
-    expect(applyHyroxInjuryGates([assess], injOf([100, 80, 40]), 0, access)[0].estimatedDurationMin).toBe(Math.round((assess.estimatedDurationMin ?? 0) * 0.4));
+    const all = assess.hyroxComponents ?? [];
+    let partialPass = 0;
+    for (const caps of [[100, 100, 0], [100, 0, 100], [100, 100, 50], [100, 80, 40], [100, 95, 100], [0, 100, 100], [100, 100, 100]] as Caps[]) {
+      const [, up, lo] = caps;
+      const [g] = applyHyroxInjuryGates([assess], injOf(caps), 0, access);
+      const keep = all.filter(c => capOfStation(c.type as HyroxStation, up, lo) >= 100);
+      const label = `assessment at ${caps.join('/')}`;
+      if (keep.length === 0) { expect(g, label).toBeUndefined(); continue; }
+      expect(g, label).toBeDefined();
+      if (keep.length === all.length) { expect(g, label).toBe(assess); continue; }
+      partialPass++;
+      // Each station kept whole (its calibration pass), the rest left out
+      // and named; minutes and MTL from the stations kept.
+      expect(g!.hyroxComponents, label).toEqual(keep);
+      expect(g!.estimatedDurationMin, label).toBe(Math.round(keep.reduce((a, c) => a + (c.durationSec ?? 0) / 60, 0) + keep.length * 2));
+      expect(g!.musculoTendonLoad ?? 0, label).toBeCloseTo(keep.reduce((a, c) => a + c.mtl, 0), 9);
+      expect(g!.d ?? '', label).toContain(`Easy walkthrough of ${keep.length} of the ${all.length} stations`);
+      expect(g!.d ?? '', label).toContain('left out (injury): a time at reduced volume is not a benchmark.');
+    }
+    expect(partialPass).toBeGreaterThan(2);
     const strength = ws.filter(isHyroxStrengthSession);
     expect(strength.length).toBeGreaterThan(0);
     for (const u of strength) {
@@ -593,8 +660,9 @@ describe('a plan rebuilt under an injury is the plan without it through the inju
   const runMin = (wk: Week | undefined) => prescribed(wk).filter(w => w.discipline === 'run').reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
   const minutes = (wk: Week | undefined) => prescribed(wk).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
   const tssOf = (wk: Week | undefined) => prescribed(wk).reduce((a, w) => a + hyroxSessionPlannedTss(w), 0);
+  const mtlOf = (wk: Week | undefined) => (wk?.triWorkouts ?? []).reduce((a, w) => a + (w.musculoTendonLoad ?? 0), 0);
 
-  it('each current and future week holds the uninjured week\'s sessions through the gates on their days (none added or moved), each side\'s and the full-body station work and the running within their shares, no more minutes or planned TSS than the uninjured week (so its deload ceiling, taper fractions and acute:chronic guard hold), the weeks before untouched, and the hard rules (no hard sessions on consecutive days and 48 h between eccentric sessions, Sunday to Monday included; no single run above 110% of the 4-week longest; no brick under a restriction): every band at the lowest and the default hours, 12 weeks, rebuilt from week 1 and from week 8, five variants, run-only, one-sided, equal and unequal injuries', () => {
+  it('each current and future week holds the uninjured week\'s sessions through the gates on their days (none added or moved), each side\'s and the full-body station work and the running within their shares, no more minutes, planned TSS or MTL than the uninjured week and never over the weekly MTL cap the uninjured week holds (so its deload ceiling, taper fractions and acute:chronic guard hold), the weeks before untouched, and the hard rules (no hard sessions on consecutive days and 48 h between eccentric sessions, Sunday to Monday included; no single run above 110% of the 4-week longest; no brick under a restriction): every band at the lowest and the default hours, 12 weeks, rebuilt from week 1 and from week 8, five variants, run-only, one-sided, equal and unequal injuries', () => {
     const variants = [V_SINGLES, V_DOUBLES, V_PRO_DOUBLES, V_ROW, V_NOERG];
     const states: Caps[] = [[0, 100, 100], [50, 100, 100], [100, 30, 100], [100, 100, 50], [50, 50, 50], [100, 30, 50], [0, 100, 50], [100, 90, 95]];
     let plans = 0; let weeks = 0; let sessions = 0; let left = 0;
@@ -646,6 +714,11 @@ describe('a plan rebuilt under an injury is the plan without it through the inju
                   if ((w.estimatedDurationMin ?? 0) > Math.max(1, Math.round(((v.estimatedDurationMin ?? 0) * run) / 100))) off.push(`${l}: ${w.n} above the run share`);
                 }
                 if (minutes(wk) > minutes(u) || tssOf(wk) > tssOf(u) + 1e-6) off.push(`${l}: more minutes or TSS than the uninjured week`);
+                // MTL (v2 review: a jog in place of an erg warm-up put 37 to 39
+                // injured weeks over the weekly MTL cap the uninjured week held).
+                if (mtlOf(wk) > mtlOf(u) + 1e-6) off.push(`${l}: more MTL than the uninjured week`);
+                const cap = base.hyroxConfig!.mtlCap;
+                if (mtlOf(u) <= cap + 1e-6 && mtlOf(wk) > cap + 1e-6) off.push(`${l}: above the weekly MTL cap`);
                 const d = detail[i];
                 if (d.deloadCapMin != null && minutes(u) <= d.deloadCapMin + 1e-6 && minutes(wk) > d.deloadCapMin + 1e-6) off.push(`${l}: above the deload ceiling`);
                 if (d.acwrCapTss != null && tssOf(u) - d.guardExemptTss <= d.acwrCapTss + 1e-6 && tssOf(wk) - d.guardExemptTss > d.acwrCapTss + 1e-6) off.push(`${l}: above the acute:chronic guard`);
@@ -667,7 +740,7 @@ describe('a plan rebuilt under an injury is the plan without it through the inju
     expect(off.slice(0, 10)).toEqual([]);
   }, 600000);
 
-  it('as any one capacity rises the rebuilt plan loses nothing: every week keeps its sessions and holds no less station work on either side, running, minutes or planned TSS (run 0 to 50 to 100 at 50/50, a side clearing from 95 to 100 at 30, the lower body past a tie at upper body 50), singles and doubles, every band at the lowest and the default hours, 12 and 16 weeks', () => {
+  it('as any one capacity rises the rebuilt plan loses nothing: every week keeps its sessions and holds no less station work on either side, running, minutes, planned TSS or MTL (run 0 to 50 to 100 at 50/50, a side clearing from 95 to 100 at 30, the lower body past a tie at upper body 50), singles and doubles, every band at the lowest and the default hours, 12 and 16 weeks', () => {
     const chains: Caps[][] = [[[0, 50, 50], [50, 50, 50], [100, 50, 50]], [[100, 30, 95], [100, 30, 100]], [[100, 95, 30], [100, 100, 30]], [[100, 50, 45], [100, 50, 50], [100, 50, 55]]];
     let weeks = 0; let held = 0;
     const off: string[] = [];
@@ -689,7 +762,7 @@ describe('a plan rebuilt under an injury is the plan without it through the inju
                   if (prescribed(a).some(w => !ids.has(w.id))) off.push(`${l}: a session left`);
                   const wa = workOf(a); const wb = workOf(b);
                   if (wb.upper < wa.upper - 1e-6 || wb.lower < wa.lower - 1e-6 || wb.full < wa.full - 1e-6) off.push(`${l}: less station work`);
-                  if (runMin(b) < runMin(a) || minutes(b) < minutes(a) || tssOf(b) < tssOf(a) - 1e-6) off.push(`${l}: less running, minutes or TSS`);
+                  if (runMin(b) < runMin(a) || minutes(b) < minutes(a) || tssOf(b) < tssOf(a) - 1e-6 || mtlOf(b) < mtlOf(a) - 1e-6) off.push(`${l}: less running, minutes, TSS or MTL`);
                 }
               }
             }
@@ -704,7 +777,7 @@ describe('a plan rebuilt under an injury is the plan without it through the inju
 });
 
 describe('a station session\'s warm-up under an injury', () => {
-  it('takes the way with the highest capacity of its own (a jog the run capacity, the SkiErg the upper body\'s, the Row Erg the lower of the two sides\'), ties in the decision\'s order, and keeps that capacity\'s share, equal restrictions too; never opens a kept session with a whole SkiErg or Row Erg warm-up under an upper-body restriction; the station floor counts the planned warm-up (review round 5: open singles men under upper body 30, 157 kept sessions opened with 10 min on the SkiErg; review round 6: under the neck default every kept session opened with a whole Row Erg warm-up; review round 7: equal restrictions kept an erg whole, so a jog cut to the run share replaced it as run capacity rose and the session then left)', () => {
+  it('takes, among the ways carrying the planned way\'s MTL a minute (an erg moves only to the other erg, a jog stays a jog), the way with the highest capacity of its own (the SkiErg the upper body\'s, the Row Erg the lower of the two sides\'), ties in the decision\'s order, and keeps that capacity\'s share, equal restrictions too; never opens a session with a jog its uninjured session warmed up for on an erg (v2 review: MTL rose above the uninjured session and fell as a capacity rose); never opens a kept session with a whole SkiErg or Row Erg warm-up under an upper-body restriction; the station floor counts the planned warm-up (review round 5: open singles men under upper body 30, 157 kept sessions opened with 10 min on the SkiErg; review round 6: under the neck default every kept session opened with a whole Row Erg warm-up; review round 7: equal restrictions kept an erg whole, so a jog cut to the run share replaced it as run capacity rose and the session then left)', () => {
     const variants: Array<[string, Partial<OnboardingState>]> = [
       ['both ergs', {}],
       ['SkiErg only', { hyroxHasRowErg: false } as Partial<OnboardingState>],
@@ -740,12 +813,13 @@ describe('a station session\'s warm-up under an injury', () => {
               moved++;
               if (!(g.modReason ?? '').includes('in place of the')) off.push(`${label}: no note`);
             }
-            if (want.min < 10) {
+            if (want.min < HYROX_SESSION_WARMUP_MIN) {
               shared++;
               if (upper === lower && want.mode !== 'run') equalShared++;
               if (!(g.modReason ?? '').includes(` cut to ${want.min} min.`)) off.push(`${label}: no cut note`);
             }
-            if (upper < 100 && upper < lower && wu && wu.mode !== 'run' && wu.min >= 10) off.push(`${label}: a whole erg warm-up under an upper-body restriction`);
+            if (upper < 100 && upper < lower && wu && wu.mode !== 'run' && wu.min >= HYROX_SESSION_WARMUP_MIN) off.push(`${label}: a whole erg warm-up under an upper-body restriction`);
+            if (wu && (wu.mode === 'run') !== (planned === 'run')) off.push(`${label}: moved between a jog and an erg`);
             if (!floorHolds(g) || !holdsStationFloor(g)) off.push(`${label}: under the station floor`);
           }
         }
@@ -790,7 +864,7 @@ describe('a station session\'s warm-up under an injury', () => {
     expect(off.slice(0, 10)).toEqual([]);
   }, 300000);
 
-  it('reaches the rebuilt plan: under a shoulder restriction no current or future station session opens with a SkiErg warm-up, a whole jog at run capacity 100, a Row Erg warm-up at the shared capacity\'s 5 min at run 50 (the plan passes the athlete\'s ergs to the gates)', () => {
+  it('reaches the rebuilt plan: under a shoulder restriction every current and future station session opens with a Row Erg warm-up at the shared capacity\'s 5 min, never a SkiErg one and never a jog, at run capacity 100 and 50 (the plan passes the athlete\'s ergs to the gates)', () => {
     let sessions = 0;
     for (const band of BANDS) {
       const s = build(band, HYROX_HOURS_RANGE[band].default, 12);
@@ -803,8 +877,8 @@ describe('a station session\'s warm-up under an injury', () => {
             if (w.t !== 'hyrox_station_technique' && w.t !== 'hyrox_station_density') continue;
             sessions++;
             const label = `${band} W${wk?.w} ${w.n} run ${run}`;
-            expect(w.hyroxSpec?.warmup?.mode, label).toBe(run >= 100 ? 'run' : 'row_erg');
-            expect(w.hyroxSpec?.warmup?.min, label).toBe(run >= 100 ? 10 : 5);
+            expect(w.hyroxSpec?.warmup?.mode, label).toBe('row_erg');
+            expect(w.hyroxSpec?.warmup?.min, label).toBe(Math.round(HYROX_SESSION_WARMUP_MIN * 0.5));
           }
         }
       }
@@ -838,11 +912,11 @@ describe('a station session\'s jog warm-up under a run restriction', () => {
               // after round 1 when round 1 is the warm-up (run capacity 0).
               const after = hyroxSessionWorkMin(u) - (runCap === 0 ? roundOneMin(u) : 0);
               if (!g) {
-                if (Math.round(after + 10) >= 15) off.push(`${band} ${len}w ${u.n} run ${runCap}: left out with ${after.toFixed(1)} min of station work after the warm-up`);
+                if (Math.round(after + HYROX_SESSION_WARMUP_MIN) >= HYROX_MIN_STATION_SESSION_MIN) off.push(`${band} ${len}w ${u.n} run ${runCap}: left out with ${after.toFixed(1)} min of station work after the warm-up`);
                 if (runCap === 0 && (u.hyroxRounds ?? 1) === 1) oneRoundLeft++;
                 continue;
               }
-              if (Math.round(after + 10) < 15) off.push(`${band} ${len}w ${u.n} run ${runCap}: kept with ${after.toFixed(1)} min of station work after the warm-up`);
+              if (Math.round(after + HYROX_SESSION_WARMUP_MIN) < HYROX_MIN_STATION_SESSION_MIN) off.push(`${band} ${len}w ${u.n} run ${runCap}: kept with ${after.toFixed(1)} min of station work after the warm-up`);
               if (hyroxSessionWorkMin(g) !== hyroxSessionWorkMin(u)) off.push(`${band} ${len}w ${u.n} run ${runCap}: station work changed`);
               expect(g.modReason ?? '').toMatch(/^Run capacity /);
               if (runCap === 0) {
@@ -920,7 +994,7 @@ describe('a station session\'s jog warm-up under a run restriction', () => {
               const x = withHyroxRounds(st, r);
               checked++;
               const after = hyroxSessionWorkMin(x) - (run === 0 ? roundOneMin(x) : 0);
-              expect(holdsStationFloor(x), `${band} ${u.n} run ${run} ${hyroxSessionWorkMin(x).toFixed(1)} min`).toBe(Math.round(after + 10) >= 15);
+              expect(holdsStationFloor(x), `${band} ${u.n} run ${run} ${hyroxSessionWorkMin(x).toFixed(1)} min`).toBe(Math.round(after + HYROX_SESSION_WARMUP_MIN) >= HYROX_MIN_STATION_SESSION_MIN);
               if (run === 0 && r === 1) expect(holdsStationFloor(x)).toBe(false);
             }
             const cut = hyroxStationToCut(st);
@@ -936,7 +1010,7 @@ describe('a station session\'s jog warm-up under a run restriction', () => {
   }, 120000);
 
   it('a race-week circuit planned under the floor (a short primer the floor exempts) stays through a run restriction alone whatever its warm-up becomes, unless round 1 as its warm-up leaves one round, and a session that held the floor never stays under it (review round 8: one-erg doubles race-week circuits left whenever their warm-up changed way and stayed when it did not)', () => {
-    let exempt = 0; let kept = 0; let held = 0;
+    let exempt = 0; let kept = 0; let held = 0; let oneRoundLeft = 0;
     const variants: Array<Partial<OnboardingState>> = [
       { hyroxFormat: 'open_doubles', hyroxDivision: 'mixed', hyroxHasRowErg: false } as Partial<OnboardingState>,
       { hyroxFormat: 'open_doubles', hyroxDivision: 'mixed', hyroxHasSkiErg: false } as Partial<OnboardingState>,
@@ -949,7 +1023,8 @@ describe('a station session\'s jog warm-up under a run restriction', () => {
           const tw = planTrainingWeeks(s);
           for (const [k, wk] of s.wks.slice(0, tw).entries()) {
             // Each circuit as planned and with a planned jog warm-up (at run
-            // capacity 0 or 30 the jog moves to the erg or shortens).
+            // capacity 30 or 50 the jog shortens, at 0 round 1 is the
+            // warm-up: a jog never moves to an erg).
             const circuits = prescribed(wk).filter(w => w.t === 'hyrox_station_technique' || w.t === 'hyrox_station_density');
             for (const u of circuits.flatMap(w => [w, withHyroxSessionParts(w, { warmup: hyroxWarmupOn('run', 10) })])) {
               for (const run of [0, 30, 50]) {
@@ -963,8 +1038,11 @@ describe('a station session\'s jog warm-up under a run restriction', () => {
                 expect(k + 1, `${label}: only race week's circuit is planned under the floor`).toBe(tw);
                 exempt++;
                 const oneRound = !!g?.hyroxSpec?.warmupRound && (g.hyroxRounds ?? 1) <= 1;
-                expect(!!g || (u.hyroxRounds ?? 1) <= 1, label).toBe(true);
-                if (g) { kept++; expect(oneRound, label).toBe(false); }
+                // It leaves only when no warm-up way is left and round 1 as
+                // the warm-up would leave it one round.
+                const noWay = warmRule(u.hyroxSpec!.warmup!.mode, run, 100, 100, access).min <= 0;
+                expect(!!g, label).toBe(!(noWay && (u.hyroxRounds ?? 1) <= 1));
+                if (g) { kept++; expect(oneRound, label).toBe(false); } else oneRoundLeft++;
               }
             }
           }
@@ -972,7 +1050,8 @@ describe('a station session\'s jog warm-up under a run restriction', () => {
       }
     }
     expect(exempt).toBeGreaterThan(20);
-    expect(kept).toBe(exempt);
+    expect(kept + oneRoundLeft).toBe(exempt);
+    expect(kept).toBeGreaterThan(oneRoundLeft);
     expect(held).toBeGreaterThan(500);
   }, 120000);
 });

@@ -400,6 +400,66 @@ export function generateHyroxRun(params: RunParams): Workout {
   };
 }
 
+/** A run span: "5 min" on the whole minute, "45 s" under one, else
+ *  "12 min 30 s" (the whole second). */
+function fmtRunSpan(sec: number): string {
+  const s = Math.round(sec);
+  if (s % 60 === 0) return `${s / 60} min`;
+  if (s < 60) return `${s} s`;
+  return `${Math.floor(s / 60)} min ${s % 60} s`;
+}
+
+/**
+ * A run (generateHyroxRun's, or a commute run) at `share` of its volume: the
+ * injury gates' run (applyHyroxInjuryGates, the run capacity's share; the
+ * capacity slider is volume-only, so a quality run keeps its structure and
+ * its intensity). Its minutes are the planned minutes at the share, rounded
+ * to the whole minute (at least 1); its run components' distance, time and
+ * MTL, and the session's MTL, are at the exact share, so the km-based
+ * single-run rule keeps the uninjured plan's ratios; and its text says what
+ * the badge does. An easy run leads with its minutes and its distance from
+ * the component; a quality run takes every span ("10 min easy warm-up",
+ * "3 min rest", "4 × 3 min") and rep distance ("8 × 1 km") at the share to
+ * the whole second or metre, its rep counts as planned; a commute run's
+ * distance at the share. Before (v2 review), a run at run capacity 50 showed
+ * a 30-min badge beside "60 min easy at 6:18/km (~9.5 km)", and its
+ * component kept its full distance. `share` at or above 1 returns the run.
+ */
+export function withHyroxRunShare(w: Workout, share: number): Workout {
+  if (!(share < 1)) return w;
+  const f = Math.max(0, share);
+  const round1 = (km: number) => Math.round(km * 10) / 10;
+  const comps = w.hyroxComponents?.map(c => (c.type === 'run'
+    ? { ...c, distanceM: (c.distanceM ?? 0) * f, durationSec: (c.durationSec ?? 0) * f, mtl: c.mtl * f }
+    : c));
+  const min = Math.max(1, Math.round((w.estimatedDurationMin ?? 0) * f));
+  const km = comps ? hyroxRunLengthKm({ hyroxComponents: comps }) : null;
+  const d0 = w.d ?? '';
+  let d: string;
+  if (w.commute === true) {
+    d = d0.replace(/^(\d+(?:\.\d+)?)km$/, (_, x: string) => `${round1(Number(x) * f)}km`);
+  } else if (w.t === 'hyrox_run_easy') {
+    d = d0.replace(/^\d+ min/, `${min} min`)
+      .replace(/~(\d+(?:\.\d+)?) km\b/, (_, x: string) => `~${round1(km ?? Number(x) * f)} km`);
+  } else {
+    d = d0.replace(/(\d+) min\b/g, (_, n: string) => fmtRunSpan(Number(n) * 60 * f))
+      .replace(/(\d+(?:\.\d+)?) km\b/g, (_, x: string) => {
+        const m = Math.round(Number(x) * f * 1000);
+        return m >= 1000 && m % 1000 === 0 ? `${m / 1000} km` : `${m} m`;
+      });
+  }
+  const a = w as Workout & { aerobic?: number; anaerobic?: number };
+  return {
+    ...w,
+    d,
+    estimatedDurationMin: min,
+    ...(typeof a.aerobic === 'number' ? { aerobic: Math.round(a.aerobic * f) } : {}),
+    ...(typeof a.anaerobic === 'number' ? { anaerobic: Math.round(a.anaerobic * f) } : {}),
+    ...(typeof w.musculoTendonLoad === 'number' ? { musculoTendonLoad: w.musculoTendonLoad * f } : {}),
+    ...(comps ? { hyroxComponents: comps } : {}),
+  } as Workout;
+}
+
 /**
  * The same station or brick session with fewer rounds (the weekly MTL cap,
  * plan_engine.hyrox enforceMTLCap). Cuts real volume: the component MTLs
@@ -1467,28 +1527,63 @@ export function generateHyroxAssessment(params: AssessmentParams): Workout {
       ...(kg != null && race != null && kg < race - 1e-9 ? { loadKg: kg, loadPct: kg / race } : {}),
     };
   });
-  const reduced = components.filter(c => c.loadKg != null).map(c => STATION_DISPLAY[c.type as HyroxStation].name);
-
-  const totalMTL = components.reduce((sum, c) => sum + c.mtl, 0);
-  const totalDurMin = Math.round(
-    components.reduce((sum, c) => sum + (c.durationSec ?? 0) / 60, 0) + stations.length * 2
-  );
-
-  const stationList = stations.map(st => STATION_DISPLAY[st].name).join(', ');
-
-  const reducedNote = reduced.length > 0
-    ? ` This week the sleds run unloaded and the other loaded stations take beginner loads, so the ${reduced.join(', ')} times are not race times: leave them out of your benchmarks.`
-    : '';
   return {
     n: 'HYROX Assessment',
-    d: `Easy walkthrough of all ${stations.length} stations: ${stationList}. One round each at comfortable effort. Note your time per station and enter it in the app: it calibrates your training plan.${reducedNote}`,
+    d: hyroxAssessmentText(components, []),
     t: 'hyrox_assessment',
     discipline: 'station',
     r: 4,
     rpe: 4,
-    estimatedDurationMin: totalDurMin,
-    musculoTendonLoad: totalMTL,
+    estimatedDurationMin: hyroxAssessmentMin(components),
+    musculoTendonLoad: components.reduce((sum, c) => sum + c.mtl, 0),
     hyroxComponents: components,
     hyroxRounds: 1,  // one calibration pass; guided overlay stays athlete-paced
+  };
+}
+
+/** The assessment's minutes: every station's easy pass and 2 min around it. */
+function hyroxAssessmentMin(components: readonly HyroxComponent[]): number {
+  return Math.round(components.reduce((sum, c) => sum + (c.durationSec ?? 0) / 60, 0) + components.length * 2);
+}
+
+/** The assessment's description: its stations, a beginner's reduced loads,
+ *  and the stations the injury gates left out (`leftOut`). */
+function hyroxAssessmentText(components: readonly HyroxComponent[], leftOut: readonly HyroxStation[]): string {
+  const name = (st: HyroxStation) => STATION_DISPLAY[st].name;
+  const stations = components.map(c => c.type as HyroxStation);
+  const reduced = components.filter(c => c.loadKg != null).map(c => name(c.type as HyroxStation));
+  const reducedNote = reduced.length > 0
+    ? ` This week the sleds run unloaded and the other loaded stations take beginner loads, so the ${reduced.join(', ')} times are not race times: leave them out of your benchmarks.`
+    : '';
+  const which = leftOut.length > 0
+    ? `${stations.length} of the ${stations.length + leftOut.length} stations`
+    : `all ${stations.length} stations`;
+  const leftNote = leftOut.length > 0
+    ? ` ${leftOut.map(name).join(', ')} left out (injury): a time at reduced volume is not a benchmark.`
+    : '';
+  return `Easy walkthrough of ${which}: ${stations.map(name).join(', ')}. One round each at comfortable effort. Note your time per station and enter it in the app: it calibrates your training plan.${reducedNote}${leftNote}`;
+}
+
+/**
+ * The assessment under an injury (applyHyroxInjuryGates): the stations whose
+ * capacity is 100% (`capOf`) at their full calibration pass, every other
+ * station left out and named, its minutes and MTL from the stations kept.
+ * A time at reduced volume is no calibration, so a station is kept whole or
+ * not at all (v2 review: the pass was scaled by length alone and kept every
+ * station at full volume). Null when no station is left; the assessment
+ * itself when every station is at 100%.
+ */
+export function hyroxAssessmentAtCapacities(w: Workout, capOf: (st: HyroxStation) => number): Workout | null {
+  const all = (w.hyroxComponents ?? []).filter(c => c.type !== 'run');
+  const kept = all.filter(c => capOf(c.type as HyroxStation) >= 100);
+  if (kept.length === all.length) return w;
+  if (kept.length === 0) return null;
+  const leftOut = all.filter(c => !kept.includes(c)).map(c => c.type as HyroxStation);
+  return {
+    ...w,
+    d: hyroxAssessmentText(kept, leftOut),
+    estimatedDurationMin: hyroxAssessmentMin(kept),
+    musculoTendonLoad: kept.reduce((sum, c) => sum + c.mtl, 0),
+    hyroxComponents: kept,
   };
 }
