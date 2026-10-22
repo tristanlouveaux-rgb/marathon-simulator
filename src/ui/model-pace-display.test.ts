@@ -96,6 +96,9 @@ describe('LT and threshold pace read the same whole second', () => {
   it('HYROX critical-pace detail at s.lt 299.6 reads Threshold pace 5:00/km, never 4:60', () => {
     seedLt(299.6, {
       eventType: 'hyrox',
+      // A measured runner (watch VO2max): the derivation card needs the VDOT
+      // branch, which a bare baseline no longer reaches (D5, 2026-10-21).
+      vo2: 50,
       hyroxConfig: {
         format: 'open_singles', athleteBand: 'intermediate', hyroxPhase: 'base',
         stationAccess: { sled: 'always', skiErg: true, rowErg: true },

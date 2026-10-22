@@ -21,6 +21,11 @@ import { applyTriSuggestions } from './tri-suggestion-apply';
 import { markTriSuggestionsHandled } from './tri-suggestion-handled';
 import type { TriSuggestionMod } from './tri-suggestion-aggregator';
 import type { SimulatorState } from '@/types/state';
+import { TL_PER_MIN } from '@/constants';
+import { computeWeekRawTSS } from './fitness-model';
+import { isTriQualitySession } from './tri-suggestion-apply';
+import { generateTriathlonPlan } from '@/workouts/plan_engine.triathlon';
+import { getDefaultState } from '@/state/store';
 
 // s.w is 1-based (store.ts default w: 1): the current week is wks[s.w - 1], so
 // these fixtures put the week under test at wks[0] with w: 1.
@@ -179,6 +184,41 @@ describe('detectCrossTrainingOverload — recommended discipline (run-anchored)'
     expect(r!.recommendedDiscipline).toBe('bike');
   });
 
+  // Never a pop-up with nothing to act on (Tristan, 2026-10-21). A 62 TSS load
+  // on a 400 TSS week (15.5%) unlocks a 58.2 TSS budget. The threshold run's
+  // downgrade takes 69 and its swap 137: neither fits, and quality sessions are
+  // never trimmed, so run has work but no change.
+  const thresholdRun = { id: 'mon-r', t: 'threshold', n: 'Run threshold', d: '90min', r: 8, discipline: 'run', aerobic: 150, anaerobic: 50, dayOfWeek: 0, estimatedDurationMin: 90 };
+  const longRide = { id: 'sat-b', t: 'bike_endurance', n: 'Long bike', d: '4h', r: 5, discipline: 'bike', aerobic: 180, anaerobic: 20, dayOfWeek: 5, estimatedDurationMin: 240 };
+
+  it('passes over a discipline with work but no change, to the next in affinity order with one', () => {
+    const s = state({
+      wks: [{
+        triWorkouts: [thresholdRun, longRide],
+        adhocWorkouts: [{ id: 'tennis', t: 'cross', n: 'tennis', d: '90min', r: 6, iTrimp: 62 * 150 }],
+      }] as any,
+    });
+    const r = detectCrossTrainingOverload(s, 0)!;
+    expect(r).not.toBeNull();
+    expect(r.options.run.remainingTSS).toBe(200);
+    expect(r.options.run.reduceMods).toEqual([]);
+    expect(r.options.run.replaceMods).toEqual([]);
+    expect(r.recommendedDiscipline).toBe('bike');
+    expect(r.options.bike.reduceMods).toMatchObject([{ workoutId: 'sat-b', action: 'trim_volume' }]);
+  });
+
+  it('returns null when no discipline has a change, even with planned work left', () => {
+    // Same week and load share without the ride: 200 TSS planned, 31 TSS of
+    // tennis (15.5%, budget 30.1). The run's downgrade (69) does not fit.
+    const s = state({
+      wks: [{
+        triWorkouts: [thresholdRun],
+        adhocWorkouts: [{ id: 'tennis', t: 'cross', n: 'tennis', d: '45min', r: 6, iTrimp: 31 * 150 }],
+      }] as any,
+    });
+    expect(detectCrossTrainingOverload(s, 0)).toBeNull();
+  });
+
   it('returns null when ALL disciplines have no remaining TSS', () => {
     // Every workout completed → no recommendation possible.
     const wk = canonicalTriWeek();
@@ -249,6 +289,26 @@ describe('detectCrossTrainingOverload — per-discipline options', () => {
     expect(swap).toBeDefined();
     expect(swap!.workoutId).toBe('mon-r');
   });
+
+  it('Replace & Reduce is empty when it would hold no swap (it would repeat Reduce)', () => {
+    // Bike holds only the long endurance ride: nothing to swap, so the replace
+    // set would be the same trim as Reduce. Run holds the threshold session.
+    const s = state({
+      wks: [{
+        ...canonicalTriWeek(),
+        adhocWorkouts: [{ id: 'big', t: 'cross', n: 'tennis', d: '180min', r: 7, iTrimp: 30000 }],
+      }] as any,
+    });
+    const r = detectCrossTrainingOverload(s, 0)!;
+    expect(r.options.bike.reduceMods.length).toBeGreaterThan(0);
+    expect(r.options.bike.replaceMods).toEqual([]);
+    expect(r.options.run.replaceMods.some(m => m.action === 'swap_easy')).toBe(true);
+    // Every non-empty replace set holds a swap.
+    for (const d of ['swim', 'bike', 'run'] as const) {
+      const set = r.options[d].replaceMods;
+      if (set.length) expect(set.some(m => m.action === 'swap_easy'), d).toBe(true);
+    }
+  });
 });
 
 describe('detectCrossTrainingOverload — membership filter (plan-vs-extra)', () => {
@@ -277,6 +337,215 @@ describe('detectCrossTrainingOverload — membership filter (plan-vs-extra)', ()
       }] as any,
     });
     expect(detectCrossTrainingOverload(s, 0)).not.toBeNull();
+  });
+});
+
+describe('detectCrossTrainingOverload — planned adhoc sessions are plan (isPlannedAdhocId)', () => {
+  // adhocWorkouts also holds sessions injected into the plan: user-added
+  // (adhoc-), injury capability offers (adhoc-cap-, adhoc-strength-), holiday
+  // replacements (holiday-) and benchmark check-ins (benchmark-). Signal B
+  // skips them; so does the detector, with any done record under the same id.
+  for (const id of ['adhoc-1', 'adhoc-cap-bike-1', 'adhoc-strength-1', 'holiday-run-1', 'benchmark-5k-1']) {
+    it(`${id} with a stamped load adds nothing`, () => {
+      const s = state({
+        wks: [{
+          ...canonicalTriWeek(),
+          adhocWorkouts: [{ id, t: 'cross', n: 'Planned session', d: '90min', r: 6, aerobic: 170, anaerobic: 30 }],
+        }] as any,
+      });
+      expect(detectCrossTrainingOverload(s, 0)).toBeNull();
+    });
+
+    it(`${id} with a Mark as Done record under the same key adds nothing`, () => {
+      const s = state({
+        wks: [{
+          ...canonicalTriWeek(),
+          adhocWorkouts: [{ id, t: 'cross', n: 'Planned session', d: '90min', r: 6 }],
+          garminActuals: {
+            [id]: {
+              garminId: `manual-${id}`, startTime: '2026-10-20T12:00:00.000Z', durationSec: 5400, distanceKm: 0,
+              avgPaceSecKm: null, avgHR: 150, maxHR: 170, calories: null, iTrimp: 30000, activityType: 'TENNIS',
+            },
+          },
+        }] as any,
+      });
+      expect(detectCrossTrainingOverload(s, 0)).toBeNull();
+    });
+  }
+
+  it('a synced activity beside a planned adhoc session still counts', () => {
+    const s = state({
+      wks: [{
+        ...canonicalTriWeek(),
+        adhocWorkouts: [
+          { id: 'holiday-run-1', t: 'easy', n: 'Holiday run', d: '60min', r: 4, aerobic: 55, anaerobic: 0 },
+          { id: 'garmin-tennis-1', t: 'cross', n: 'tennis', d: '90min', r: 6, iTrimp: 15000 },
+        ],
+      }] as any,
+    });
+    expect(detectCrossTrainingOverload(s, 0)?.crossTrainingTSS).toBe(100);
+  });
+});
+
+describe('detectCrossTrainingOverload — activities with no stored load are valued (Signal B rule)', () => {
+  // A GPS-recorded extra run: the adhoc entry carries no load and its activity
+  // record has iTrimp null (recording-handler saveAsAdhoc, buildGpsRunActual).
+  // It counted 0: pass 1 marked the id counted, pass 2 skipped the record.
+  const gpsRun = (id: string, min: number, rpe: number) => ({
+    adhoc: { id, n: 'Run', d: `${(min / 6).toFixed(1)}km`, r: 5, t: 'easy' },
+    actual: {
+      garminId: `inapp-${id}`, startTime: '2026-10-20T07:00:00.000Z', distanceKm: min / 6, durationSec: min * 60,
+      avgPaceSecKm: 360, avgHR: null, maxHR: null, calories: null, iTrimp: null, hrZones: null,
+      activityType: null, plannedType: null, rpe, displayName: 'Run',
+    },
+  });
+
+  it('a 90-min GPS extra run rated 5 counts 90 x TL_PER_MIN[5]', () => {
+    const r1 = gpsRun('9b2c7f0e-gps', 90, 5);
+    const wk = {
+      ...canonicalTriWeek(),
+      adhocWorkouts: [r1.adhoc],
+      garminActuals: { [r1.adhoc.id]: r1.actual },
+      rated: { [r1.adhoc.id]: 5 },
+    };
+    const r = detectCrossTrainingOverload(state({ wks: [wk] as any }), 0);
+    expect(r).not.toBeNull();
+    expect(r!.crossTrainingTSS).toBe(Math.round(90 * TL_PER_MIN[5])); // 104
+    expect(r!.recommendedDiscipline).toBe('run'); // an extra run is run-affinity
+  });
+
+  it('the rating sets the row: the same run rated 7 counts 90 x TL_PER_MIN[7]', () => {
+    const r1 = gpsRun('9b2c7f0e-gps', 90, 7);
+    const wk = {
+      ...canonicalTriWeek(),
+      adhocWorkouts: [r1.adhoc],
+      garminActuals: { [r1.adhoc.id]: r1.actual },
+      rated: { [r1.adhoc.id]: 7 },
+    };
+    expect(detectCrossTrainingOverload(state({ wks: [wk] as any }), 0)?.crossTrainingTSS)
+      .toBe(Math.round(90 * TL_PER_MIN[7]));
+  });
+
+  it('Signal B and the detector give an unmeasured activity the same figure', () => {
+    const r1 = gpsRun('9b2c7f0e-gps', 90, 5);
+    const extras = { adhocWorkouts: [r1.adhoc], garminActuals: { [r1.adhoc.id]: r1.actual }, rated: { [r1.adhoc.id]: 5 } };
+    const signalB = computeWeekRawTSS({ w: 1, ...extras } as any, extras.rated);
+    const r = detectCrossTrainingOverload(state({ wks: [{ ...canonicalTriWeek(), ...extras }] as any }), 0);
+    expect(r!.crossTrainingTSS).toBe(signalB);
+  });
+
+  it('a manual entry with no load and no record counts its minutes at its RPE', () => {
+    const wk = {
+      ...canonicalTriWeek(),
+      adhocWorkouts: [{ id: 'manual-legacy-1', t: 'cross', n: 'padel', d: '90min', r: 6, rpe: 6 }],
+    };
+    expect(detectCrossTrainingOverload(state({ wks: [wk] as any }), 0)?.crossTrainingTSS)
+      .toBe(Math.round(90 * TL_PER_MIN[6]));
+  });
+
+  it('an activity record with no iTRIMP and no adhoc twin counts its minutes', () => {
+    const wk = {
+      ...canonicalTriWeek(),
+      garminActuals: {
+        'garmin-tennis-nohr': {
+          garminId: 'tennis-nohr', startTime: '2026-10-20T18:00:00.000Z', durationSec: 5400, distanceKm: 0,
+          avgPaceSecKm: null, avgHR: null, maxHR: null, calories: null, iTrimp: null, activityType: 'TENNIS',
+        },
+      },
+    };
+    expect(detectCrossTrainingOverload(state({ wks: [wk] as any }), 0)?.crossTrainingTSS)
+      .toBe(Math.round(90 * TL_PER_MIN[5]));
+  });
+
+  it('a rated gym session with heart rate counts the strength override, as Signal B does (D9)', () => {
+    // An activity record with no adhoc twin: pass 2. Its HR-based iTRIMP is
+    // small (20 TSS); Signal B counts 60 x TL_PER_MIN[7] for a rated strength
+    // session, and so does the detector now.
+    const extras = {
+      garminActuals: {
+        'garmin-gym-1': {
+          garminId: 'gym-1', startTime: '2026-10-20T18:00:00.000Z', durationSec: 3600, distanceKm: 0,
+          avgPaceSecKm: null, avgHR: 120, maxHR: 150, calories: null, iTrimp: 3000, activityType: 'STRENGTH_TRAINING',
+        },
+      },
+      rated: { 'garmin-gym-1': 7 },
+    };
+    const r = detectCrossTrainingOverload(state({ wks: [{ ...canonicalTriWeek(), ...extras }] as any }), 0);
+    expect(r!.crossTrainingTSS).toBe(Math.round(60 * TL_PER_MIN[7])); // 107, was 20
+    expect(r!.crossTrainingTSS).toBe(computeWeekRawTSS({ w: 1, ...extras } as any, extras.rated as any));
+  });
+
+  it("the activity record's Signal B value wins over the entry's stamped load (E3)", () => {
+    // The entry's stamped aerobic + anaerobic (100) used to win; Signal B skips
+    // the entry when its record exists and values the record (90 min, unrated).
+    const extras = {
+      adhocWorkouts: [{ id: 'garmin-ride-1', t: 'cross', n: 'cycling', d: '90min', r: 6, aerobic: 85, anaerobic: 15 }],
+      garminActuals: {
+        'garmin-ride-1': {
+          garminId: 'ride-1', startTime: '2026-10-20T08:00:00.000Z', durationSec: 5400, distanceKm: 40,
+          avgPaceSecKm: null, avgHR: null, maxHR: null, calories: null, iTrimp: null, activityType: 'CYCLING',
+        },
+      },
+    };
+    const r = detectCrossTrainingOverload(state({ wks: [{ ...canonicalTriWeek(), ...extras }] as any }), 0);
+    expect(r!.crossTrainingTSS).toBe(Math.round(90 * TL_PER_MIN[5]));
+    expect(r!.crossTrainingTSS).toBe(computeWeekRawTSS({ w: 1, ...extras } as any, {}));
+  });
+});
+
+// The detector and Signal B value every activity alike (2026-10-22, E3). Pass 1
+// read the adhoc entry's own iTRIMP, then its stamped load, before its record,
+// so these synced and legacy cases disagreed: measured over 1,103 detector
+// fires, 12 of 153 rated strength twins, 174 of 201 re-rated HR-less twins,
+// 140 of 160 Strava-upgraded twins and 23 of 199 legacy stamped entries.
+describe('detectCrossTrainingOverload — the detector and Signal B agree on every activity (E3)', () => {
+  const rec = (garminId: string, day: string, min: number, iTrimp: number | null, activityType: string) => ({
+    garminId, startTime: `2026-10-${day}T08:00:00.000Z`, durationSec: min * 60, distanceKm: 0,
+    avgPaceSecKm: null, avgHR: iTrimp ? 120 : null, maxHR: iTrimp ? 150 : null, calories: null, iTrimp, activityType,
+  });
+  const cases: Array<[string, { adhocWorkouts?: any[]; garminActuals?: Record<string, any>; rated?: Record<string, number> }]> = [
+    ['a synced strength session with heart rate, rated 7 (strength override)', {
+      adhocWorkouts: [{ id: 'garmin-gym-2', t: 'cross', n: 'strength', d: '80min', r: 5, iTrimp: 3000 }],
+      garminActuals: { 'garmin-gym-2': rec('gym-2', '19', 80, 3000, 'STRENGTH_TRAINING') },
+      rated: { 'garmin-gym-2': 7 },
+    }],
+    ['a synced HR-less session re-rated 8 after ingest at RPE 5', {
+      adhocWorkouts: [{ id: 'garmin-row-1', t: 'cross', n: 'rowing', d: '75min', r: 5, rpe: 5, aerobic: 75, anaerobic: 0 }],
+      garminActuals: { 'garmin-row-1': rec('row-1', '20', 75, null, 'ROWING') },
+      rated: { 'garmin-row-1': 8 },
+    }],
+    ['a Strava-upgraded twin (the entry keeps the Garmin iTRIMP)', {
+      adhocWorkouts: [{ id: 'garmin-ride-9', t: 'cross', n: 'cycling', d: '120min', r: 5, iTrimp: 9000 }],
+      garminActuals: { 'garmin-ride-9': rec('strava-123', '21', 120, 16500, 'CYCLING') },
+    }],
+    ['a legacy synced entry with a stamped load and no record', {
+      adhocWorkouts: [{ id: 'garmin-legacy-1', t: 'cross', n: 'padel', d: '100min', r: 6, rpe: 6, aerobic: 70, anaerobic: 10, garminTimestamp: '2026-10-22T08:00:00.000Z' }],
+    }],
+    ['a manual entry', {
+      adhocWorkouts: [{ id: 'manual-1', t: 'cross', n: 'hiking', d: '120min', r: 4, rpe: 4 }],
+    }],
+    ['an activity record with no adhoc twin, rated 6', {
+      garminActuals: { 'garmin-tennis-x': rec('tennis-x', '23', 90, null, 'TENNIS') },
+      rated: { 'garmin-tennis-x': 6 },
+    }],
+  ];
+
+  for (const [label, extras] of cases) {
+    it(label, () => {
+      const r = detectCrossTrainingOverload(state({ wks: [{ ...canonicalTriWeek(), ...extras }] as any }), 0);
+      expect(r, 'the activity alone is over the overload threshold').not.toBeNull();
+      expect(r!.crossTrainingTSS).toBe(computeWeekRawTSS({ w: 1, ...extras } as any, (extras.rated ?? {}) as any));
+    });
+  }
+
+  it('all six in one week (separate days, no double-day bonus)', () => {
+    const merged = {
+      adhocWorkouts: cases.flatMap(([, e]) => e.adhocWorkouts ?? []),
+      garminActuals: Object.assign({}, ...cases.map(([, e]) => e.garminActuals ?? {})),
+      rated: Object.assign({}, ...cases.map(([, e]) => e.rated ?? {})),
+    };
+    const r = detectCrossTrainingOverload(state({ wks: [{ ...canonicalTriWeek(), ...merged }] as any }), 0);
+    expect(r!.crossTrainingTSS).toBe(computeWeekRawTSS({ w: 1, ...merged } as any, merged.rated));
   });
 });
 
@@ -509,5 +778,47 @@ describe('detectCrossTrainingOverload — answered proposals', () => {
     const next = detectCrossTrainingOverload(s, 0);
     expect(next).not.toBeNull();
     expect(next!.crossTrainingTSS).toBe(260); // 40 + 220, the 220 answered earlier is out
+  });
+});
+
+// ─── Quality sessions are never trimmed (Tristan, 2026-10-21, D3) ──────────
+// The builders' rule, kept by decision: a quality session takes a downgrade or
+// a swap, never a trim. When neither fits the budget the session gets no
+// proposal (no trim fallback), and the pop-up moves to a discipline with a
+// change (D1).
+
+describe('detectCrossTrainingOverload — quality sessions are never trimmed', () => {
+  it('generated plans: every proposed trim targets a non-quality session', () => {
+    let trims = 0;
+    for (const distance of ['olympic', 'ironman']) {
+      const base = {
+        ...getDefaultState(), eventType: 'triathlon', w: 1, tw: 20, v: 50,
+        pac: { e: 300, t: 250, i: 230, m: 275, r: 200 }, wks: [],
+        triConfig: {
+          distance, timeAvailableHoursPerWeek: 10, volumeSplit: { swim: 0.175, bike: 0.475, run: 0.35 },
+          skillRating: { swim: 3, bike: 3, run: 3 }, bike: { hasPowerMeter: true, ftp: 220 }, swim: { cssSecPer100m: 100 }, weeksToRace: 20,
+        },
+      } as unknown as SimulatorState;
+      base.wks = generateTriathlonPlan(base);
+      for (let wi = 0; wi < base.wks.length; wi += 3) {
+        for (const pct of [0.16, 0.45]) for (const sport of ['tennis', 'cycling', 'swimming']) {
+          const s = structuredClone(base);
+          s.w = wi + 1;
+          const planned = (s.wks[wi].triWorkouts ?? []).reduce((a, w) => a + (w.aerobic ?? 0) + (w.anaerobic ?? 0), 0);
+          s.wks[wi].adhocWorkouts = [{ id: 'xt', t: 'cross', n: sport, d: '90min', r: 6, iTrimp: pct * planned * 150 } as any];
+          const o = detectCrossTrainingOverload(s, 0);
+          if (!o) continue;
+          const byId = new Map((s.wks[wi].triWorkouts ?? []).map(w => [w.id, w]));
+          for (const d of ['swim', 'bike', 'run'] as const) {
+            for (const m of [...o.options[d].reduceMods, ...o.options[d].replaceMods]) {
+              if (m.action !== 'trim_volume') continue;
+              trims += 1;
+              expect(isTriQualitySession(byId.get(m.workoutId)!), `${distance} wk${wi + 1} ${m.workoutLabel}`).toBe(false);
+            }
+          }
+        }
+      }
+    }
+    expect(trims).toBeGreaterThan(50);
   });
 });

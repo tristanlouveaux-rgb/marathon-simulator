@@ -38,6 +38,7 @@ import {
   buildSportLegend as buildSportLegendShared,
 } from '@/ui/sport-mix-donut';
 import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
+import { hyroxWeekLine, hyroxRunPaceSourceLabel, hyroxPhaseLabel, hyroxCurrentWeekPhase } from './forecast-labels';
 
 export type HyroxChipKey = 'you' | 'runpace' | 'stations' | 'training' | 'venue';
 
@@ -286,6 +287,8 @@ function pageRunPace(s: SimulatorState): { title: string; subhead: string; body:
     ? `Updated from your VDOT (${vdot.toFixed(1)}). Recalculates from your runs as fitness changes.`
     : prediction.runPaceSource === 'seed'
     ? `Median run pace of the ${(s.hyroxConfig?.athleteBand ?? 'current').replace(/_/g, ' ')} band in the HYROX results. Sync a recent run and Mosaic anchors pace on your VDOT instead.`
+    : prediction.runPaceSource === 'race'
+    ? `Median run pace of the ${(s.hyroxConfig?.athleteBand ?? 'current').replace(/_/g, ' ')} band, adjusted to the run time of your last HYROX race. Sync a recent run and Mosaic anchors pace on your VDOT instead.`
     : 'Set manually during onboarding. Updates from runs when better data is available.';
 
   const vdotSamples = (s.vdotHistory ?? [])
@@ -322,7 +325,7 @@ function pageRunPace(s: SimulatorState): { title: string; subhead: string; body:
       ${vdotChart}
       ${statRow('Total run time', fmtMmSs(prediction.runSec))}
       ${cpRow}
-      ${statRow('Source', prediction.runPaceSource === 'derived' ? 'Derived from VDOT' : prediction.runPaceSource === 'seed' ? 'Band median' : 'Set manually')}
+      ${statRow('Source', hyroxRunPaceSourceLabel(prediction.runPaceSource))}
       ${cpLink}
     </div>
 
@@ -443,7 +446,10 @@ function pageStations(s: SimulatorState): { title: string; subhead: string; body
 
 function pageTraining(s: SimulatorState): { title: string; subhead: string; body: string } {
   const hx = s.hyroxConfig;
-  const currentWeekIdx = s.w ?? 0;
+  // s.w is 1-based: the current week is wks[s.w - 1]; wks[s.w] is next week.
+  // Reading s.w as the index showed next week's phase, ringed next week as
+  // current, printed "Week 2" in week 1 and one week too few to go.
+  const currentWeekIdx = Math.max(0, (s.w ?? 1) - 1);
   const totalWeeks = s.tw ?? 0;
   const weeksRemaining = Math.max(0, totalWeeks - currentWeekIdx - 1);
   const wks = s.wks ?? [];
@@ -457,12 +463,9 @@ function pageTraining(s: SimulatorState): { title: string; subhead: string; body
     peak:  '#DC2626',
     taper: '#16A34A',
   };
-  const phaseLabel = (ph: string | undefined): string => {
-    if (!ph) return '—';
-    return ph[0].toUpperCase() + ph.slice(1);
-  };
-  const currentPhase = currentWk?.ph as string | undefined;
-  const currentPhaseLabel = phaseLabel(currentPhase);
+  // The chip on the Forecast reads the same phase (hyroxCurrentWeekPhase).
+  const currentPhase = hyroxCurrentWeekPhase(wks, s.w);
+  const currentPhaseLabel = hyroxPhaseLabel(currentPhase);
   const currentPhaseColor = currentPhase ? PHASE_COLORS[currentPhase] ?? TEXT_M : TEXT_M;
 
   // Count completed sessions per week from `garminActuals` (the canonical
@@ -597,7 +600,7 @@ function pageTraining(s: SimulatorState): { title: string; subhead: string; body
           <div style="font-size:28px;font-weight:600;color:${currentPhaseColor};letter-spacing:-0.01em">${escapeText(currentPhaseLabel)}</div>
         </div>
         <div style="text-align:right">
-          <div style="font-size:11px;color:${TEXT_L}">Week ${currentWeekIdx + 1} of ${totalWeeks || '—'}</div>
+          <div style="font-size:11px;color:${TEXT_L}">${hyroxWeekLine(s.w, totalWeeks) || `Week ${currentWeekIdx + 1}`}</div>
           ${weeksRemaining > 0 ? `<div style="font-size:11px;color:${TEXT_L};margin-top:2px">${weeksRemaining} weeks to go</div>` : ''}
         </div>
       </div>

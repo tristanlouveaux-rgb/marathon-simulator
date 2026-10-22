@@ -6,6 +6,8 @@ import { TL_PER_MIN, plannedTssPerMin } from '@/constants';
 import { isHardWorkout } from '@/workouts/scheduler';
 import { isLongRun } from '@/workouts/long-run';
 import { signalARunSpec } from '@/cross-training/activities';
+import { isHighIntensity as isHyroxHardSession, isHyroxLongRun } from '@/workouts/scheduler.hyrox';
+import { isTriQualitySession } from '@/calculations/tri-suggestion-apply';
 
 /** Running-plan workout types that are strength sessions (generator.ts gym templates, injury rehab). */
 const GYM_PLANNED_TYPES = new Set(['gym', 'strength']);
@@ -43,8 +45,10 @@ export interface PlannedDayWorkout {
   plannedDurationMin: number;
   isHard: boolean;
   status?: string;
-  /** Running only: the workout fills the week's long-run slot (isLongRun), so a
-   *  fast-finish long run (type 'progressive') still reads as the long run. */
+  /** The workout is the week's long run: running and triathlon isLongRun (a
+   *  fast-finish long run, type 'progressive', still reads as the long run),
+   *  HYROX isHyroxLongRun (hyrox_run_easy in the long-run slot). The coach's
+   *  poor-sleep line suggests shortening it (E8). */
   longRun?: boolean;
 }
 
@@ -69,6 +73,32 @@ export interface PlannedDayTSSContext {
 function isHardPlannedType(t: string): boolean {
   if (isHardWorkout(t)) return true;
   return t.split('_').some(tok => isHardWorkout(tok));
+}
+
+/**
+ * Hardness of a session in the stored-plan modes (triathlon, cycling, HYROX),
+ * from each mode's own classifier, so the Home coach line and the readiness
+ * look-ahead call the same sessions hard as the plan does. The running token
+ * check (isHardPlannedType) missed most of them: a HYROX Tempo Run, a station
+ * density session or a brick read as easy ("Easy effort today allows
+ * recovery", ISSUE-406 (b)); so did a triathlon brick, sweet spot, over-under,
+ * tempo run or hills session.
+ *  - HYROX: isHighIntensity (scheduler.hyrox.ts), the scheduler's hard-day
+ *    set: quality runs, bricks except the light secondary brick, race-pace
+ *    station sessions (and race simulations once lane h2b adds them there);
+ *    plus the long run (isHyroxLongRun), which the running token check calls
+ *    hard in running and triathlon ('long'), so the three modes mirror (D13,
+ *    2026-10-21). The scheduler's spacing set is unchanged: the long run is
+ *    easy for spacing. The light secondary brick stays easy.
+ *  - Triathlon and cycling: isTriQualitySession (tri-suggestion-apply.ts),
+ *    the quality classifier the readiness row and the overload builders share.
+ * The running token check still applies on top, so no session it called hard
+ * becomes easy (a user-added threshold run in either mode).
+ */
+function isHardStoredPlanSession(s: SimulatorState, w: any): boolean {
+  if (isHardPlannedType(w.t ?? '')) return true;
+  if (s.eventType === 'hyrox') return isHyroxHardSession(w) || isHyroxLongRun(w);
+  return isTriQualitySession(w);
 }
 
 /** Synced actuals (Garmin/Strava-ingested adhocs) are history, not plan intent. */
@@ -133,8 +163,9 @@ export function getPlannedDayTSSContext(s: SimulatorState, viewWeek: number): Pl
           description: w.d ?? null,
           plannedTSS: Math.round(tss),
           plannedDurationMin: Math.round(durMin),
-          isHard: isHardPlannedType(w.t ?? ''),
+          isHard: isHardStoredPlanSession(s, w),
           status: w.status,
+          ...((s.eventType === 'hyrox' ? isHyroxLongRun(w) : isLongRun(w)) ? { longRun: true } : {}),
         });
       }
     } else {

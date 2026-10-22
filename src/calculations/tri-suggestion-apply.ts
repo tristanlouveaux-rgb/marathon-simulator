@@ -43,8 +43,10 @@
  * with it, so they do not propose those changes. isTriQualitySession is the
  * one quality classifier the detectors pick a downgrade with, and it counts
  * every OFF_LADDER_DOWNGRADE_RUNG kind, so the classifier and the gate read the
- * same table. triDowngradeTssReduction is the TSS a downgrade takes off, priced
- * by the same landing rung and loadForRung the apply step stamps.
+ * same table. triSuggestionTssReduction is the TSS an accepted change takes off
+ * the plan, priced by the same landing type or rung, minutes and load rule the
+ * apply step writes (triDowngradeTssReduction, triSwapEasyTssReduction,
+ * triTrimTssReduction), so the overload modal's "-N TSS" is the applied change.
  *
  * Every accepted change re-prices aerobic/anaerobic, so the plan header, the
  * Home day target (getPlannedDayTSSContext) and the overload detector read the
@@ -72,8 +74,8 @@ export interface ApplyResult {
 
 /** Swap-to-easy keeps 75% of the planned minutes (pre-existing cut, unchanged). */
 const SWAP_EASY_DURATION_FACTOR = 0.75;
-/** Volume-ramp trim keeps 85% of the planned minutes (pre-existing cut, unchanged;
- *  the overload detector's TRIM_FRACTION 0.15 sizes the same action). */
+/** A trim keeps 85% of the planned minutes (pre-existing cut, unchanged). The
+ *  overload detector prices a trim from this same cut (triTrimTssReduction). */
 const TRIM_DURATION_FACTOR = 0.85;
 
 /** The easy rung a swap lands on, per discipline. Same aerobic default the
@@ -120,8 +122,8 @@ export function applyTriSuggestions(state: SimulatorState, mods: TriSuggestionMo
         ok = applyDowngrade(state, week, workout, mod);
         break;
       case 'trim_volume':
-        // 15% shorter at the same intensity (volume-ramp violations).
-        ok = applyTrim(workout);
+        // 15% shorter at the same intensity (volume ramp, cross-training overload).
+        ok = applyTrim(workout, mod);
         break;
     }
     if (ok) {
@@ -278,6 +280,108 @@ export function triDowngradeTssReduction(w: Workout): number {
   const stored = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
   if (!Number.isFinite(landing) || stored <= 0) return 0;
   return Math.max(0, stored - landing);
+}
+
+/** The run type a swap to easy lands on: easy ('long' for the long-run slot),
+ *  never up (a session already at or below easy keeps its type). */
+function swapEasyRunType(w: Workout): string {
+  const easyT = isLongRun(w) ? 'long' : 'easy';
+  return runPaceRung(w.t) > runPaceRung(easyT) ? easyT : w.t;
+}
+
+/** The bike / swim rung a swap to easy lands on: SWAP_EASY_RUNG, never up (a
+ *  session already at or below it keeps its rung). */
+function swapEasyRung(w: Workout, d: 'bike' | 'swim'): Rung {
+  const ladder = ladderFor(d);
+  const cur = currentRungIdx(w, d);
+  const easyIdx = ladder.findIndex(r => r.key === SWAP_EASY_RUNG[d]);
+  return cur > easyIdx ? ladder[easyIdx] : ladder[cur];
+}
+
+/** Minutes a swap to easy leaves (SWAP_EASY_DURATION_FACTOR, rounded). */
+function swapEasyMinutes(w: Workout): number {
+  return Math.round(minutesOf(w) * SWAP_EASY_DURATION_FACTOR);
+}
+
+/**
+ * The load applySwapEasy stamps on the session: the landing run type
+ * (swapEasyRunType, loadForTriRun) or bike / swim rung (swapEasyRung,
+ * loadForRung) at the shortened minutes (swapEasyMinutes). Null when no swap
+ * applies (canApplyTriSuggestion) or the shortened minutes round to 0 (the
+ * apply step then leaves the load as it is).
+ */
+function swapEasyLandingLoad(w: Workout): PlannedLoad | null {
+  if (!canApplyTriSuggestion(w, 'swap_easy')) return null;
+  const d = ladderDiscipline(w);
+  const minutes = swapEasyMinutes(w);
+  if (!d || !(minutes > 0)) return null;
+  if (d === 'run') return loadForTriRun(swapEasyRunType(w), minutes);
+  return loadForRung(swapEasyRung(w, d).key, minutes);
+}
+
+/**
+ * Planned TSS an accepted swap_easy takes off the session: its stored
+ * aerobic + anaerobic minus the load applySwapEasy stamps (swapEasyLandingLoad,
+ * the easy type or rung at 75% of the minutes). The same rule as
+ * triDowngradeTssReduction, so the overload modal's "-N TSS" is the change the
+ * plan receives. It replaced a flat 50% of the stored load, which understated
+ * the cut: a 60-min threshold run (107 TSS at TL_PER_MIN[7] 1.78/min) lands on
+ * 45 min easy (41 TSS at TL_PER_MIN[4] 0.92/min), 66 TSS or 62% of its load.
+ * 0 when no swap applies or the landing load is not below the stored one.
+ */
+export function triSwapEasyTssReduction(w: Workout): number {
+  const landing = totalOf(swapEasyLandingLoad(w));
+  const stored = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
+  if (!Number.isFinite(landing) || stored <= 0) return 0;
+  return Math.max(0, stored - landing);
+}
+
+/**
+ * The minutes and load applyTrim writes: TRIM_DURATION_FACTOR of the planned
+ * minutes, rounded, and each stored load share scaled by the same ratio and
+ * rounded (load is proportional to duration at a fixed intensity, the Adjust
+ * overlay's duration-only rule, workout-adjust-overlay.ts applyObjectScale). A
+ * share the session does not carry stays undefined.
+ */
+function trimmedPrescription(w: Workout): { minutes: number; aerobic?: number; anaerobic?: number } {
+  const oldMin = minutesOf(w);
+  const minutes = Math.round(oldMin * TRIM_DURATION_FACTOR);
+  const f = oldMin > 0 ? minutes / oldMin : 1;
+  return {
+    minutes,
+    aerobic: typeof w.aerobic === 'number' ? Math.round(w.aerobic * f) : undefined,
+    anaerobic: typeof w.anaerobic === 'number' ? Math.round(w.anaerobic * f) : undefined,
+  };
+}
+
+/**
+ * Planned TSS an accepted trim_volume takes off the session: its stored load
+ * minus the load applyTrim writes (trimmedPrescription). Close to 15% of the
+ * stored load, but exact: the minutes round, so a 45-min session keeps 38 min
+ * (15.6% off), and each share rounds. 0 when no trim applies.
+ */
+export function triTrimTssReduction(w: Workout): number {
+  if (!canApplyTriSuggestion(w, 'trim_volume')) return 0;
+  const stored = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
+  const next = trimmedPrescription(w);
+  return Math.max(0, stored - ((next.aerobic ?? 0) + (next.anaerobic ?? 0)));
+}
+
+/**
+ * Planned TSS accepting `action` on this session takes off the plan, priced by
+ * the apply step's own re-pricing (one function per action above). The
+ * cross-training overload builders book this figure against their budget and
+ * show it in the modal, so the "-N TSS" a user accepts is the change the plan
+ * header then shows (Load Currency Law: a credit can't exceed its load, and the
+ * credit is what Apply takes). 0 when the apply step would not change the
+ * session or would not lower its load.
+ */
+export function triSuggestionTssReduction(w: Workout, action: TriSuggestionMod['action']): number {
+  switch (action) {
+    case 'downgrade_today': return triDowngradeTssReduction(w);
+    case 'swap_easy': return triSwapEasyTssReduction(w);
+    case 'trim_volume': return triTrimTssReduction(w);
+  }
 }
 
 /** Type substrings marking a tri / cycling session as quality. The list both
@@ -512,26 +616,22 @@ function swapReason(source: TriSuggestionMod['source']): string {
 function applySwapEasy(state: SimulatorState, week: Week, w: Workout, mod: TriSuggestionMod): boolean {
   const d = ladderDiscipline(w);
   if (!d) return false;
-  const longRun = isLongRun(w);
   const oldMin = minutesOf(w);
-  const newMin = Math.round(oldMin * SWAP_EASY_DURATION_FACTOR);
+  const newMin = swapEasyMinutes(w);
 
+  // Landing type / rung and minutes from the same helpers swapEasyLandingLoad
+  // prices with (triSwapEasyTssReduction), so the booked cut is the applied one.
   const oldT = w.t;
   if (d === 'run') {
-    const rung = runPaceRung(w.t);
     // Easy rung ('long' for the long-run slot). Never up: a session already at
     // or below easy keeps its type and only loses the minutes.
-    const easyT = longRun ? 'long' : 'easy';
-    const newT = rung > runPaceRung(easyT) ? easyT : w.t;
+    const newT = swapEasyRunType(w);
     stampOriginal(w);
     if (newMin > 0) w.estimatedDurationMin = newMin;
     if (newMin > 0) scaleBaselineMinutes(w, SWAP_EASY_DURATION_FACTOR, oldMin);
     setRunType(state, w, newT, newMin);
   } else {
-    const ladder = ladderFor(d);
-    const cur = currentRungIdx(w, d);
-    const easyIdx = ladder.findIndex(r => r.key === SWAP_EASY_RUNG[d]);
-    const to = cur > easyIdx ? ladder[easyIdx] : ladder[cur];
+    const to = swapEasyRung(w, d);
     stampOriginal(w);
     if (newMin > 0) w.estimatedDurationMin = newMin;
     if (newMin > 0) scaleBaselineMinutes(w, SWAP_EASY_DURATION_FACTOR, oldMin);
@@ -569,16 +669,15 @@ function applyDowngrade(state: SimulatorState, week: Week, w: Workout, mod: TriS
   return true;
 }
 
-function applyTrim(w: Workout): boolean {
+function applyTrim(w: Workout, mod: TriSuggestionMod): boolean {
   const oldMin = minutesOf(w);
-  const newMin = Math.round(oldMin * TRIM_DURATION_FACTOR);
+  // Minutes and load from trimmedPrescription, the rule triTrimTssReduction
+  // prices with (duration-only: load scales with the minutes).
+  const next = trimmedPrescription(w);
   stampOriginal(w);
-  w.estimatedDurationMin = newMin;
-  // Load is proportional to duration at a fixed intensity (the Adjust overlay's
-  // duration-only rule, workout-adjust-overlay.ts applyObjectScale).
-  const f = newMin / oldMin;
-  if (typeof w.aerobic === 'number') w.aerobic = Math.round(w.aerobic * f);
-  if (typeof w.anaerobic === 'number') w.anaerobic = Math.round(w.anaerobic * f);
+  w.estimatedDurationMin = next.minutes;
+  if (next.aerobic !== undefined) w.aerobic = next.aerobic;
+  if (next.anaerobic !== undefined) w.anaerobic = next.anaerobic;
   // Adjust's baseline takes the same trim, so Reset keeps it.
   const [baseBefore, baseAfter] = scaleBaselineMinutes(w, TRIM_DURATION_FACTOR, oldMin);
   const b = w as AdjustBaseline;
@@ -588,7 +687,11 @@ function applyTrim(w: Workout): boolean {
     if (typeof b.originalAnaerobic === 'number') b.originalAnaerobic = Math.round(b.originalAnaerobic * bf);
   }
   w.status = 'reduced';
-  w.modReason = 'Volume ramp trim';
+  // The reason names what asked for the trim, as applyDowngrade does: an
+  // overload trim read "Volume ramp trim" (volume-ramp suggestions are off,
+  // TRI_VOLUME_RAMP_SUGGESTIONS_LIVE, so every trim was an overload trim).
+  // modReason reaches the AI coach's plan context (coach-context-builder).
+  w.modReason = mod.source === 'volume_ramp' ? 'Volume ramp trim' : 'Manage load';
   return true;
 }
 

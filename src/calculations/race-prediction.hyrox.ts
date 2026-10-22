@@ -30,7 +30,7 @@ import type { SimulatorState } from '@/types/state';
 import type { HyroxStation, AbilityBand, HyroxLoadTier } from '@/types/triathlon';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { deriveHyroxRunPace } from './hyrox-run-pace';
-import { computeHyroxStaleness, computePhysiologyMitigation, hyroxEntrySplitsWeight, bandFromVdot } from './hyrox-staleness';
+import { computeHyroxStaleness, computePhysiologyMitigation, hyroxEntrySplitsWeight, bandFromVdot, hyroxVdotIsMeasured } from './hyrox-staleness';
 import { PER_STATION_FATIGUE_RATE_BY_BAND } from '@/constants/hyrox-constants';
 import {
   getHyroxVenueById,
@@ -223,8 +223,9 @@ export interface HyroxPrediction {
      *  singles work-total table. */
     stationsSinglesPercentile: number;
   };
-  /** Provenance of the run pace used in this prediction. */
-  runPaceSource: 'user' | 'derived' | 'seed';
+  /** Provenance of the run pace used in this prediction (deriveHyroxRunPace's
+   *  provenance; 'race' = band median adjusted to the last HYROX race). */
+  runPaceSource: 'user' | 'derived' | 'seed' | 'race';
   /** Race-time staleness summary, surfaced in the UI for transparency. */
   staleness?: {
     ageMonths: number;
@@ -596,7 +597,9 @@ function seedBasis(state: SimulatorState, hx: HyroxConfigOf): SeedBasis {
   const seeds = hyroxStationSeedsAtTarget(state, band);
   const seedRoxzone = hyroxSeedRoxzoneSec(state, band);
   const stale = computeHyroxStaleness(state);
-  const vdotBand = bandFromVdot(state.v);
+  // The stale-race blend toward the VDOT band's seeds needs a measured runner:
+  // the bare VDOT 50 pulled every stale beginner toward intermediate seeds.
+  const vdotBand = hyroxVdotIsMeasured(state) ? bandFromVdot(state.v) : null;
   const useBandBlend = stale.bandWeight < 1 && vdotBand != null && vdotBand !== band;
   const vdotSeeds = useBandBlend ? hyroxStationSeedsAtTarget(state, vdotBand!) : seeds;
   const effectiveSeeds = useBandBlend
@@ -795,7 +798,9 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
 
   // Run pace: VDOT-derived when physiology is available, then user-set
   // override (yields to a meaningfully-faster derived value), then seed fallback.
-  const { paceSecKm: runPaceSecKm, source: runPaceSource } = deriveHyroxRunPace(state);
+  // runPaceSource is the pace's provenance (a stored derived pace stays
+  // 'derived'), the field every provenance caption reads.
+  const { paceSecKm: runPaceSecKm, provenance: runPaceSource } = deriveHyroxRunPace(state);
 
   // ── Format-aware benchmark resolution ────────────────────────────────────
   // stationInputs reads hyroxCalibrationCoverage (resolveHyroxBenchmarks,

@@ -15,9 +15,17 @@
  *   dropTriWorkout(state, workoutId);
  *
  * Caller is responsible for `saveState()` after.
+ *
+ * Acts on the current week, `wks[s.w - 1]` (`s.w` is 1-based); a push lands
+ * in next week, `wks[s.w]`.
  */
 
 import type { SimulatorState, Workout } from '@/types/state';
+
+/** s.w is 1-based: the week in progress is wks[s.w - 1] (wks[s.w] is next week). */
+function currentWeekIdx(state: SimulatorState): number {
+  return (state.w ?? 1) - 1;
+}
 
 export interface SkipResult {
   outcome: 'pushed' | 'dropped' | 'not-found' | 'already-pushed';
@@ -32,7 +40,7 @@ export interface SkipResult {
  */
 export function pushTriWorkout(state: SimulatorState, workoutId: string): SkipResult {
   const wks = state.wks ?? [];
-  const currentWeek = state.w ?? 0;
+  const currentWeek = currentWeekIdx(state);
   const wk = wks[currentWeek];
   const workouts = wk?.triWorkouts;
   if (!workouts) return { outcome: 'not-found', workoutId };
@@ -94,7 +102,7 @@ export function pushTriWorkout(state: SimulatorState, workoutId: string): SkipRe
  */
 export function dropTriWorkout(state: SimulatorState, workoutId: string): SkipResult {
   const wks = state.wks ?? [];
-  const currentWeek = state.w ?? 0;
+  const currentWeek = currentWeekIdx(state);
   const wk = wks[currentWeek];
   const workouts = wk?.triWorkouts;
   if (!workouts) return { outcome: 'not-found', workoutId };
@@ -115,7 +123,7 @@ export function dropTriWorkout(state: SimulatorState, workoutId: string): SkipRe
  */
 export function skipTriWorkout(state: SimulatorState, workoutId: string): SkipResult {
   const wks = state.wks ?? [];
-  const currentWeek = state.w ?? 0;
+  const currentWeek = currentWeekIdx(state);
   const workouts = wks[currentWeek]?.triWorkouts;
   if (!workouts) return { outcome: 'not-found', workoutId };
   const workout = workouts.find(w => w.id === workoutId);

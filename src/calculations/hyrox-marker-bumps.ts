@@ -63,6 +63,17 @@ export function applyHyroxRunPaceDerivation(state: SimulatorState): boolean {
   if (!hx) return false;
   const result = deriveHyroxRunPace(state);
   if (result.source !== 'derived') {
+    // A pace this pass stored earlier ('derived') stands only while the model
+    // can still derive one. When it cannot (no real running-fitness signal:
+    // deriveHyroxRunPace no longer reads the bare-baseline VDOT, D5), clear it
+    // so the forecast, Stats and the plan fall back to the band seed together,
+    // rather than keep a baseline pace captioned "Updated from your runs".
+    // A pace the athlete entered ('user') is never cleared.
+    if (result.derivedSecKm == null && hx.hyroxRunPaceSource === 'derived' && hx.hyroxRunPaceSecKm != null) {
+      hx.hyroxRunPaceSecKm = undefined;
+      hx.hyroxRunPaceSource = 'seed';
+      return true;
+    }
     // Don't write a 'seed' value into the user's slot. Update the source field
     // for UI accuracy when the slot is empty.
     if (hx.hyroxRunPaceSecKm == null && hx.hyroxRunPaceSource !== result.source) {

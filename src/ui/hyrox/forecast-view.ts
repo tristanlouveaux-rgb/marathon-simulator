@@ -34,6 +34,8 @@ import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import { buildRacePlanEntryCard, openRacePlanGoalModal, renderHyroxRacePlanView } from './race-plan-view';
 import { hyroxForecastRaceClock } from '@/calculations/hyrox-race-plan';
 import { buildLoseTimeCard, wireLoseTimeCard } from './lose-time-view';
+import { hyroxWeekLine, hyroxRunPaceSourceLabel, fmtSessionsPerWeek, hyroxPhaseLabel, hyroxCurrentWeekPhase } from './forecast-labels';
+import { plannedHyroxSessionsPerWeek } from '@/calculations/hyrox-volume';
 
 function fmtMmSs(sec: number): string {
   if (!Number.isFinite(sec) || sec <= 0) return '—';
@@ -588,7 +590,7 @@ function renderTrajectoryFooter(proj: HyroxProjectionMarkers): string {
   if (proj.weeksRemaining <= 0) return '';
   const sessions = proj.plannedSessionsPerWeek;
   const sessionsLabel = sessions > 0
-    ? `${sessions.toFixed(1)} session${sessions >= 1.5 ? 's' : ''}/wk`
+    ? `${fmtSessionsPerWeek(sessions)} session${sessions >= 1.5 ? 's' : ''}/wk`
     : 'no planned sessions yet';
   return `<div style="font-size:11px;color:var(--c-faint);padding:10px 0 0;border-top:1px solid rgba(0,0,0,0.05);margin-top:8px;line-height:1.5">${sessionsLabel} for ${proj.weeksRemaining.toFixed(1)} weeks. Gain rates anchored on rowing, local muscular endurance, and HIFT adaptation literature; per-class differences applied (cardio, strength-endurance, grip-carry). Taper is gradiented (Mujika 2002): gains shrink toward race day.</div>`;
 }
@@ -872,6 +874,7 @@ export function hyroxRunPaceSourceNote(s: SimulatorState, source: HyroxPredictio
     return `Run pace updated from your VDOT.${pbAge ? ` ${pbAge}` : ''}`;
   }
   if (source === 'seed') return 'Run pace is the median of your ability band in the HYROX results. Add a recent run for a VDOT-anchored prediction.';
+  if (source === 'race') return 'Run pace is the median of your ability band, adjusted to the run time of your last HYROX race. Add a recent run for a VDOT-anchored prediction.';
   return '';
 }
 
@@ -918,28 +921,28 @@ function buildHyroxHero(
   const calibrated = prediction.calibratedCount;
   const runPaceSecKm = Math.round(prediction.runSec / 8);
   const bandLabel = hx.athleteBand ? (hx.athleteBand[0].toUpperCase() + hx.athleteBand.slice(1)) : null;
-  const runPaceSourceDetail = prediction.runPaceSource === 'derived' ? 'From VDOT'
-    : prediction.runPaceSource === 'seed' ? 'Band median'
-    : 'Set manually';
+  const runPaceSourceDetail = hyroxRunPaceSourceLabel(prediction.runPaceSource);
   const courseFactorDetail = Math.abs(courseFactorPct) < 0.1
     ? 'Course-neutral'
     : `${courseFactorPct > 0 ? '+' : '−'}${Math.abs(courseFactorPct).toFixed(1)}% vs neutral`;
 
-  // Training chip — sessions in the current planned week + plan phase.
-  const currentWk = s.wks?.[s.w ?? 0];
-  const sessionsThisWeek = currentWk?.triWorkouts
-    ? currentWk.triWorkouts.filter(w => w != null).length
-    : 0;
-  const phasePct = (s.tw && s.tw > 0) ? ((s.w ?? 0) / s.tw) : 0;
-  const phaseLabel = phasePct < 0.40 ? 'Base' : phasePct < 0.75 ? 'Build' : phasePct < 0.90 ? 'Peak' : 'Taper';
-  const trainingPresent = sessionsThisWeek > 0;
+  // Training chip: the planned sessions per week the forecast reads (the
+  // station horizon's sessions_per_week, plannedHyroxSessionsPerWeek: 4 weeks
+  // from the current week, easy erg work left out), the number the Race order
+  // footer prints. It counted every session of wks[s.w], next week (s.w is
+  // 1-based), so it read "5/wk" beside the footer's "4.5 sessions/wk"
+  // (ISSUE-406 (f)), and "0/wk" with a "Build a plan" prompt in race week.
+  const plannedPerWeek = prediction.projection?.plannedSessionsPerWeek ?? plannedHyroxSessionsPerWeek(s, 4);
+  // The current week's own phase, the Training page's source (D11).
+  const phaseLabel = hyroxPhaseLabel(hyroxCurrentWeekPhase(s.wks, s.w));
+  const trainingPresent = plannedPerWeek > 0;
 
   type Chip = { key: string; label: string; headline: string; detail: string; present: boolean; addCta?: string };
   const chips: Chip[] = [
     { key: 'you',      label: 'You',      headline: bandLabel ?? 'Set band',         detail: hx.previousHyroxTimeSec ? fmtMmSs(hx.previousHyroxTimeSec) : '', present: !!bandLabel,    addCta: 'Set in onboarding' },
     { key: 'runpace',  label: 'Run pace', headline: fmtPace(runPaceSecKm),           detail: runPaceSourceDetail,                                           present: runPaceSecKm > 0 },
     { key: 'stations', label: 'Stations', headline: `${calibrated}/${totalStations}`, detail: `${fmtMmSs(prediction.stationsSec)} summed`,                  present: totalStations > 0, addCta: 'Test stations' },
-    { key: 'training', label: 'Training', headline: `${sessionsThisWeek}/wk`,         detail: phaseLabel,                                                    present: trainingPresent,   addCta: 'Build a plan' },
+    { key: 'training', label: 'Training', headline: `${fmtSessionsPerWeek(plannedPerWeek)}/wk`, detail: phaseLabel,                                                    present: trainingPresent,   addCta: 'Build a plan' },
     { key: 'venue',    label: 'Venue',    headline: venue?.city ?? 'Pick race',       detail: venue ? courseFactorDetail : '',                               present: !!venue,           addCta: 'Pick in onboarding' },
   ];
 
@@ -1111,11 +1114,10 @@ export function renderHyroxForecastView(): void {
   // Title sub-line: mirrors marathon "Test's Dubai Marathon — Week 1 of 35".
   // Skips gracefully when name/event are missing.
   const eventCity = hx.raceEventId ? getHyroxEventById(hx.raceEventId)?.city : undefined;
-  const currentWeek = s.w ?? 0;
-  const totalWeeks = s.tw ?? 0;
   const possessive = firstName ? `${firstName}${firstName.endsWith('s') ? "'" : "'s"}` : '';
   const raceLabel = eventCity ? `${eventCity} HYROX` : 'HYROX';
-  const weekLine = totalWeeks > 0 ? `Week ${currentWeek + 1} of ${totalWeeks}` : '';
+  // s.w is 1-based: "Week ${s.w} of ${s.tw}", as Home, Plan and Stats print it.
+  const weekLine = hyroxWeekLine(s.w, s.tw);
   const subLineParts = [possessive ? `${possessive} ${raceLabel}` : raceLabel, weekLine].filter(Boolean);
   const subLine = subLineParts.join('. ');
 

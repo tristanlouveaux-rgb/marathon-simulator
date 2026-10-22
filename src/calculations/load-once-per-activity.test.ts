@@ -446,7 +446,7 @@ describe('Daily Signal B (sleep load) counts an adhoc activity with a twin once'
     expect(byDate[DAY(2).slice(0, 10)]).toBeCloseTo(60, 6);
   });
 
-  it('a twin without HR leaves the adhoc RPE estimate to count, once', () => {
+  it('a twin without HR counts once, at its own duration estimate (Signal B rule)', () => {
     const swim = overflow('apple-922', { activityType: 'SWIMMING', label: 'Swim', sport: 'swimming', durationMin: 45, startTime: DAY(3) });
     const byDate = buildDailySignalBTSS([weekWithOverflow(swim)]);
     expect(byDate[DAY(3).slice(0, 10)]).toBeCloseTo(45 * TL_PER_MIN[5], 6);
@@ -472,7 +472,7 @@ describe('A Strava-upgraded twin still pairs with its adhoc entry', () => {
     expect(Math.round(byDate[date])).toBe(computeTodaySignalBTSS(wk, date));
   });
 
-  it('an upgraded twin with no HR still leaves the adhoc RPE estimate to count, once', () => {
+  it('an upgraded twin with no HR still counts once, at its own duration estimate', () => {
     const swim = overflow('apple-778', { activityType: 'SWIMMING', label: 'Swim', sport: 'swimming', durationMin: 45, startTime: DAY(3) });
     const byDate = buildDailySignalBTSS([stravaUpgraded(swim, 'strava-998')]);
     expect(byDate[DAY(3).slice(0, 10)]).toBeCloseTo(45 * TL_PER_MIN[5], 6);

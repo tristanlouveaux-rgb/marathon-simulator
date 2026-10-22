@@ -27,6 +27,7 @@ import type {
 } from '@/calculations/tri-cross-training-overload';
 import type { Discipline } from '@/types/triathlon';
 import { answeredModIds } from '@/calculations/tri-suggestion-aggregator';
+import { optionHasChange } from '@/calculations/tri-cross-training-overload';
 import { applyTriSuggestions } from '@/calculations/tri-suggestion-apply';
 import { markTriSuggestionsHandled } from '@/calculations/tri-suggestion-handled';
 import { getMutableState, saveState } from '@/state';
@@ -96,9 +97,13 @@ export function showTriSuggestionModal(bundle: TriSuggestionBundle): Promise<num
       const wireChips = () => {
         for (const d of ['swim', 'bike', 'run'] as Discipline[]) {
           document.getElementById(`tri-sm-chip-${d}`)?.addEventListener('click', () => {
+            // A chip whose option holds no change is disabled: flipping to it
+            // offered only "No upcoming workouts to adjust." with Keep and Push.
+            if (!optionHasChange(opts.options[d])) return;
             selectedDiscipline = d;
             const target = document.getElementById('tri-sm-overload-body');
             if (target) target.innerHTML = renderOverloadBody(opts, d);
+            syncOverloadButtons(opts.options[d]);
             // Re-render chip styles
             for (const dd of ['swim', 'bike', 'run'] as Discipline[]) {
               const el = document.getElementById(`tri-sm-chip-${dd}`);
@@ -230,7 +235,7 @@ function renderOverloadSection(opts: CrossTrainingOverloadResult, selected: Disc
 
   const chips = (['bike', 'run', 'swim'] as Discipline[])
     .map(d => `
-      <button id="tri-sm-chip-${d}" class="tri-sm-chip" style="${chipStyle(opts.options[d], d === selected)}">
+      <button id="tri-sm-chip-${d}" class="tri-sm-chip" style="${chipStyle(opts.options[d], d === selected)}"${optionHasChange(opts.options[d]) ? '' : ' disabled aria-disabled="true"'}>
         ${d.charAt(0).toUpperCase() + d.slice(1)}
       </button>
     `)
@@ -261,11 +266,13 @@ function renderOverloadSection(opts: CrossTrainingOverloadResult, selected: Disc
           flex:1;padding:11px;border-radius:10px;
           border:none;background:var(--c-accent,#0F172A);
           font-size:13px;font-weight:500;color:#fff;
+          ${opts.options[selected].reduceMods.length > 0 ? '' : 'display:none;'}
         ">Reduce</button>
         <button id="tri-sm-replace" class="tri-sm-btn" style="
           flex:1;padding:11px;border-radius:10px;
           border:1px solid var(--c-border);background:transparent;
           font-size:13px;font-weight:500;color:#0F172A;
+          ${opts.options[selected].replaceMods.length > 0 ? '' : 'display:none;'}
         ">Replace &amp; Reduce</button>
         <button id="tri-sm-keep" class="tri-sm-btn" style="
           flex:1;padding:11px;border-radius:10px;
@@ -282,38 +289,56 @@ function renderOverloadSection(opts: CrossTrainingOverloadResult, selected: Disc
   `;
 }
 
+/**
+ * Show only the choices the selected discipline can act on: Reduce when its
+ * set holds a change, Replace & Reduce when its set holds a swap (the detector
+ * leaves it empty otherwise, since it would repeat Reduce). Keep and Push
+ * always show. Re-run when the chip changes.
+ */
+function syncOverloadButtons(opt: DisciplineOption): void {
+  const reduce = document.getElementById('tri-sm-reduce');
+  if (reduce) reduce.style.display = opt.reduceMods.length > 0 ? '' : 'none';
+  const replace = document.getElementById('tri-sm-replace');
+  if (replace) replace.style.display = opt.replaceMods.length > 0 ? '' : 'none';
+}
+
 function renderOverloadBody(opts: CrossTrainingOverloadResult, selected: Discipline): string {
   const opt = opts.options[selected];
   const reduceMods = opt.reduceMods;
   const replaceMods = opt.replaceMods;
 
-  const floorLine = opt.floorTSS > 0
+  const remainingLine = opt.floorTSS > 0
     ? `<span style="color:var(--c-muted)">remaining ${opt.remainingTSS} TSS · floor ${opt.floorTSS} TSS</span>`
     : `<span style="color:var(--c-muted)">remaining ${opt.remainingTSS} TSS · no floor (taper or hot ramp)</span>`;
 
-  const belowFloorWarning = opt.belowFloor
-    ? `<div style="font-size:11px;color:#c06a50;margin-top:6px">
-         ⚠ Reducing this discipline would push it below your weekly floor (${opt.floorTSS} TSS).
-       </div>`
+  const floorLine = floorWarningText(opt);
+  const belowFloorWarning = floorLine
+    ? `<div style="font-size:11px;color:#c06a50;margin-top:6px">${floorLine}</div>`
     : '';
 
-  const reduceList = reduceMods.length === 0
-    ? `<div style="color:var(--c-muted);font-size:12px;font-style:italic">No upcoming workouts to adjust.</div>`
-    : reduceMods.map(renderModLine).join('');
+  // The detector recommends only a discipline with a change, and a chip whose
+  // option holds none is disabled (E7), so this line is a fallback the chips
+  // cannot reach. A set with no change gets no section and no button.
+  const noChange = reduceMods.length === 0 && replaceMods.length === 0
+    ? `<div style="color:var(--c-muted);font-size:12px;font-style:italic;margin-top:6px">No upcoming workouts to adjust.</div>`
+    : '';
 
   return `
-    <div style="font-size:12px;line-height:1.5;margin-bottom:10px">${floorLine}</div>
+    <div style="font-size:12px;line-height:1.5;margin-bottom:10px">${remainingLine}</div>
     ${belowFloorWarning}
-    <details open style="border:1px solid var(--c-border);border-radius:10px;padding:10px 12px;margin-top:6px">
-      <summary style="font-size:12px;color:#0F172A;font-weight:500;cursor:pointer;list-style:none">
-        Reduce. ${reduceMods.length} change${reduceMods.length === 1 ? '' : 's'}
-      </summary>
-      <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
-        ${reduceList}
-      </div>
-    </details>
+    ${noChange}
+    ${reduceMods.length > 0 ? `
+      <details open style="border:1px solid var(--c-border);border-radius:10px;padding:10px 12px;margin-top:6px">
+        <summary style="font-size:12px;color:#0F172A;font-weight:500;cursor:pointer;list-style:none">
+          Reduce. ${reduceMods.length} change${reduceMods.length === 1 ? '' : 's'}
+        </summary>
+        <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
+          ${reduceMods.map(renderModLine).join('')}
+        </div>
+      </details>
+    ` : ''}
     ${replaceMods.length > 0 ? `
-      <details style="border:1px solid var(--c-border);border-radius:10px;padding:10px 12px;margin-top:6px">
+      <details ${reduceMods.length > 0 ? '' : 'open '}style="border:1px solid var(--c-border);border-radius:10px;padding:10px 12px;margin-top:6px">
         <summary style="font-size:12px;color:#0F172A;font-weight:500;cursor:pointer;list-style:none">
           Replace &amp; Reduce. ${replaceMods.length} change${replaceMods.length === 1 ? '' : 's'}
         </summary>
@@ -323,6 +348,44 @@ function renderOverloadBody(opts: CrossTrainingOverloadResult, selected: Discipl
       </details>
     ` : ''}
   `;
+}
+
+/** An offered set (one holding a change) would take the discipline below its
+ *  floor: the floor warning shows and the chip dims (E7). */
+export function optionBreachesFloor(opt: DisciplineOption): boolean {
+  return (opt.reduceMods.length > 0 && opt.belowFloor)
+    || (opt.replaceMods.length > 0 && opt.replaceBelowFloor);
+}
+
+/**
+ * The floor warning names the set that breaches the floor (2026-10-22): the
+ * Reduce set alone was checked, so a Replace & Reduce set offered without
+ * Reduce, or with a larger cut, could take the discipline below its floor
+ * with no warning. When the discipline already sits below its floor, every
+ * offered set keeps it there, and the line says so (E7). Null when no offered
+ * set breaches it.
+ */
+export function floorWarningText(opt: DisciplineOption): string | null {
+  const reduceOffered = opt.reduceMods.length > 0;
+  const replaceOffered = opt.replaceMods.length > 0;
+  const reduceBreaches = reduceOffered && opt.belowFloor;
+  const replaceBreaches = replaceOffered && opt.replaceBelowFloor;
+  if (!reduceBreaches && !replaceBreaches) return null;
+  const floor = `your weekly floor (${opt.floorTSS} TSS)`;
+  if (opt.alreadyBelowFloor) {
+    return reduceOffered && replaceOffered
+      ? `Either set keeps this discipline below ${floor}.`
+      : `These changes keep this discipline below ${floor}.`;
+  }
+  if (reduceBreaches && replaceOffered && !replaceBreaches) {
+    return `Reduce would push this discipline below ${floor}. Replace &amp; Reduce keeps it above.`;
+  }
+  if (replaceBreaches && reduceOffered && !reduceBreaches) {
+    return `Replace &amp; Reduce would push this discipline below ${floor}. Reduce keeps it above.`;
+  }
+  return reduceOffered && replaceOffered
+    ? `Either set would push this discipline below ${floor}.`
+    : `These changes would push this discipline below ${floor}.`;
 }
 
 function renderModLine(m: OverloadAdjustment): string {
@@ -347,7 +410,13 @@ function chipStyle(opt: DisciplineOption, isSelected: boolean): string {
   if (isSelected) {
     return `${base};background:var(--c-accent,#0F172A);color:#fff;`;
   }
-  if (opt.belowFloor) {
+  // No change to offer: disabled (the button carries `disabled`), dimmed.
+  if (!optionHasChange(opt)) {
+    return `${base};background:transparent;color:var(--c-muted);opacity:0.4;cursor:default;`;
+  }
+  // Any offered set breaches the floor (Reduce or Replace & Reduce): dimmed,
+  // still selectable; the body names the set.
+  if (optionBreachesFloor(opt)) {
     return `${base};background:transparent;color:var(--c-muted);opacity:0.6;`;
   }
   return `${base};background:transparent;color:#0F172A;`;

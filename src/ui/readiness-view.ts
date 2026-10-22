@@ -13,7 +13,7 @@ import {
   computeFitnessModel,
   computeDayStrainTSS,
   computeToBaseline,
-  REST_DAY_OVERREACH_RATIO,
+  isRestDayOverreached,
 } from '@/calculations/fitness-model';
 import { getPlannedDayTSSContext } from './planned-day-tss';
 import {
@@ -26,7 +26,7 @@ import {
 } from '@/calculations/readiness';
 import { getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildDailySignalBTSS, computeSleepDebtOutlook, mergeManualSleepHistory } from '@/calculations/sleep-insights';
 import { computeDailyCoach } from '@/calculations/daily-coach';
-import { computeCapacityStrain, capacityStrainNote } from '@/calculations/capacity-strain';
+import { computeCapacityStrain, capacityStrainNote, postSessionNote, REST_DAY_OVERREACH_SENTENCE } from '@/calculations/capacity-strain';
 import { computeTriReadiness } from '@/calculations/tri-readiness';
 import { hyroxMtlAcwr, computeWeekActualMTL, computeWeekMTL } from '@/calculations/mtl';
 import { classifyActivity } from '@/calculations/tri-benchmarks-from-history';
@@ -115,7 +115,7 @@ function getReadinessHTML(s: SimulatorState): string {
     : null;
   const effectiveSleepTarget = s.sleepTargetSec ?? deriveSleepTarget(s.physiologyHistory ?? []);
   const sleepBank = getSleepBank(s.physiologyHistory ?? [], effectiveSleepTarget);
-  const dailyTSSByDate = buildDailySignalBTSS(s.wks ?? [], archivedPlans);
+  const dailyTSSByDate = buildDailySignalBTSS(s.wks ?? [], archivedPlans, s.planStartDate);
   const debtOutlook = computeSleepDebtOutlook(
     s.physiologyHistory ?? [], dailyTSSByDate, s.athleteTier ?? 'recreational', effectiveSleepTarget,
   );
@@ -166,9 +166,9 @@ function getReadinessHTML(s: SimulatorState): string {
   }
   const hasPlannedWorkout = plannedDayTSS > 0;
   const isRestDay = !hasPlannedWorkout && !matchedActivityToday;
-  // Rest-day overreach: activity exceeds 50% of per-session average
-  const restDayOverreachThreshold = perSessionAvg * REST_DAY_OVERREACH_RATIO;
-  const isRestDayOverreaching = isRestDay && todaySignalBTSS > 0 && perSessionAvg > 0 && todaySignalBTSS > restDayOverreachThreshold;
+  // Rest-day overreach on logged sessions only (isRestDayOverreached: passive
+  // step load is strain, not a session), the rule Home and the coach read.
+  const isRestDayOverreaching = strainWk ? isRestDayOverreached(strainWk, strainDay, isRestDay, perSessionAvg) : false;
   // Strain: planned days vs plan, adhoc vs per-session avg (display semantics
   // for the Today's Strain card — % of daily target).
   const strainPct = hasPlannedWorkout && todaySignalBTSS > 0 && plannedDayTSS > 0
@@ -303,7 +303,9 @@ function getReadinessHTML(s: SimulatorState): string {
     // tiers vs the capacity anchor, then the trained-day acknowledgment
     // composed onto the chronic sentence. Without this, Home acknowledges
     // the session and this page lectures about chronic load.
+    // Rest-day overreach leads, the coach line's and the strain card's rule.
     if (isTri) {
+      if (isRestDayOverreaching) return REST_DAY_OVERREACH_SENTENCE;
       const note = capacityStrainNote(capStrain, chronicSentence);
       if (note) return note;
     }
@@ -394,20 +396,33 @@ function getReadinessHTML(s: SimulatorState): string {
        <div style="font-size:13px;color:#94A3B8">${strainLabel}</div>`
     : `<div style="font-size:24px;font-weight:600;color:${strainColor};line-height:1">${displayStrainPct}%</div>
        <div style="font-size:13px;color:#94A3B8">${strainLabel}</div>`;
+  // The post-session sentence (injury-cap overshoot, then the Big / Solid /
+  // Good training tier) comes from postSessionNote, the helper Home and the
+  // coach page call: gated on a logged session, tier from the session's own
+  // TSS over the capacity anchor, the ring's number quoted. The card's own %
+  // stays plan-relative (its semantic: % of the daily target), so its tier
+  // lines used to read that percent and called one session "Big ... well
+  // exceeded" while Home said "Solid". Rest-day overreach leads, as on the
+  // coach line. The plan-relative lines below say "session" only when a
+  // session was logged (hasTrainedOnDay), and judge the session by its own
+  // TSS over the plan (sessionPlanPct), so a half-done session plus a long
+  // walk reads "in progress", not "Session complete". Steps alone read as
+  // daily activity.
+  const postNote = postSessionNote(capStrain);
+  const trainedToday = capStrain.trainedToday;
+  const sessionPlanPct = hasPlannedWorkout && plannedDayTSS > 0
+    ? Math.round((capStrain.sessionTSS / plannedDayTSS) * 100)
+    : 0;
   const strainExplanation =
       isRestDayOverreaching ? 'High load on a rest day. This level of activity impairs recovery rather than aiding it.'
+      : postNote ? postNote
       : isRestDay && todaySignalBTSS > 0 ? 'Light activity on a rest day. No significant effect on recovery.'
       : isRestDay ? 'Scheduled rest day. No activity expected.'
       : isAdhoc ? `${Math.round(todaySignalBTSS)} TSS from unplanned activity. Readiness adjusted accordingly.`
-      // Injury-capped plan exceeded: the % is plan-relative (and stays — that
-      // is the card's semantic), but the canonical call-out explains the
-      // overshoot without the misleading "recovery is the priority" framing
-      // when the absolute load was normal (capacity anchor, SCIENCE_LOG §BJ).
-      : capStrain.injuryCapOvershoot ? capacityStrainNote(capStrain) ?? `Daily target exceeded (${Math.round(todaySignalBTSS)} TSS).`
-      : displayStrainPct >= 130 ? `Big session logged (${Math.round(todaySignalBTSS)} TSS). Daily target well exceeded. Recovery is the priority for the next 24 hours.`
-      : displayStrainPct >= 100 ? `Daily target reached (${Math.round(todaySignalBTSS)} TSS). Session complete. Readiness reduced accordingly.`
-      : displayStrainPct >= 50 ? 'Session in progress. Readiness adjusts downward as load accumulates.'
-      : displayStrainPct > 0 ? 'Light activity logged. No significant effect on readiness yet.'
+      : trainedToday && sessionPlanPct >= 100 ? `Daily target reached (${Math.round(todaySignalBTSS)} TSS). Session complete. Readiness reduced accordingly.`
+      : trainedToday && displayStrainPct >= 50 ? 'Session in progress. Readiness adjusts downward as load accumulates.'
+      : trainedToday && displayStrainPct > 0 ? 'Light activity logged. No significant effect on readiness yet.'
+      : displayStrainPct > 0 ? `${Math.round(todaySignalBTSS)} TSS from daily activity. Planned session not yet logged.`
       : 'Planned session not yet logged.';
   const strainCard = card(`
     <div style="font-size:11px;color:${TEXT_S};margin-bottom:8px;font-weight:500">Today's Strain</div>
@@ -508,7 +523,7 @@ function getReadinessHTML(s: SimulatorState): string {
   // same debt number the user sees when they tap through.
   const cumulativeDebtSec = computeSleepDebt(
     s.physiologyHistory ?? [],
-    buildDailySignalBTSS(s.wks ?? [], s.previousPlanWks),
+    buildDailySignalBTSS(s.wks ?? [], s.previousPlanWks, s.planStartDate),
     s.athleteTier ?? 'recreational',
     effectiveSleepTarget,
   );

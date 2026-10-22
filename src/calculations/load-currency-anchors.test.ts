@@ -33,7 +33,11 @@ import {
 } from '@/calculations/fitness-model';
 import { triActivityTss, withTriRatedRpe } from '@/calculations/tri-benchmarks-from-history';
 import { calculateITrimpFromSummary } from '@/calculations/trimp';
-import { computeUniversalLoad } from '@/cross-training/universalLoad';
+import { computeUniversalLoad, saturateCredit } from '@/cross-training/universalLoad';
+import { detectCrossTrainingOverload, overloadReductionBudget } from '@/calculations/tri-cross-training-overload';
+import { applyTriSuggestions } from '@/calculations/tri-suggestion-apply';
+import type { TriSuggestionMod } from '@/calculations/tri-suggestion-aggregator';
+import { getDefaultState } from '@/state/store';
 import { EASY_LOAD_PER_KM, TAU, HR_ZONE_TSS_PER_MIN } from '@/cross-training/universal-load-constants';
 import { generateTriathlonPlan } from '@/workouts/plan_engine.triathlon';
 import type { SimulatorState, Workout } from '@/types';
@@ -146,6 +150,8 @@ describe('Anchor 4: replacement credit can never exceed its own load', () => {
     for (const raw of [10, 50, 100, 200, 400, 900]) {
       const credit = TAU * (1 - Math.exp(-raw / TAU));
       expect(credit).toBeLessThanOrEqual(raw);
+      // The exported curve the planners call is this formula.
+      expect(saturateCredit(raw)).toBeCloseTo(credit, 10);
     }
   });
 
@@ -158,6 +164,109 @@ describe('Anchor 4: replacement credit can never exceed its own load', () => {
       const r = computeUniversalLoad(input as any, 'half');
       expect(r.runReplacementCredit).toBeLessThanOrEqual(r.baseLoad + 0.1);
     }
+  });
+});
+
+describe('Anchor 4b: the triathlon overload budget never exceeds the unanswered load', () => {
+  // The triathlon overload detector turns unanswered cross-training TSS into a
+  // budget of planned TSS it may cut. Until 2026-10-21 it kept the old
+  // 1500 × (1 − e^(−load / 800)) curve (slope 1.875 at zero): 50 TSS of tennis
+  // unlocked about 91 TSS of cuts. SCIENCE_LOG §DP.
+  it('overloadReductionBudget(load) ≤ load from 10 to 900 TSS', () => {
+    for (const raw of [10, 25, 50, 100, 200, 400, 900]) {
+      expect(overloadReductionBudget(raw)).toBeLessThanOrEqual(raw);
+      expect(overloadReductionBudget(raw)).toBeGreaterThan(0);
+    }
+    expect(overloadReductionBudget(0)).toBe(0);
+  });
+
+  // What a proposal takes off the plan is what applyTriSuggestions does, not the
+  // modal's label: the anchor applies every proposed set to a copy of the plan
+  // and measures the drop in planned TSS. Until 2026-10-21 (second pass) the
+  // label was clipped to the budget while Apply made the whole change, so this
+  // anchor passed on the label while the plan lost more than the load.
+  const weekTss = (s: SimulatorState, wi: number) =>
+    (s.wks![wi].triWorkouts ?? []).reduce((a, w) => a + (w.aerobic ?? 0) + (w.anaerobic ?? 0), 0);
+
+  /** Apply one option set to a copy; returns the drop in the week's planned TSS. */
+  function appliedDrop(s: SimulatorState, wi: number, set: { workoutId: string; action: TriSuggestionMod['action']; discipline: 'swim' | 'bike' | 'run'; workoutLabel: string }[]): number {
+    const c = structuredClone(s);
+    const before = weekTss(c, wi);
+    const r = applyTriSuggestions(c, set.map((a, i) => ({
+      id: `xt_${i}`, source: 'cross_training_overload', discipline: a.discipline, headline: a.workoutLabel,
+      body: '', severity: 'caution', targetWorkoutId: a.workoutId, action: a.action,
+    }) as TriSuggestionMod));
+    expect(r.skipped).toBe(0);
+    return before - weekTss(c, wi);
+  }
+
+  it('accepting a proposal takes no more planned TSS than the unanswered load, and exactly what the modal shows', () => {
+    // 400 TSS planned and 62 TSS of tennis (15.5%, heavy; budget 58.2). The
+    // threshold run's swap to easy takes 137 (200 -> 68 min easy, 63) and its
+    // downgrade 69 (200 -> 90 min marathon pace, 131): both exceed the budget,
+    // so neither is proposed. The long ride's trim takes 30 (240 -> 204 min).
+    const wk = {
+      w: 1,
+      triWorkouts: [
+        { id: 'mon-r', t: 'threshold', n: 'Run threshold', d: '90min', r: 8, discipline: 'run', aerobic: 150, anaerobic: 50, dayOfWeek: 0, estimatedDurationMin: 90 },
+        { id: 'sat-b', t: 'bike_endurance', n: 'Long bike', d: '4h', r: 5, discipline: 'bike', aerobic: 180, anaerobic: 20, dayOfWeek: 5, estimatedDurationMin: 240 },
+      ],
+      adhocWorkouts: [{ id: 'garmin-tennis', t: 'cross', n: 'tennis', d: '90min', r: 6, iTrimp: 62 * 150 }],
+    };
+    const s = { eventType: 'triathlon', w: 1, wks: [wk] } as unknown as SimulatorState;
+    const r = detectCrossTrainingOverload(s, 0);
+    expect(r).not.toBeNull();
+    expect(r!.crossTrainingTSS).toBe(62);
+    for (const d of ['swim', 'bike', 'run'] as const) {
+      for (const set of [r!.options[d].reduceMods, r!.options[d].replaceMods]) {
+        const shown = set.reduce((a, m) => a + m.tssReduction, 0);
+        const drop = appliedDrop(s, 0, set);
+        expect(drop, d).toBeLessThanOrEqual(r!.crossTrainingTSS);
+        expect(drop, d).toBeLessThanOrEqual(overloadReductionBudget(62));
+        expect(drop, d).toBe(shown);
+      }
+    }
+    expect(r!.options.run.replaceMods).toEqual([]);
+    expect(r!.options.run.reduceMods).toEqual([]);
+    expect(r!.options.bike.reduceMods).toMatchObject([{ workoutId: 'sat-b', action: 'trim_volume', tssReduction: 30 }]);
+    // Run (tennis is run-affinity) has no change, so the pop-up opens on bike.
+    expect(r!.recommendedDiscipline).toBe('bike');
+  });
+
+  it('generated plans: every proposed set takes at most the unanswered load, and what it shows', () => {
+    let sets = 0;
+    for (const distance of ['sprint', 'olympic', '70.3', 'ironman']) {
+      const base = {
+        ...getDefaultState(), eventType: 'triathlon', w: 1, tw: 20, v: 50,
+        pac: { e: 300, t: 250, i: 230, m: 275, r: 200 }, wks: [],
+        triConfig: {
+          distance, timeAvailableHoursPerWeek: 12, volumeSplit: { swim: 0.175, bike: 0.475, run: 0.35 },
+          skillRating: { swim: 3, bike: 3, run: 3 }, bike: { hasPowerMeter: true, ftp: 220 }, swim: { cssSecPer100m: 100 }, weeksToRace: 20,
+        },
+      } as unknown as SimulatorState;
+      base.wks = generateTriathlonPlan(base);
+      for (let wi = 0; wi < base.wks.length; wi++) {
+        // Heavy and extreme loads, run-affinity (tennis) and bike-affinity (cycling).
+        for (const pct of [0.16, 0.30]) for (const sport of ['tennis', 'cycling']) {
+          const s = structuredClone(base);
+          s.w = wi + 1;
+          s.wks[wi].adhocWorkouts = [{ id: 'xt', t: 'cross', n: sport, d: '90min', r: 6, iTrimp: pct * weekTss(s, wi) * 150 } as any];
+          const o = detectCrossTrainingOverload(s, 0);
+          if (!o) continue;
+          for (const d of ['swim', 'bike', 'run'] as const) {
+            for (const set of [o.options[d].reduceMods, o.options[d].replaceMods]) {
+              const where = `${distance} wk${wi + 1} ${pct} ${sport} ${d}`;
+              const drop = appliedDrop(s, wi, set);
+              expect(drop, where).toBeLessThanOrEqual(o.crossTrainingTSS + 0.5);
+              // Equal up to the rounding of a fractional stored load.
+              expect(Math.abs(drop - set.reduce((a, m) => a + m.tssReduction, 0)), where).toBeLessThanOrEqual(0.5 * set.length);
+              sets += 1;
+            }
+          }
+        }
+      }
+    }
+    expect(sets).toBeGreaterThan(500);
   });
 });
 

@@ -293,20 +293,32 @@ describe('predictHyroxRace', () => {
       // bandWeight stays below 1.0 and the seed blends from novice toward
       // beginner (total_beginner shares the beginner cell since lane H3b, so
       // the old total_beginner to beginner case no longer moves the seeds).
+      // A measured runner (watch VO2max): the blend reads VDOT only then.
       const stale = predictHyroxRace(buildState({
         athleteBand: 'novice',
         hyroxPreviousRaceDate: dateNDaysAgo(30 * 30.44),
       }, {
-        v: 37,
-      }))!;
+        v: 37, vo2: 37,
+      } as Partial<SimulatorState>))!;
       const fresh = predictHyroxRace(buildState({
         athleteBand: 'novice',
       }, {
-        v: 37,
-      }))!;
+        v: 37, vo2: 37,
+      } as Partial<SimulatorState>))!;
       // Both no-calibration paths. Fresh stays at novice seeds; stale blends
       // toward beginner seeds (slower stations).
       expect(stale.stationsSec).toBeGreaterThan(fresh.stationsSec);
+    });
+
+    it('a bare-baseline VDOT (no running-fitness signal) blends toward no other band', () => {
+      // Same stale race, VDOT 37 with nothing measured: the stations stay at
+      // the novice seeds, as for a fresh race (no claims off the bare VDOT).
+      const stale = predictHyroxRace(buildState({
+        athleteBand: 'novice',
+        hyroxPreviousRaceDate: dateNDaysAgo(30 * 30.44),
+      }, { v: 37 }))!;
+      const fresh = predictHyroxRace(buildState({ athleteBand: 'novice' }, { v: 37 }))!;
+      expect(stale.stationsSec).toBeCloseTo(fresh.stationsSec, 6);
     });
 
     it('strong physiology mitigation pulls splitsWeight back toward 1.0 (less blend)', () => {

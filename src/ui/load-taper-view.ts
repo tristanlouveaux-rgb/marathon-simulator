@@ -138,7 +138,7 @@ function buildBreakdownCard(
           <div style="display:flex;align-items:center;gap:8px">
             <div style="width:10px;height:10px;border-radius:50%;background:${seg.color};flex-shrink:0"></div>
             <span style="font-size:14px;color:${TEXT_M}">${seg.label}</span>
-            <span style="font-size:12px;color:${TEXT_L}">${dur}</span>
+            ${seg.doubleDay ? '' : `<span style="font-size:12px;color:${TEXT_L}">${dur}</span>`}
           </div>
           <span style="font-size:14px;font-weight:600;color:${TEXT_M};font-variant-numeric:tabular-nums">${Math.round(seg.tss)}</span>
         </div>

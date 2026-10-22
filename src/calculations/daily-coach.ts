@@ -8,7 +8,7 @@
  * Pure function. No side effects, no network calls.
  */
 
-import type { SimulatorState } from '@/types';
+import type { SimulatorState, Week } from '@/types';
 import {
   computeReadinessACWR,
   computeLiveSameSignalTSB,
@@ -17,7 +17,7 @@ import {
   computeWeekTSS,
   getTrailingEffortScore,
   computeTodaySignalBTSS,
-  REST_DAY_OVERREACH_RATIO,
+  isRestDayOverreached,
 } from '@/calculations/fitness-model';
 import { computeReadiness, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
 import { computePlannedWeekTarget } from '@/calculations/planned-week-target';
@@ -29,7 +29,7 @@ import { getSleepInsight, getSleepBank, deriveSleepTarget, computeSleepDebt, fmt
 import { getPlannedDayTSSContext } from '@/ui/planned-day-tss';
 import { isLongRun } from '@/workouts/long-run';
 import { localDateKey, isOnLocalDay } from '@/utils/local-date';
-import { computeCapacityStrain, postSessionSentence, injuryCapOvershootSentence } from './capacity-strain';
+import { computeCapacityStrain, postSessionSentence, postSessionNote, injuryCapOvershootSentence, hasTrainedOnDay, REST_DAY_OVERREACH_SENTENCE, type CapacityStrain } from './capacity-strain';
 import {
   computeRhrDeltaFromHistory, detectRaceCollision, getRaceDateISO,
   resolveEffectiveEntry,
@@ -104,12 +104,13 @@ export interface CoachSignals {
 
 /** Extra context from the view layer that daily-coach can't derive from state alone. */
 export interface StrainContext {
-  /** Today's actual TSS as % of target (0 = nothing logged yet). */
+  /** Today's logged session TSS as % of the planned day (0 = nothing logged yet). Drives the
+   *  in-progress copy only ("Nearly at today's target"); the post-session tiers read `capacity`. */
   strainPct: number;
   /**
    * Today's TSS as % of the capacity anchor (max(planned, CTL/7)) — the
    * canonical `computeCapacityStrain(s).pctCapacity`. This is what feeds the
-   * readiness strain floor; `strainPct` (plan-relative) stays for copy tiers.
+   * readiness strain floor. The post-session tier reads sessionPctCapacity (postSessionNote).
    */
   capacityStrainPct?: number;
   /** True when no planned workout AND no matched activity today. */
@@ -121,12 +122,27 @@ export interface StrainContext {
   /** Today's planned workout is a quality/hard session. */
   todayIsHard: boolean;
   /** First hard session in the next 1-2 days (excluding today). Null when nothing hard is upcoming.
-   *  Day labels are 'tomorrow' / 'the day after' so copy reads naturally without absolute weekday. */
-  upcomingHard: { whenLabel: string; type: string } | null;
+   *  Day labels are 'tomorrow' / 'the day after' so copy reads naturally without absolute weekday.
+   *  `name` is the session's plan name (the copy prints it; `type` only when it is empty). */
+  upcomingHard: { whenLabel: string; type: string; name?: string } | null;
   /** Recent cross-training label + TSS in last 48h (null if none > 25 TSS). */
   recentCrossTraining: { label: string; tss: number } | null;
-  /** Today's raw Signal B TSS (0 if nothing logged). Used to judge session weight on adhoc days. */
+  /** Today's raw Signal B TSS from logged sessions (0 if nothing logged). Used to judge session weight on adhoc days. */
   actualTSS: number;
+  /**
+   * Today's strain TSS: sessions plus passive step and active-minute load
+   * (computeCapacityStrain(s).todayTSS, the Strain ring's number). Gates the
+   * coach's readiness strain input exactly as Home and Readiness gate their own
+   * computeReadiness call. Absent: actualTSS gates.
+   */
+  strainTSS?: number;
+  /**
+   * Today's canonical capacity strain (computeCapacityStrain(s)). The coach's
+   * post-session sentence comes from postSessionNote(capacity), the helper Home
+   * and the Readiness page call, so one session reads the same tier word and
+   * number everywhere. Absent (hand-built contexts): no post-session sentence.
+   */
+  capacity?: CapacityStrain;
   /** Full today-planned workout shape (if any) — used to expose richer context to the LLM. */
   todayPlannedWorkout?: {
     name: string;
@@ -134,7 +150,7 @@ export interface StrainContext {
     description: string | null;
     plannedTSS: number | null;
     plannedDurationMin: number | null;
-    /** Running: today's workout fills the long-run slot (PlannedDayWorkout.longRun). */
+    /** Today's workout is the week's long run (PlannedDayWorkout.longRun; running, triathlon and HYROX). */
     longRun?: boolean;
   } | null;
 }
@@ -153,7 +169,7 @@ export interface CoachState {
   sessionNote: string | null;
   /**
    * UI ring label. Always the underlying `readiness.label`. The post-session
-   * wording lives in the sentence below the ring (see `postSessionSentence`),
+   * wording lives in the sentence below the ring (see `postSessionNote`),
    * since the ring is too narrow for long copy.
    */
   ringLabel: string;
@@ -185,7 +201,19 @@ export function getTodayFeeling(s: SimulatorState): 'struggling' | 'ok' | 'good'
 // ─── Strain context auto-derivation ─────────────────────────────────────────
 // When no StrainContext is passed (e.g. from coach-view), derive it from state.
 
-function deriveStrainContext(s: SimulatorState): StrainContext {
+/** hasTrainedOnDay lives in capacity-strain.ts (the post-session gate reads it there); re-exported for existing callers. */
+export { hasTrainedOnDay };
+
+/**
+ * The coach's view of today, from state alone: the one source for Home's coach
+ * line, the coach page and the Readiness page's coach sentence (computeDailyCoach
+ * derives it when no context is passed). Home built its own context until
+ * 2026-10-21 (D8): no today's planned workout, so its line said "the session"
+ * where the coach page named it, and its session TSS included passive steps.
+ * Sessions only for the session fields (actualTSS, strainPct, trainedToday,
+ * isRestDayOverreaching); the readiness gate reads the strain TSS (strainTSS).
+ */
+export function deriveStrainContext(s: SimulatorState): StrainContext {
   const wk = (s.wks ?? [])[s.w - 1];
   if (!wk) return { strainPct: 0, isRestDay: true, isRestDayOverreaching: false, trainedToday: false, todayIsHard: false, upcomingHard: null, recentCrossTraining: null, actualTSS: 0 };
 
@@ -217,7 +245,7 @@ function deriveStrainContext(s: SimulatorState): StrainContext {
   const isRestDay = !hasPlannedWorkout && !matchedActivityToday;
   // Per-session average: planned week TSS / training day count (tracks plan intent, not CTL history)
   const perSessionAvg = plannedCtx.perSessionAvg;
-  const isRestDayOverreaching = isRestDay && todayTSS > 0 && perSessionAvg > 0 && todayTSS > perSessionAvg * REST_DAY_OVERREACH_RATIO;
+  const isRestDayOverreaching = isRestDayOverreached(wk, today, isRestDay, perSessionAvg);
 
   const strainPct = hasPlannedWorkout && todayTSS > 0 && plannedDayTSS > 0
     ? (todayTSS / plannedDayTSS) * 100 : 0;
@@ -249,20 +277,25 @@ function deriveStrainContext(s: SimulatorState): StrainContext {
     const hit = plannedCtx.workoutsForDay(targetDow)
       .find(w => w.status !== 'skip' && w.status !== 'replaced' && w.isHard);
     if (hit) {
-      upcomingHard = { whenLabel: offset === 1 ? 'tomorrow' : 'the day after', type: hit.type };
+      upcomingHard = { whenLabel: offset === 1 ? 'tomorrow' : 'the day after', type: hit.type, name: hit.name };
       break;
     }
   }
 
+  // Canonical capacity-anchored strain: the percent the readiness strain floor
+  // reads and the day's strain TSS that gates it. Keeps the coach's internal
+  // readiness consistent with the Home card and the Readiness detail page
+  // (same computeCapacityStrain source, same gate).
+  const capStrain = computeCapacityStrain(s);
+
   return {
     strainPct,
-    // Canonical capacity-anchored percent — what the readiness strain floor
-    // reads. Keeps the coach's internal readiness consistent with the Home
-    // card and the Readiness detail page (same computeCapacityStrain source).
-    capacityStrainPct: computeCapacityStrain(s).pctCapacity,
+    capacityStrainPct: capStrain.pctCapacity,
+    strainTSS: capStrain.todayTSS,
+    capacity: capStrain,
     isRestDay,
     isRestDayOverreaching,
-    trainedToday: todayTSS > 0,
+    trainedToday: hasTrainedOnDay(wk, today),
     todayIsHard,
     upcomingHard,
     recentCrossTraining: null,
@@ -347,7 +380,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
 
   const sleepTarget = s.sleepTargetSec ?? deriveSleepTarget(physio);
   const sleepBank = getSleepBank(physio, sleepTarget);
-  const dailyTSSByDate = buildDailySignalBTSS(wks, (s as any).previousPlanWks);
+  const dailyTSSByDate = buildDailySignalBTSS(wks, (s as any).previousPlanWks, s.planStartDate);
   const sleepDebtSec = sleepBank.nightsWithData >= 3
     ? computeSleepDebt(physio, dailyTSSByDate, tier ?? 'recreational', sleepTarget)
     : null;
@@ -376,7 +409,10 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
     precomputedRecoveryScore: recoveryResult.hasData ? recoveryResult.score : null,
     // Capacity-anchored percent (canonical computeCapacityStrain) feeds the
     // strain floor; the plan-relative strainPct stays for sentence tiers.
-    strainPct: strain?.trainedToday ? (strain.capacityStrainPct ?? strain.strainPct) : null,
+    // Gated on the day's strain TSS (sessions and passive load), the gate Home
+    // and Readiness apply to their own computeReadiness call
+    // (capStrain.todayTSS > 0); trainedToday counts sessions only.
+    strainPct: (strain?.strainTSS ?? strain?.actualTSS ?? 0) > 0 ? (strain!.capacityStrainPct ?? strain!.strainPct) : null,
     acwrSafeUpper: acwr.safeUpper,
     hasUpcomingHardSession: strain?.upcomingHard != null || (strain?.todayIsHard ?? false),
     // HYROX MTL load ratio: the canonical value Home and Readiness feed their
@@ -860,6 +896,15 @@ export function detectEasyDriftPattern(s: SimulatorState): string | null {
 // sentence is shaped by today's workout context (hard/easy/rest) and secondary
 // modifiers (phase, CTL trend, week RPE, recent cross-training).
 
+/** What the look-ahead copy calls the upcoming hard session: its plan name
+ *  ("Long Run"), else its type with underscores as spaces. The type alone read
+ *  "Treat tomorrow's hyrox run easy as a chance to ease in." for the HYROX
+ *  long run (2026-10-22). */
+function upcomingHardLabel(u: NonNullable<StrainContext['upcomingHard']>): string {
+  const name = u.name?.trim();
+  return name ? name : u.type.replace(/_/g, ' ');
+}
+
 function derivePrimaryMessage(
   sig: CoachSignals,
   readiness: ReadinessResult,
@@ -871,7 +916,10 @@ function derivePrimaryMessage(
   // Sentence-start variant: real workout names are already capitalized; this
   // only fixes the fallback ("the session as planned." → "The session ...").
   const wnCap = wn.charAt(0).toUpperCase() + wn.slice(1);
-  const hard = strain?.todayIsHard ?? (sig.todayWorkoutType ? isHardType(sig.todayWorkoutType) : false);
+  // Hardness comes from the planned-day context (getPlannedDayTSSContext:
+  // the running token check, plus each stored-plan mode's own classifier).
+  // computeDailyCoach always supplies a strain context.
+  const hard = strain?.todayIsHard ?? false;
   const restDay = strain?.isRestDay ?? false;
   const sp = strain?.strainPct ?? 0;
   const trained = strain?.trainedToday ?? false;
@@ -879,6 +927,12 @@ function derivePrimaryMessage(
   // Was today's actual session heavy relative to chronic daily load?
   // CTL in signals is already ÷7 (daily equivalent). Compare raw TSS to that.
   const actualTSS = strain?.actualTSS ?? 0;
+  // Today's canonical capacity strain: the post-session sentence (injury-cap
+  // overshoot, then the Big / Solid / Good training tiers) comes from
+  // postSessionNote, the helper Home and the Readiness page call. It gates on
+  // a logged session, reads the session alone (sessionPctCapacity) and quotes the Strain
+  // ring's number.
+  const cs = strain?.capacity ?? null;
   const dailyCTL = sig.ctlNow > 0 ? sig.ctlNow : null;
   const sessionHeavy = trained && dailyCTL != null && actualTSS > dailyCTL * 1.2;
 
@@ -888,16 +942,19 @@ function derivePrimaryMessage(
     : null;
 
   // ── Tier 0: Hard blockers ───────────────────────────────────────────────
+  // A logged session leads under an injury or illness blocker too:
+  // postSessionNote puts the injury-cap overshoot first ("X TSS logged against
+  // an injury-capped day of Y..."), then the tier. The Readiness Today's
+  // Strain card and triathlon Home print the same helper with no blocker
+  // check, so the coach printing "Injury is active..." here gave one session
+  // two different post-session lines (2026-10-22). Tier 1's order applies:
+  // a rest-day overreach leads, then the post-session note. With no logged
+  // session in a tier, the blocker sentence stands.
+  const hasBlocker = blockers.includes('injury') || blockers.includes('illness');
+  if (hasBlocker && strain?.isRestDayOverreaching) return REST_DAY_OVERREACH_SENTENCE;
+  const blockerPostNote = hasBlocker && cs ? postSessionNote(cs) : null;
+  if (blockerPostNote) return blockerPostNote;
   if (blockers.includes('injury')) {
-    // Session exceeded the injury-capped plan by the "Load exceeded" margin
-    // (sp ≥ 130% of plan). Mirrors the tri-mode home-view call-out: the ring
-    // stays capacity-based, the sentence carries the rehab-cap message.
-    if (trained && sp >= 130 && actualTSS > 0) {
-      const plannedTSS = actualTSS / (sp / 100);
-      const capacityAnchor = Math.max(plannedTSS, dailyCTL ?? 0);
-      const capacityPct = capacityAnchor > 0 ? (actualTSS / capacityAnchor) * 100 : sp;
-      return injuryCapOvershootSentence(actualTSS, plannedTSS, capacityPct);
-    }
     // Tailor the message to whether the user actually has training options.
     // Full-stop message only when the stance routed to 'rest' above; for
     // partially-restricted injuries (e.g. tri user with shoulder injury still
@@ -912,8 +969,8 @@ function derivePrimaryMessage(
 
   // ── Tier 1: Session complete (strain-based) ─────────────────────────────
   if (strain?.isRestDayOverreaching)
-    return 'High load on a rest day. Recovery for upcoming sessions is impaired.';
-  const postNote = postSessionSentence(actualTSS, sp);
+    return REST_DAY_OVERREACH_SENTENCE;
+  const postNote = cs ? postSessionNote(cs) : null;
   if (postNote) return postNote;
 
   // ── Tier 2: Red flags ───────────────────────────────────────────────────
@@ -933,10 +990,10 @@ function derivePrimaryMessage(
       return `Load spike (${sig.acwr}x). Reduce or skip ${wn}.`;
     if (restDay)
       return strain?.upcomingHard
-        ? `Load spike (${sig.acwr}x). Rest is well placed. Treat ${strain.upcomingHard.whenLabel}'s ${strain.upcomingHard.type.replace(/_/g, ' ')} as a chance to ease in.`
+        ? `Load spike (${sig.acwr}x). Rest is well placed. Treat ${strain.upcomingHard.whenLabel}'s ${upcomingHardLabel(strain.upcomingHard)} as a chance to ease in.`
         : `Load spike (${sig.acwr}x). Rest is well placed. No hard sessions in the next couple of days.`;
     return strain?.upcomingHard
-      ? `Load spike (${sig.acwr}x). Keep today easy. Treat ${strain.upcomingHard.whenLabel}'s ${strain.upcomingHard.type.replace(/_/g, ' ')} as a chance to ease in.`
+      ? `Load spike (${sig.acwr}x). Keep today easy. Treat ${strain.upcomingHard.whenLabel}'s ${upcomingHardLabel(strain.upcomingHard)} as a chance to ease in.`
       : `Load spike (${sig.acwr}x). Keep today easy. Nothing hard is planned in the next couple of days.`;
   }
 
@@ -957,6 +1014,11 @@ function derivePrimaryMessage(
       return sessionHeavy
         ? `Sleep ${sig.sleepLastNight}/100. Hard session on poor sleep blunts the training stimulus.`
         : `Sleep ${sig.sleepLastNight}/100. Light session was appropriate.`;
+    // A long run is already easy effort (the HYROX long run is hyrox_run_easy),
+    // so converting it to easy asks for what is already true; its load is the
+    // duration. Running, triathlon and HYROX share the line (E8, 2026-10-22).
+    if (hard && strain?.todayPlannedWorkout?.longRun)
+      return `Sleep ${sig.sleepLastNight}/100 last night. Consider shortening today's ${wn}.`;
     return hard
       ? `Sleep ${sig.sleepLastNight}/100 last night. Consider converting ${wn} to easy effort.`
       : 'Poor sleep last night. Rest or easy movement is appropriate.';
@@ -1010,10 +1072,10 @@ function derivePrimaryMessage(
       return `Training load spiking (${sig.acwr}x). Keep ${wn} controlled.`;
     if (restDay)
       return strain?.upcomingHard
-        ? `Training load spiking (${sig.acwr}x). Rest is well placed. ${strain.upcomingHard.whenLabel.charAt(0).toUpperCase() + strain.upcomingHard.whenLabel.slice(1)}'s ${strain.upcomingHard.type.replace(/_/g, ' ')} is the next thing to watch.`
+        ? `Training load spiking (${sig.acwr}x). Rest is well placed. ${strain.upcomingHard.whenLabel.charAt(0).toUpperCase() + strain.upcomingHard.whenLabel.slice(1)}'s ${upcomingHardLabel(strain.upcomingHard)} is the next thing to watch.`
         : `Training load spiking (${sig.acwr}x). Rest is well placed.`;
     return strain?.upcomingHard
-      ? `Training load spiking (${sig.acwr}x). Easy session is well placed today. ${strain.upcomingHard.whenLabel.charAt(0).toUpperCase() + strain.upcomingHard.whenLabel.slice(1)}'s ${strain.upcomingHard.type.replace(/_/g, ' ')} is the next thing to watch.`
+      ? `Training load spiking (${sig.acwr}x). Easy session is well placed today. ${strain.upcomingHard.whenLabel.charAt(0).toUpperCase() + strain.upcomingHard.whenLabel.slice(1)}'s ${upcomingHardLabel(strain.upcomingHard)} is the next thing to watch.`
       : `Training load spiking (${sig.acwr}x). Easy session is well placed today.`;
   }
 
@@ -1243,11 +1305,6 @@ function derivePrimaryMessage(
   return readiness.sentence;
 }
 
-/** Matches isHardWorkout from scheduler — duplicated here to avoid circular import. */
-const HARD_TYPES = ['threshold', 'tempo', 'vo2max', 'intervals', 'long', 'mp', 'race', 'time_trial', 'progression', 'marathon_pace', 'steady', 'float'];
-function isHardType(t: string): boolean {
-  return HARD_TYPES.includes(t);
-}
 
 // ─── LLM payload builder ────────────────────────────────────────────────────
 //

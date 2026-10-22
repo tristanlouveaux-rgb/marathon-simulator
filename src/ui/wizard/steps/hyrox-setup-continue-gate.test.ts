@@ -193,3 +193,12 @@ describe('hyrox-setup: Continue explains the previous-time format gate', () => {
     expect(h.nextStep).toHaveBeenCalledTimes(1);
   });
 });
+
+// ISSUE-406 (h): the setup step's title names the race in its own capitals.
+describe('HYROX setup title', () => {
+  it('reads "HYROX setup", not "Hyrox setup"', () => {
+    mount();
+    const title = (document.querySelector('h2')?.textContent ?? '').trim();
+    expect(title).toBe('HYROX setup');
+  });
+});

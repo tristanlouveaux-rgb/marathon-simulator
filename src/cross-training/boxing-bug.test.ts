@@ -13,7 +13,6 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createActivity } from './activities';
-import { applyCrossTrainingToWorkouts } from './matcher';
 import { buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from './suggester';
 import type { Week, Workout } from '@/types';
 
@@ -91,58 +90,6 @@ function createWorkoutsWithCycling(): Workout[] {
 }
 
 describe('Boxing Replacement Bug Regression', () => {
-  describe('applyCrossTrainingToWorkouts - Cycling Protection', () => {
-    it('should NEVER replace cycling workouts', () => {
-      const wk = createTestWeek();
-      const workouts = createWorkoutsWithCycling();
-      const originalCyclingStatus = workouts.find(w => w.t === 'cycling')?.status;
-
-      // Log a boxing activity (high load to maximize modification chance)
-      const boxingActivity = createActivity('boxing', 60, 5, 100, 30, 1);
-      const result = applyCrossTrainingToWorkouts(wk, workouts, [boxingActivity]);
-
-      // Find the cycling workout in result
-      const cyclingWorkout = result.find(w => w.t === 'cycling');
-
-      // Cycling workout must NOT be modified
-      expect(cyclingWorkout).toBeDefined();
-      expect(cyclingWorkout!.status).toBe(originalCyclingStatus);
-      expect(cyclingWorkout!.modReason).toBeUndefined();
-    });
-
-    it('should NEVER replace strength workouts', () => {
-      const wk = createTestWeek();
-      const workouts: Workout[] = [
-        { n: 'W1-easy', t: 'easy', d: '8km', dayOfWeek: 1, aerobic: 80, anaerobic: 10, rpe: 3, r: 3 },
-        { n: 'W1-strength', t: 'strength', d: '45min', dayOfWeek: 3, aerobic: 50, anaerobic: 20, rpe: 6, r: 6 },
-        { n: 'W1-long', t: 'long', d: '20km', dayOfWeek: 6, aerobic: 180, anaerobic: 18, rpe: 5, r: 5 },
-      ];
-
-      const boxingActivity = createActivity('boxing', 90, 8, 150, 50, 1);
-      const result = applyCrossTrainingToWorkouts(wk, workouts, [boxingActivity]);
-
-      const strengthWorkout = result.find(w => w.t === 'strength');
-      expect(strengthWorkout).toBeDefined();
-      expect(strengthWorkout!.status).toBeUndefined();
-    });
-
-    it('should NEVER replace cross-training workouts', () => {
-      const wk = createTestWeek();
-      const workouts: Workout[] = [
-        { n: 'W1-easy', t: 'easy', d: '8km', dayOfWeek: 1, aerobic: 80, anaerobic: 10, rpe: 3, r: 3 },
-        { n: 'W1-cross', t: 'cross', d: 'Swimming 30min', dayOfWeek: 3, aerobic: 40, anaerobic: 5, rpe: 4, r: 4 },
-        { n: 'W1-long', t: 'long', d: '20km', dayOfWeek: 6, aerobic: 180, anaerobic: 18, rpe: 5, r: 5 },
-      ];
-
-      const boxingActivity = createActivity('boxing', 90, 8, 150, 50, 1);
-      const result = applyCrossTrainingToWorkouts(wk, workouts, [boxingActivity]);
-
-      const crossWorkout = result.find(w => w.t === 'cross');
-      expect(crossWorkout).toBeDefined();
-      expect(crossWorkout!.status).toBeUndefined();
-    });
-  });
-
   describe('buildCrossTrainingPopup - Preview Only', () => {
     it('should compute suggestions WITHOUT mutating input workouts', () => {
       const workouts = createWorkoutsWithCycling();

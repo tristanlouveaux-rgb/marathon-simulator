@@ -345,8 +345,12 @@ describe('cross-training overload: off-ladder quality sessions take a downgrade 
     }
   });
 
-  it('every downgrade proposed in generated plans shows the TSS the apply step takes off', () => {
-    let downgrades = 0;
+  it('every change proposed in generated plans shows the TSS the apply step takes off', () => {
+    // Downgrade, swap and trim alike, and the last change of a set too: the
+    // builders no longer clip a label to the budget left (they pass over a change
+    // that does not fit), and a swap or trim is priced by the apply step's own
+    // re-pricing, not a flat 50% / 15% (triSuggestionTssReduction).
+    const counts = { downgrade_today: 0, swap_easy: 0, trim_volume: 0 };
     for (const p of PLANS) {
       const base = generated(p);
       for (let wi = 0; wi < base.wks.length; wi++) {
@@ -357,25 +361,24 @@ describe('cross-training overload: off-ladder quality sessions take a downgrade 
         if (!o) continue;
         for (const d of ['swim', 'bike', 'run'] as const) {
           for (const set of [o.options[d].reduceMods, o.options[d].replaceMods]) {
-            set.forEach((a, i) => {
-              if (a.action !== 'downgrade_today') return;
+            for (const a of set) {
               const c = structuredClone(s);
               const w = c.wks[wi].triWorkouts!.find(x => x.id === a.workoutId)!;
               const before = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
               const mod: TriSuggestionMod = { id: 'x', source: 'cross_training_overload', discipline: a.discipline, headline: '', body: '', severity: 'caution', targetWorkoutId: a.workoutId, action: a.action };
               expect(applyTriSuggestions(c, [mod]).applied).toBe(1);
               const taken = before - ((w.aerobic ?? 0) + (w.anaerobic ?? 0));
-              const where = `${p.label} wk${wi + 1} ${a.workoutLabel}`;
+              const where = `${p.label} wk${wi + 1} ${a.workoutLabel} ${a.action}`;
               expect(a.tssReduction, where).toBeGreaterThan(0);
-              // Equal; the last adjustment of a set can be cut to the budget left.
-              if (i < set.length - 1) expect(a.tssReduction, where).toBe(taken);
-              else expect(a.tssReduction, where).toBeLessThanOrEqual(taken);
-              downgrades += 1;
-            });
+              expect(a.tssReduction, where).toBe(Math.round(taken));
+              counts[a.action] += 1;
+            }
           }
         }
       }
     }
-    expect(downgrades).toBeGreaterThan(50);
+    expect(counts.downgrade_today).toBeGreaterThan(50);
+    expect(counts.swap_easy).toBeGreaterThan(20);
+    expect(counts.trim_volume).toBeGreaterThan(50);
   });
 });
