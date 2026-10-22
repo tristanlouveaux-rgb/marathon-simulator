@@ -42,8 +42,10 @@ export function hyroxPhaseLabel(ph: string | undefined): string {
   return ph[0].toUpperCase() + ph.slice(1);
 }
 
-/** Provenance of the HYROX run pace: deriveHyroxRunPace(...).provenance. */
-export type HyroxRunPaceProvenance = 'user' | 'derived' | 'seed';
+/** Provenance of the HYROX run pace: deriveHyroxRunPace(...).provenance.
+ *  'race': the band median adjusted to the athlete's last HYROX race (an
+ *  unmeasured runner with a previous race, E5). */
+export type HyroxRunPaceProvenance = 'user' | 'derived' | 'seed' | 'race';
 
 /**
  * Short provenance label for the run pace: the Forecast's Run pace chip and
@@ -56,6 +58,7 @@ export type HyroxRunPaceProvenance = 'user' | 'derived' | 'seed';
 export function hyroxRunPaceSourceLabel(provenance: HyroxRunPaceProvenance): string {
   if (provenance === 'derived') return 'From VDOT';
   if (provenance === 'seed') return 'Band median';
+  if (provenance === 'race') return 'From last race';
   return 'Set manually';
 }
 
@@ -67,6 +70,7 @@ export function hyroxRunPaceSourceLabel(provenance: HyroxRunPaceProvenance): str
 export function hyroxRunPaceCaption(provenance: HyroxRunPaceProvenance): string {
   if (provenance === 'derived') return 'Updated from your runs. Beat your last test.';
   if (provenance === 'seed') return 'Population est.';
+  if (provenance === 'race') return 'Band median, adjusted to your last race.';
   return 'Set manually.';
 }
 

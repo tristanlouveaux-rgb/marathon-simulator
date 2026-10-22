@@ -223,8 +223,9 @@ export interface HyroxPrediction {
      *  singles work-total table. */
     stationsSinglesPercentile: number;
   };
-  /** Provenance of the run pace used in this prediction. */
-  runPaceSource: 'user' | 'derived' | 'seed';
+  /** Provenance of the run pace used in this prediction (deriveHyroxRunPace's
+   *  provenance; 'race' = band median adjusted to the last HYROX race). */
+  runPaceSource: 'user' | 'derived' | 'seed' | 'race';
   /** Race-time staleness summary, surfaced in the UI for transparency. */
   staleness?: {
     ageMonths: number;

@@ -874,6 +874,7 @@ export function hyroxRunPaceSourceNote(s: SimulatorState, source: HyroxPredictio
     return `Run pace updated from your VDOT.${pbAge ? ` ${pbAge}` : ''}`;
   }
   if (source === 'seed') return 'Run pace is the median of your ability band in the HYROX results. Add a recent run for a VDOT-anchored prediction.';
+  if (source === 'race') return 'Run pace is the median of your ability band, adjusted to the run time of your last HYROX race. Add a recent run for a VDOT-anchored prediction.';
   return '';
 }
 

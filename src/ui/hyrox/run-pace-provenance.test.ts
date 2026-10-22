@@ -26,7 +26,7 @@ import { applyHyroxRunPaceDerivation } from '@/calculations/hyrox-marker-bumps';
 import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { renderHyroxForecastView } from './forecast-view';
 import { renderHyroxStatsView, hyroxRunPaceRowCaption } from './stats-view';
-import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
+import { deriveHyroxRunPace, refreshHyroxPersonalRunPaceOffset } from '@/calculations/hyrox-run-pace';
 import { fmtModelPaceKm } from '@/utils/format';
 import { hyroxRunPaceSourceLabel, hyroxRunPaceCaption } from './forecast-labels';
 import type { SimulatorState } from '@/types/state';
@@ -105,6 +105,33 @@ describe('run pace provenance on the Forecast and Stats', () => {
     document.body.innerHTML = '<div id="app-root"></div>';
     renderHyroxStatsView();
     expect(pageText()).toContain('Set manually.');
+  });
+});
+
+describe('an unmeasured runner with a previous race: the pace reads as adjusted to that race (E5)', () => {
+  it('the Forecast chip, its confidence note and the Stats row name the race', () => {
+    const s = hyroxState();
+    s.vo2 = null; // no real running-fitness signal: the band seed is the base (D5)
+    Object.assign(s.hyroxConfig!, {
+      previousHyroxTimeSec: 85 * 60,
+      hyroxPreviousTimeFormat: 'open_singles',
+      hyroxPreviousRaceDate: new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10),
+    });
+    expect(refreshHyroxPersonalRunPaceOffset(s)).toBe(true);
+    const r = deriveHyroxRunPace(s);
+    expect(r.provenance).toBe('race');
+    expect(predictHyroxRace(s)!.runPaceSource).toBe('race');
+    setState(s);
+
+    renderHyroxForecastView();
+    expect(runPaceChipText()).toContain(hyroxRunPaceSourceLabel('race'));
+    expect(pageText()).toContain('adjusted to the run time of your last HYROX race');
+    expect(pageText()).not.toContain('Run pace is the median of your ability band in the HYROX results.');
+
+    document.body.innerHTML = '<div id="app-root"></div>';
+    renderHyroxStatsView();
+    expect(pageText()).toContain(hyroxRunPaceCaption('race'));
+    expect(pageText()).toContain(`${fmtModelPaceKm(r.paceSecKm)}/km`);
   });
 });
 

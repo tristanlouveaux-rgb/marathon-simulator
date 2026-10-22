@@ -10,6 +10,9 @@ import { describe, it, expect } from 'vitest';
 import {
   deriveHyroxRunPace,
   derivePopulationRunPace,
+  refreshHyroxPersonalRunPaceOffset,
+  hyroxRunPaceOffsetBase,
+  hyroxSeedRunPaceForFormat,
   cpRatioForVdot,
   doublesRunPaceFactor,
   HYROX_FATIGUE_TO_THRESHOLD_RATIO,
@@ -19,6 +22,7 @@ import { SEED_RUN_PACE_SEC_KM } from '@/constants/hyrox-benchmarks';
 import { HYROX_S89_POOLED_PERCENTILES, type HyroxPercentileTable } from '@/data/hyrox-results-s79';
 import type { SimulatorState } from '@/types/state';
 import type { AbilityBand, HyroxConfig } from '@/types/triathlon';
+import { computePersonalRunPaceOffset } from './hyrox-personal-pace';
 
 function buildState(opts: {
   band?: AbilityBand;
@@ -320,5 +324,79 @@ describe('deriveHyroxRunPace — provenance', () => {
     expect(deriveHyroxRunPace(buildState({ vdot: 46, userPace: 350 })).provenance).toBe('derived');
     expect(deriveHyroxRunPace(buildState({ vdot: 46 })).provenance).toBe('derived');
     expect(deriveHyroxRunPace(buildState({ vdot: null })).provenance).toBe('seed');
+  });
+});
+
+/**
+ * The personal race offset is fitted against the run-pace base in use and
+ * refitted when it changes (E5, 2026-10-22). D5 gave an unmeasured runner the
+ * band seed and dropped the offset with the VDOT model, so a beginner who had
+ * raced HYROX lost the race's anchor; and an offset fitted against the bare
+ * VDOT 50 was applied unchanged once a real signal arrived.
+ */
+describe('personal race offset: fitted against the base in use', () => {
+  const RACE_DATE = new Date(Date.now() - 1000 * 60 * 60 * 24 * 30).toISOString().slice(0, 10); // a month ago
+  function withRace(st: SimulatorState, finishSec: number): SimulatorState {
+    Object.assign(st.hyroxConfig!, {
+      previousHyroxTimeSec: finishSec,
+      hyroxPreviousTimeFormat: 'open_singles',
+      hyroxPreviousRaceDate: RACE_DATE,
+    });
+    return st;
+  }
+  const unmeasured = (band: AbilityBand, finishSec: number) =>
+    withRace({ ...buildState({ band, vdot: 50 }), vo2: null } as SimulatorState, finishSec);
+
+  it('an unmeasured beginner with a race: the offset is fitted against the seed and moves the forecast pace', () => {
+    const st = unmeasured('beginner', 105 * 60); // 1:45 Open Singles
+    const seed = hyroxSeedRunPaceForFormat(st, 'beginner', 'singles');
+    expect(refreshHyroxPersonalRunPaceOffset(st)).toBe(true);
+    expect(hyroxRunPaceOffsetBase(st.hyroxConfig)).toBe('seed');
+    const offset = computePersonalRunPaceOffset(st);
+    expect(offset).not.toBe(0);
+    const r = deriveHyroxRunPace(st);
+    expect(r.provenance).toBe('race');
+    expect(r.source).toBe('seed');            // nothing written to the pace slot
+    expect(r.derivedSecKm).toBeNull();
+    expect(r.paceSecKm).toBe(seed + offset);
+    expect(refreshHyroxPersonalRunPaceOffset(st)).toBe(false); // idempotent on the same base
+  });
+
+  it('the first real running signal refits the offset against the VDOT model', () => {
+    const st = unmeasured('beginner', 105 * 60);
+    refreshHyroxPersonalRunPaceOffset(st);
+    const seedOffset = st.hyroxConfig!.personalRunPaceOffsetSec;
+    (st as any).vo2 = 40; // a fresh watch VO2max: measured
+    (st as any).v = 40;
+    // Before the refit the seed-fitted offset applies nowhere.
+    const before = deriveHyroxRunPace(st);
+    expect(before.provenance).toBe('derived');
+    expect(before.components!.personalOffsetSec).toBe(0);
+    expect(refreshHyroxPersonalRunPaceOffset(st)).toBe(true);
+    expect(hyroxRunPaceOffsetBase(st.hyroxConfig)).toBe('vdot');
+    expect(st.hyroxConfig!.personalRunPaceOffsetSec).not.toBe(seedOffset);
+    const after = deriveHyroxRunPace(st);
+    expect(after.components!.personalOffsetSec).toBe(computePersonalRunPaceOffset(st));
+    expect(after.paceSecKm).toBe(derivePopulationRunPace(st, 'singles')!.paceSecKm + computePersonalRunPaceOffset(st));
+  });
+
+  it('a legacy offset (no base stamp) is not applied to the seed and is refitted against it', () => {
+    const st = unmeasured('beginner', 105 * 60);
+    st.hyroxConfig!.personalRunPaceOffsetSec = 25; // fitted against the bare VDOT 50 by an older build
+    st.hyroxConfig!.personalRunPaceOffsetUpdatedAtISO = RACE_DATE;
+    expect(deriveHyroxRunPace(st).provenance).toBe('seed');
+    expect(refreshHyroxPersonalRunPaceOffset(st)).toBe(true);
+    expect(hyroxRunPaceOffsetBase(st.hyroxConfig)).toBe('seed');
+    expect(st.hyroxConfig!.personalRunPaceOffsetSec).not.toBe(25);
+    expect(deriveHyroxRunPace(st).provenance).toBe('race');
+  });
+
+  it('a pace the athlete entered still wins for an unmeasured runner', () => {
+    const st = unmeasured('beginner', 105 * 60);
+    st.hyroxConfig!.hyroxRunPaceSecKm = 400;
+    refreshHyroxPersonalRunPaceOffset(st);
+    const r = deriveHyroxRunPace(st);
+    expect(r.source).toBe('user');
+    expect(r.paceSecKm).toBe(400);
   });
 });

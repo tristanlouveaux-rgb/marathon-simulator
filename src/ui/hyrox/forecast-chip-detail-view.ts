@@ -287,6 +287,8 @@ function pageRunPace(s: SimulatorState): { title: string; subhead: string; body:
     ? `Updated from your VDOT (${vdot.toFixed(1)}). Recalculates from your runs as fitness changes.`
     : prediction.runPaceSource === 'seed'
     ? `Median run pace of the ${(s.hyroxConfig?.athleteBand ?? 'current').replace(/_/g, ' ')} band in the HYROX results. Sync a recent run and Mosaic anchors pace on your VDOT instead.`
+    : prediction.runPaceSource === 'race'
+    ? `Median run pace of the ${(s.hyroxConfig?.athleteBand ?? 'current').replace(/_/g, ' ')} band, adjusted to the run time of your last HYROX race. Sync a recent run and Mosaic anchors pace on your VDOT instead.`
     : 'Set manually during onboarding. Updates from runs when better data is available.';
 
   const vdotSamples = (s.vdotHistory ?? [])
