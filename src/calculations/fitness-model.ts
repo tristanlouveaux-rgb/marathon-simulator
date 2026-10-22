@@ -1576,10 +1576,12 @@ export function getDailyLoadHistory(
       const durMin = parseDurMinFromDesc(w.d);
       const actTss = signalBAdhocTSS(w, norm); // the day's tss adhoc rule
       const name = w.n ?? w.t ?? 'Activity';
-      // Don't double-count if already seen via garminActuals
-      if (!activities.some(a => a.name === name && Math.abs(a.durationMin - Math.round(durMin)) < 2)) {
-        activities.push({ name, tss: Math.round(actTss), durationMin: Math.round(durMin) });
-      }
+      // No name-and-duration duplicate check: the id and garmin-id skips above
+      // cover real twins, as in computeTodaySignalBTSS, which counts the
+      // entry. The check dropped a legacy synced entry ('running', 79 min)
+      // beside a Strava record ('running', 80 min) on the same day, so the
+      // rows read 94 under a 235 bar (2026-10-22, E4).
+      activities.push({ name, tss: Math.round(actTss), durationMin: Math.round(durMin) });
     }
 
     // Compute per-day zone load: for each activity with HR zones, distribute TSS

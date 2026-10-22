@@ -124,6 +124,22 @@ describe('Load drill-down: activity rows sum to the day', () => {
     // Each row rounds on its own; the day rounds once.
     expect(Math.abs(rowsOf(e) + bonus - e.tss)).toBeLessThanOrEqual(2);
   });
+
+  it('a legacy synced entry beside a record with the same name and length is listed (E4)', () => {
+    // The rows dropped an adhoc entry whose name and duration matched a row
+    // already listed; computeTodaySignalBTSS counts both, so the rows fell
+    // short of the bar (94 under 235 in a 400-week probe).
+    const wk = week();
+    (wk.garminActuals as any)['strava-run-2'] = record('strava-777', 0, 80, { activityType: 'RUNNING', displayName: 'running', avgHR: 150, iTrimp: 12000 });
+    wk.adhocWorkouts = [
+      ...(wk.adhocWorkouts ?? []),
+      { id: 'garmin-legacy-run', t: 'cross', n: 'running', d: '79min', r: 7, rpe: 7, garminTimestamp: new Date(2026, 8, 28, 18, 0, 0).toISOString() } as any,
+    ];
+    const e = history(wk).find(x => x.date === key(0))!;
+    const bonus = computeTodayDoubleDayBonus(wk, key(0));
+    expect(e.activities.filter(a => (a as any).name === 'running')).toHaveLength(2);
+    expect(Math.abs(rowsOf(e) + bonus - e.tss)).toBeLessThanOrEqual(3);
+  });
 });
 
 /**
