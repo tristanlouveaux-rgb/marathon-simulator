@@ -64,9 +64,12 @@
  *      goes to it when the week then holds more minutes (round 7) and its
  *      running stays at or above HYROX_RUN_SHARE of the chosen weekly
  *      minutes, never in a deload (2026-10-14).
- *      Neither hard nor eccentric. It never fills what the injury gates took,
- *      nor the slot of the week's last station session or brick, nor a
- *      missing quality run's slot, and no slot moves with an active injury.
+ *      Neither hard nor eccentric. It never fills the slot of the week's
+ *      last station session or brick, nor a missing quality run's slot. The
+ *      week is built without the injury (injury gate v2): an easy run's slot
+ *      the uninjured week gave to easy erg work stays erg work through the
+ *      gates, and leaves with nothing in its place when its erg's capacity
+ *      is 0 (a disclosed cost against an athlete without ergs).
  *   8. A week over its size gives way in the allocation order run backwards
  *      (easy erg work, the scale, easy runs, stations out of circuits, the
  *      technique session, the secondary brick, the brick, the long run's
@@ -478,6 +481,27 @@ import {
 //   session passes through the injury gates, and under an injury holds no
 //   more station work than the race-pace session it replaces (else it
 //   leaves).
+// Still v19 (unreleased; injury gate v2, 2026-10-22). It supersedes the
+// injury-gate entries of rounds 3 to 8 above (the shape search: whole-station
+// cuts, cut orders, ranked candidates, partial walks, the gated reference
+// copies of the deload and taper ceilings, the uninjured-slot seeding):
+// - under any active injury each current and future week is the week the
+//   plan builds without it, every session through the injury gates on its
+//   day: runs at the run capacity's share, every station set at its side's
+//   share, the finisher at its erg's, nothing added or moved; a station
+//   session stays when no side it uses is at 0 and it holds the 15-min floor
+//   with its planned warm-up; bricks and sims leave under any restriction;
+//   the ceilings (deload, taper, race week, the acute:chronic guard and its
+//   floor) are the uninjured plan's;
+// - a warm-up moves only between ways with the same MTL a minute (an erg to
+//   the other erg; a jog stays a jog), so no injured session carries more MTL
+//   than its uninjured session (v2 review: a jog in place of an erg did);
+// - a scaled run's text, run component and MTL agree with its minutes (its
+//   distance and MTL at the exact share), so the card prescribes what the
+//   badge shows and the km-based single-run rule keeps the uninjured ratios;
+// - the week 1 assessment keeps each station whole at 100% capacity and
+//   leaves out and names the others (it was scaled by length alone, every
+//   station at full volume).
 export const HYROX_GENERATOR_VERSION = 19;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
@@ -3495,8 +3519,9 @@ function mergePrevSundays(a: HyroxPrevSunday | null, b: HyroxPrevSunday | null):
  *       min), in its own discipline ('erg'), never a station session. When
  *       the chosen sessions or the MTL cap are full, an easy run's slot (or
  *       its MTL) goes to it whenever the week then holds more minutes (round
- *       7; round 6 required the easy runs left to keep every running minute),
- *       never with an active injury (ergSlotOptions).
+ *       7; round 6 required the easy runs left to keep every running minute;
+ *       ergSlotOptions). The week builds without the injury (injury gate
+ *       v2), so the swap reaches the injured week through the gates.
  *    A week over its size gives way in reverse order: e, d', d, c, then a's
  *    long-run growth for the quality run (D3), then the quality run. The one
  *    exception: b leaves only after the long run has shortened to the run
@@ -5131,7 +5156,6 @@ export function buildHyroxTrainingWeeks(
         else hoursWhy.push(`${whoFull}${holds.length > 0 ? `, ${holds.join(', ')}` : ''}`);
       }
       if (/no erg access/.test(n)) hoursWhy.push('no erg access for easy erg work');
-      if (/injury/.test(n)) hoursWhy.push('the injury gates');
     }
 
     const detail: HyroxWeekDetail = {
@@ -5284,8 +5308,9 @@ export function buildHyroxTrainingWeeks(
     };
     for (let step = 0; sim && step < 4; step++) {
       if (!holdsSim(d)) {
-        // The week's own rules dropped the sim (the injury gates, the 110%
-        // single-run rule): the week was built without it, and says why.
+        // The week's own rules dropped the sim (the 110% single-run rule):
+        // the week was built without it, and says why. No injury reaches
+        // this build (injury gate v2 gates the built week, injuredWeekOf).
         if (d.adjustments.some(n => /no race simulation \(/.test(n))) break;
         // A full sim the 110% rule made a half: said; otherwise the size.
         const ruled = d.adjustments.some(n => /race simulation becomes a half/.test(n));
