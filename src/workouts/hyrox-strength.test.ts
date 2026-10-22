@@ -72,6 +72,7 @@ import { HYROX_STATION_REGION } from '@/calculations/hyrox-injury';
 import type { InjuryState } from '@/types/injury';
 import { planTrainingWeeks } from './race-week-layout';
 import { isHyroxLongRun, isHyroxStrengthSession, isHighIntensity, isEccentricSession } from './scheduler.hyrox';
+import { injuryStrengthDecision } from './injury-strength';
 
 const BANDS: AbilityBand[] = ['total_beginner', 'beginner', 'novice', 'intermediate', 'advanced', 'competitive'];
 const PREV: Record<AbilityBand, number | null> = {
@@ -563,7 +564,7 @@ describe('injury gate v2: a station session at its capacities\' shares of the un
     expect(off.slice(0, 10)).toEqual([]);
   }, 600000);
 
-  it('the other sessions: runs at the run capacity\'s share, none at 0, quality runs too, their text, run component and MTL agreeing with the badge; easy erg work at its erg\'s side\'s share with its text; bricks and race simulations only with every capacity at 100; the assessment keeping each station whole at 100% and leaving out the rest, none with a side at 0; a standalone strength session paused or adapted at its length', () => {
+  it('the other sessions: runs at the run capacity\'s share, none at 0, quality runs too, their text, run component and MTL agreeing with the badge; easy erg work at its erg\'s side\'s share with its text; bricks and race simulations only with every capacity at 100; the assessment keeping each station whole at 100% and leaving out the rest, none with a side at 0', () => {
     const s = build('intermediate', 8, 18, V_SINGLES[1]);
     const ws = s.wks.flatMap(wk => prescribed(wk));
     const access = s.hyroxConfig!.stationAccess;
@@ -632,13 +633,82 @@ describe('injury gate v2: a station session at its capacities\' shares of the un
       expect(g!.d ?? '', label).toContain('left out (injury): a time at reduced volume is not a benchmark.');
     }
     expect(partialPass).toBeGreaterThan(2);
-    const strength = ws.filter(isHyroxStrengthSession);
-    expect(strength.length).toBeGreaterThan(0);
-    for (const u of strength) {
-      const [g] = applyHyroxInjuryGates([u], injOf([100, 100, 50], 'knee'), 0, access);
-      if (g) { expect(g.estimatedDurationMin).toBe(u.estimatedDurationMin); expect(g.modReason).toBe('Injury: strength adapted to the injured region'); }
-    }
   }, 120000);
+
+  it('a standalone strength session takes the shared strength decision: paused, or the region-safe session at the decision\'s own length (each region\'s block at its capacity, the core block whole), never above the uninjured minutes, at the lower of the two RPEs so its planned TSS follows its minutes; in the decision\'s resolved phase the lower capacity\'s share of its minutes and reps, as a station session\'s block; never longer or above its planned TSS, and as a side\'s capacity rises a kept session stays and its minutes and planned TSS never fall: every band at the lowest and the default hours, four phases, five locations (v2 review: it kept the uninjured minutes whatever the capacities, 45 min at upper and lower body 5 where the decision prescribes 12)', () => {
+    const seen = new Set<string>();
+    const sessions: Array<{ label: string; u: Workout }> = [];
+    for (const band of BANDS) {
+      for (const h of [HYROX_HOURS_RANGE[band].min, HYROX_HOURS_RANGE[band].default].filter((x, i, a) => a.indexOf(x) === i)) {
+        const s = build(band, h, 16, V_SINGLES[1]);
+        for (const wk of s.wks) for (const u of prescribed(wk).filter(isHyroxStrengthSession)) {
+          const k = JSON.stringify([u.d, u.estimatedDurationMin, u.rpe]);
+          if (!seen.has(k)) { seen.add(k); sessions.push({ label: `${band} ${h}h W${wk.w}`, u }); }
+        }
+      }
+    }
+    const steps = [0, 5, 10, 25, 50, 75, 95, 100];
+    const pairs: Array<[number, number]> = [];
+    for (const a of steps) for (const b of steps) pairs.push([a, b]);
+    let adapted = 0; let paused = 0; let resolved = 0; let shorter = 0; let steppedUp = 0;
+    const off: string[] = [];
+    for (const { label, u } of sessions) {
+      const uMin = u.estimatedDurationMin ?? 0;
+      const uTss = hyroxSessionPlannedTss(u);
+      for (const phase of ['acute', 'rehab', 'graduated_return', 'resolved']) {
+        for (const location of ['other', 'knee', 'shoulder', 'back', 'wrist']) {
+          const inj = (up: number, lo: number) => ({ ...injOf([100, up, lo], location), injuryPhase: phase } as unknown as InjuryState);
+          const gate = (up: number, lo: number) => applyHyroxInjuryGates([u], inj(up, lo))[0];
+          for (const [up, lo] of pairs) {
+            const g = gate(up, lo);
+            const l = `${label} ${u.n} ${phase} ${location} at ${up}/${lo}`;
+            const dec = injuryStrengthDecision(inj(up, lo));
+            if (dec.kind === 'none') { paused++; if (g) off.push(`${l}: kept under a paused decision`); continue; }
+            if (dec.kind === 'adapted') {
+              adapted++;
+              if (!g) { off.push(`${l}: left out under an adapted decision`); continue; }
+              const want = Math.min(dec.workout.estimatedDurationMin ?? 0, uMin);
+              if (g.estimatedDurationMin !== want) off.push(`${l}: ${g.estimatedDurationMin} min, the decision's ${dec.workout.estimatedDurationMin} capped at ${uMin}`);
+              if (want < uMin) shorter++;
+              const rpe = Math.min(dec.workout.rpe ?? 0, u.rpe ?? 0);
+              if (g.rpe !== rpe || g.r !== rpe) off.push(`${l}: RPE ${g.rpe}, the lower of ${dec.workout.rpe} and ${u.rpe} is ${rpe}`);
+              if (g.d !== dec.workout.d || g.id !== u.id || g.dayOfWeek !== u.dayOfWeek) off.push(`${l}: not the decision's session on its slot`);
+              if (Math.abs(hyroxSessionPlannedTss(g) - want * plannedTssPerMin('gym', rpe)) > 1e-9) off.push(`${l}: planned TSS off its minutes`);
+            } else {
+              resolved++;
+              const share = Math.min(up, lo) / 100;
+              if (share >= 1) { if (g !== u) off.push(`${l}: changed at full capacity`); continue; }
+              if (g && g.estimatedDurationMin !== Math.floor(uMin * share + 1e-9)) off.push(`${l}: ${g.estimatedDurationMin} min, not the lower capacity's share of ${uMin}`);
+              if (g) for (const line of (g.d ?? '').split('\n')) {
+                const m = /^(\d+)x(\d+)/.exec(line);
+                const was = m && (u.d ?? '').split('\n').find(x => x.slice(/^(\d+)x(\d+)/.exec(x)?.[0].length ?? 0) === line.slice(m[0].length));
+                if (m && was && Number(m[2]) > Math.floor(Number(/^(\d+)x(\d+)/.exec(was)![2]) * share + 1e-9)) off.push(`${l}: ${line} above its share`);
+              }
+            }
+            if (!g) continue;
+            if ((g.estimatedDurationMin ?? 0) > uMin) off.push(`${l}: longer than the uninjured session`);
+            if (hyroxSessionPlannedTss(g) > uTss + 1e-9) off.push(`${l}: planned TSS above the uninjured session's`);
+            if ((g.estimatedDurationMin ?? 0) > 0 && hyroxSessionPlannedTss(g) > (uTss * (g.estimatedDurationMin ?? 0)) / uMin + 1e-9) off.push(`${l}: planned TSS above the uninjured rate at its minutes`);
+            if ((g.musculoTendonLoad ?? 0) > (u.musculoTendonLoad ?? 0) + 1e-9) off.push(`${l}: MTL above the uninjured session's`);
+            for (const [nu, nl] of [[Math.min(100, up + 5), lo], [up, Math.min(100, lo + 5)]] as Array<[number, number]>) {
+              if (nu === up && nl === lo) continue;
+              const h2 = gate(nu, nl);
+              steppedUp++;
+              if (!h2) { off.push(`${l} to ${nu}/${nl}: kept, then left out`); continue; }
+              if ((h2.estimatedDurationMin ?? 0) < (g.estimatedDurationMin ?? 0) || hyroxSessionPlannedTss(h2) < hyroxSessionPlannedTss(g) - 1e-9) off.push(`${l} to ${nu}/${nl}: minutes or planned TSS fell`);
+            }
+          }
+        }
+      }
+    }
+    expect(sessions.length).toBeGreaterThan(10);
+    expect(adapted).toBeGreaterThan(5000);
+    expect(paused).toBeGreaterThan(100);
+    expect(resolved).toBeGreaterThan(1000);
+    expect(shorter).toBeGreaterThan(1000);
+    expect(steppedUp).toBeGreaterThan(5000);
+    expect(off.slice(0, 10)).toEqual([]);
+  }, 300000);
 });
 
 describe('a plan rebuilt under an injury is the plan without it through the injury gates', () => {

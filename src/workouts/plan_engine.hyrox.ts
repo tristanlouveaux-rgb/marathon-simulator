@@ -501,7 +501,14 @@ import {
 //   badge shows and the km-based single-run rule keeps the uninjured ratios;
 // - the week 1 assessment keeps each station whole at 100% capacity and
 //   leaves out and names the others, none with a side at 0 (it was scaled by
-//   length alone, every station at full volume).
+//   length alone, every station at full volume);
+// - (v2 review) a standalone strength session under an adapted strength
+//   decision runs the decision's own length (each region's block at its
+//   capacity, the core block whole), never above the uninjured minutes, at
+//   the lower of the two RPEs, so its card and planned TSS follow the
+//   decision (it kept the uninjured minutes whatever the capacities); in the
+//   decision's resolved phase it takes the lower capacity's share of its
+//   minutes and reps, as a station session's block does.
 export const HYROX_GENERATOR_VERSION = 19;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
@@ -2850,18 +2857,68 @@ function hyroxInjuryGate(injuryState: InjuryState, stationAccess?: HyroxConfig['
   // swaps a standalone session for the region-safe one; a station session's
   // block leaves under either (the adapted session is the strength work).
   const strengthKind = injuryStrengthDecision(injuryState);
+  /** Strength lines at `share` of each line's reps ("4x5": 4 sets of 5), a
+   *  line with none whole left out; lines without a count kept. */
+  const linesAt = (lines: readonly string[], share: number): string[] => lines.flatMap(l => {
+    const m = /^(\d+)x(\d+)/.exec(l);
+    if (!m) return [l];
+    const reps = Math.floor(Number(m[2]) * Math.max(0, share) + 1e-9);
+    return reps >= 1 ? [`${m[1]}x${reps}${l.slice(m[0].length)}`] : [];
+  });
   /** A strength block the decision keeps, at `share` of its minutes and of
-   *  each line's reps ("4x5": 4 sets of 5); null when nothing whole is left. */
+   *  each line's reps; null when nothing whole is left. */
   const blockAt = (b: HyroxStrengthBlock, share: number): HyroxStrengthBlock | null => {
     if (share >= 1) return b;
     const min = Math.floor(b.min * Math.max(0, share) + 1e-9);
-    const lines = b.lines.flatMap(l => {
-      const m = /^(\d+)x(\d+)/.exec(l);
-      if (!m) return [l];
-      const reps = Math.floor(Number(m[2]) * Math.max(0, share) + 1e-9);
-      return reps >= 1 ? [`${m[1]}x${reps}${l.slice(m[0].length)}`] : [];
-    });
+    const lines = linesAt(b.lines, share);
     return min >= 1 && lines.length > 0 ? { ...b, min, lines } : null;
+  };
+  /**
+   * A standalone strength session under the injury. Paused: none. Adapted:
+   * the shared decision's region-safe session (injury-strength.ts, as
+   * triathlon's applyTriInjuryGates and gym.ts take it) on the session's own
+   * slot, at the decision's own length, which sizes each region's block by
+   * its capacity and keeps the core block whole, never above the uninjured
+   * session's minutes, and at the lower of the decision's RPE and the
+   * uninjured session's (the gates never make a session harder; no planned
+   * standalone session today sits under the decision's RPE 3 to 5, so this
+   * only guards the rule), so its planned TSS follows its minutes and stays
+   * at or under the uninjured session's (gym sessions carry no MTL, mtl.ts
+   * has no strength factor). Per region it is proportional; against the
+   * lower of the two capacities' shares it can sit above (the core block
+   * stays whole, and a side at 0 keeps the other side's block, the shared
+   * engine's regional substitution, Bleakley 2012).
+   * Before (v2 review), it kept the uninjured session's minutes whatever the
+   * capacities: a 45-min session stayed 45 min at upper and lower body 5,
+   * where the decision prescribes 12. In the decision's resolved phase
+   * (strength as planned), at the lower capacity's share of its minutes and
+   * of each line's reps, as a station session's block (blockAt).
+   */
+  const standaloneStrength = (w0: Workout): HyroxGateResult => {
+    if (strengthKind.kind === 'none') return { w: null, why: 'loaded strength paused' };
+    if (strengthKind.kind === 'adapted') {
+      const a = strengthKind.workout;
+      const { id, dayOfWeek, dayName } = w0;
+      const plannedMin = w0.estimatedDurationMin ?? a.estimatedDurationMin ?? 0;
+      const plannedRpe = w0.rpe ?? w0.r;
+      const rpe = plannedRpe != null ? Math.min(a.rpe ?? plannedRpe, plannedRpe) : a.rpe;
+      return {
+        w: {
+          ...a, id, dayOfWeek, dayName,
+          estimatedDurationMin: Math.min(a.estimatedDurationMin ?? plannedMin, plannedMin),
+          ...(rpe != null ? { r: rpe, rpe } : {}),
+          modReason: 'Injury: strength adapted to the injured region',
+        },
+      };
+    }
+    if (stationCap >= 100) return { w: w0 };
+    const share = Math.max(0, stationCap) / 100;
+    const lines = String(w0.d ?? '').split('\n');
+    const kept = linesAt(lines, share);
+    const counted = (ls: readonly string[]) => ls.filter(l => /^(\d+)x(\d+)/.test(l)).length;
+    const min = Math.floor((w0.estimatedDurationMin ?? 0) * share + 1e-9);
+    if (min < 1 || (counted(lines) > 0 && counted(kept) === 0)) return { w: null, why: `${capLabel('row_erg')} capacity ${stationCap}%: no whole set left` };
+    return { w: { ...w0, d: kept.join('\n'), estimatedDurationMin: min, modReason: `${capLabel('row_erg')} capacity ${stationCap}%: strength minutes and reps cut to ${stationCap}%` } };
   };
 
   const stationSession = (w0: Workout): HyroxGateResult => {
@@ -2907,15 +2964,7 @@ function hyroxInjuryGate(injuryState: InjuryState, stationAccess?: HyroxConfig['
   return (w0: Workout): HyroxGateResult => {
     const t = (w0.t || '') as string;
     if ((t === 'hyrox_station_technique' || t === 'hyrox_station_density') && w0.hyroxSpec) return stationSession(w0);
-    if (isHyroxStrengthSession(w0)) {
-      if (strengthKind.kind === 'none') return { w: null, why: 'loaded strength paused' };
-      if (strengthKind.kind === 'adapted') {
-        // On the session's own slot (its id and day).
-        const { id, dayOfWeek, dayName } = w0;
-        return { w: { ...strengthKind.workout, id, dayOfWeek, dayName, estimatedDurationMin: w0.estimatedDurationMin, modReason: 'Injury: strength adapted to the injured region' } };
-      }
-      return { w: w0 };
-    }
+    if (isHyroxStrengthSession(w0)) return standaloneStrength(w0);
     const w = strengthKind.kind !== 'normal' && w0.hyroxSpec?.strength ? withHyroxSessionParts(w0, { strength: null }) : w0;
     if (isRun(w)) {
       if (runCap <= 0) return { w: null, why: 'run capacity 0%' };
