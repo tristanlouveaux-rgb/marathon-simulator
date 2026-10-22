@@ -32,6 +32,13 @@ import { localDateKey, isOnLocalDay } from '@/utils/local-date';
 export interface CapacityStrain {
   /** Today's completed Signal B TSS (sessions + passive), same number the Strain ring shows. */
   todayTSS: number;
+  /**
+   * Today's Signal B TSS from logged sessions alone (computeTodaySignalBTSS
+   * with no passive input, the quantity hasTrainedOnDay reads). The post-session
+   * verdict (tier word, injury-cap overshoot) reads this, so passive step load
+   * never turns a partial session into a finished-session verdict.
+   */
+  sessionTSS: number;
   /** Canonical mode-aware planned TSS for today (planned-day-tss.ts). */
   plannedDayTSS: number;
   hasPlannedWorkout: boolean;
@@ -51,9 +58,11 @@ export interface CapacityStrain {
   pctPlan: number;
   /** Today vs capacity anchor — feed THIS to computeReadiness.strainPct. */
   pctCapacity: number;
+  /** Today's session TSS (sessionTSS) vs the same capacity anchor. Picks the post-session tier (postSessionNote); never feeds computeReadiness. */
+  sessionPctCapacity: number;
   /** The capacity anchor is CTL-dominated (CTL/7 ≥ planned) — session is done, not mid-plan. */
   ctlAnchored: boolean;
-  /** Injury active, a session logged today, and today's load exceeded the capped plan by the 1.3 "Load exceeded" margin. */
+  /** Injury active, a session logged today, and today's session load (sessionTSS) exceeded the capped plan by the 1.3 "Load exceeded" margin. */
   injuryCapOvershoot: boolean;
 }
 
@@ -92,7 +101,11 @@ export function computeCapacityStrain(s: SimulatorState): CapacityStrain {
   const loggedSessionToday =
     Object.values(wk?.garminActuals ?? {}).some(a => isOnLocalDay(a.startTime, strainDay))
     || (wk?.adhocWorkouts ?? []).some((w: any) => isOnLocalDay(w.garminTimestamp as string | undefined, strainDay));
-  const trainedToday = wk ? hasTrainedOnDay(wk, strainDay) : false;
+  // Session-only Signal B: the day's activities with no passive input. One
+  // call feeds the trained-today gate (hasTrainedOnDay's rule) and the
+  // post-session verdict.
+  const sessionTSS = wk ? computeTodaySignalBTSS(wk, strainDay) : 0;
+  const trainedToday = sessionTSS > 0;
 
   // Weekly-equivalent CTL. Tri = per-discipline weekly EMAs + crossTrainingCtl
   // (the numerator counts ALL sports — excluding cross made every routine HIIT
@@ -114,17 +127,21 @@ export function computeCapacityStrain(s: SimulatorState): CapacityStrain {
 
   const pctPlan = hasPlannedWorkout && todayTSS > 0 ? (todayTSS / plannedDayTSS) * 100 : 0;
   const pctCapacity = anchorTSS > 0 && todayTSS > 0 ? (todayTSS / anchorTSS) * 100 : 0;
+  // The post-session verdict's percent: the session alone over the same
+  // anchor. pctCapacity (strain, steps included) stays the readiness input.
+  const sessionPctCapacity = anchorTSS > 0 && sessionTSS > 0 ? (sessionTSS / anchorTSS) * 100 : 0;
   const ctlAnchored = dailyCtl >= plannedDayTSS;
 
   // Injury-cap overshoot: the 1.3 margin is the existing "Load exceeded"
-  // strain-ring threshold, not a new constant. Gated on a logged session, the
-  // rule the post-session tiers use (D8): steps alone never print it.
+  // strain-ring threshold, not a new constant. Compares the session alone
+  // (sessionTSS) with the capped plan: a capped session plus a long walk is
+  // not a rehab-cap breach, and steps alone never print it (D8).
   const injuryCapOvershoot = !!s.injuryState?.active && hasPlannedWorkout && trainedToday
-    && todayTSS > plannedDayTSS * 1.3;
+    && sessionTSS > plannedDayTSS * 1.3;
 
   return {
-    todayTSS, plannedDayTSS, hasPlannedWorkout, loggedSessionToday, trainedToday,
-    weeklyCtl, anchorTSS, pctPlan, pctCapacity, ctlAnchored, injuryCapOvershoot,
+    todayTSS, sessionTSS, plannedDayTSS, hasPlannedWorkout, loggedSessionToday, trainedToday,
+    weeklyCtl, anchorTSS, pctPlan, pctCapacity, sessionPctCapacity, ctlAnchored, injuryCapOvershoot,
   };
 }
 
@@ -183,16 +200,21 @@ export function injuryCapOvershootSentence(actualTSS: number, plannedTSS: number
  * - Gate: a session was logged today (`trainedToday`, D8). Steps alone never
  *   print a session line.
  * - Injury-cap overshoot first (its own gate in computeCapacityStrain: the
- *   1.3 "Load exceeded" margin over the capped plan).
- * - Then the tier word from ONE percent, `pctCapacity` (today's strain TSS
- *   over max(planned, CTL/7)), the same percent that feeds
- *   computeReadiness.strainPct, so the tier agrees with what the readiness
- *   ring does. "Big session ... prioritise recovery" is a recovery
- *   prescription, defensible only when today exceeds both the planned dose
- *   and the sustainable daily load (SCIENCE_LOG §BJ). Before 2026-10-22 the
- *   coach line read session TSS over plan and the Readiness card read strain
- *   TSS over plan, so one session read "Solid" on Home and "Big" on Readiness.
- * - The number quoted is the Strain ring's (`todayTSS`).
+ *   session alone over the capped plan by the 1.3 "Load exceeded" margin).
+ * - Then the tier word from ONE percent, `sessionPctCapacity`: today's
+ *   session TSS (Signal B from the day's activities, no passive input) over
+ *   the capacity anchor max(planned, CTL/7) that computeReadiness.strainPct
+ *   uses. "Big session ... prioritise recovery" is a recovery prescription,
+ *   defensible only when the session exceeds both the planned dose and the
+ *   sustainable daily load (SCIENCE_LOG §BJ). The numerator is the session
+ *   alone because passive step load is strain, not a session: with the
+ *   strain numerator, a session at half the plan plus 20,000 steps read
+ *   "Solid session today ... Rest up and recover." before the planned
+ *   session was done (ISSUE-406 (c) class). Before 2026-10-22 the coach line
+ *   read session TSS over plan and the Readiness card read strain TSS over
+ *   plan, so one session read "Solid" on Home and "Big" on Readiness.
+ * - The number quoted is the Strain ring's (`todayTSS`), so the sentence and
+ *   the ring beside it show one number for the day.
  *
  * Null when nothing fires; the caller falls through to its own sentence.
  * Tracking side.
@@ -200,9 +222,9 @@ export function injuryCapOvershootSentence(actualTSS: number, plannedTSS: number
 export function postSessionNote(cs: CapacityStrain): string | null {
   if (!cs.trainedToday) return null;
   if (cs.injuryCapOvershoot) {
-    return injuryCapOvershootSentence(cs.todayTSS, cs.plannedDayTSS, cs.pctCapacity);
+    return injuryCapOvershootSentence(cs.todayTSS, cs.plannedDayTSS, cs.sessionPctCapacity);
   }
-  return postSessionSentence(cs.todayTSS, cs.pctCapacity, { ctlAnchored: cs.ctlAnchored });
+  return postSessionSentence(cs.todayTSS, cs.sessionPctCapacity, { ctlAnchored: cs.ctlAnchored });
 }
 
 /**

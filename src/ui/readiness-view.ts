@@ -398,22 +398,28 @@ function getReadinessHTML(s: SimulatorState): string {
        <div style="font-size:13px;color:#94A3B8">${strainLabel}</div>`;
   // The post-session sentence (injury-cap overshoot, then the Big / Solid /
   // Good training tier) comes from postSessionNote, the helper Home and the
-  // coach page call: gated on a logged session, tier from pctCapacity, the
-  // ring's number quoted. The card's own % stays plan-relative (its semantic:
-  // % of the daily target), so its tier lines used to read that percent and
-  // called one session "Big ... well exceeded" while Home said "Solid".
-  // Rest-day overreach leads, as on the coach line. The plan-relative lines
-  // below say "session" only when a session was logged (hasTrainedOnDay):
-  // steps alone read as daily activity.
+  // coach page call: gated on a logged session, tier from the session's own
+  // TSS over the capacity anchor, the ring's number quoted. The card's own %
+  // stays plan-relative (its semantic: % of the daily target), so its tier
+  // lines used to read that percent and called one session "Big ... well
+  // exceeded" while Home said "Solid". Rest-day overreach leads, as on the
+  // coach line. The plan-relative lines below say "session" only when a
+  // session was logged (hasTrainedOnDay), and judge the session by its own
+  // TSS over the plan (sessionPlanPct), so a half-done session plus a long
+  // walk reads "in progress", not "Session complete". Steps alone read as
+  // daily activity.
   const postNote = postSessionNote(capStrain);
   const trainedToday = capStrain.trainedToday;
+  const sessionPlanPct = hasPlannedWorkout && plannedDayTSS > 0
+    ? Math.round((capStrain.sessionTSS / plannedDayTSS) * 100)
+    : 0;
   const strainExplanation =
       isRestDayOverreaching ? 'High load on a rest day. This level of activity impairs recovery rather than aiding it.'
       : postNote ? postNote
       : isRestDay && todaySignalBTSS > 0 ? 'Light activity on a rest day. No significant effect on recovery.'
       : isRestDay ? 'Scheduled rest day. No activity expected.'
       : isAdhoc ? `${Math.round(todaySignalBTSS)} TSS from unplanned activity. Readiness adjusted accordingly.`
-      : trainedToday && displayStrainPct >= 100 ? `Daily target reached (${Math.round(todaySignalBTSS)} TSS). Session complete. Readiness reduced accordingly.`
+      : trainedToday && sessionPlanPct >= 100 ? `Daily target reached (${Math.round(todaySignalBTSS)} TSS). Session complete. Readiness reduced accordingly.`
       : trainedToday && displayStrainPct >= 50 ? 'Session in progress. Readiness adjusts downward as load accumulates.'
       : trainedToday && displayStrainPct > 0 ? 'Light activity logged. No significant effect on readiness yet.'
       : displayStrainPct > 0 ? `${Math.round(todaySignalBTSS)} TSS from daily activity. Planned session not yet logged.`

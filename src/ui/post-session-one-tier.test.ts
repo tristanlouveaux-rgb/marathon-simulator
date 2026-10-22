@@ -38,6 +38,7 @@ import { getPlannedDayTSSContext } from './planned-day-tss';
 import { computeDailyCoach } from '@/calculations/daily-coach';
 import { computeCapacityStrain } from '@/calculations/capacity-strain';
 import { localDateKey } from '@/utils/local-date';
+import { createDefaultInjuryState } from '@/types/injury';
 import type { SimulatorState } from '@/types/state';
 
 const PLAN_MONDAY = new Date(2026, 8, 28, 12, 0, 0); // Monday 28 Sep 2026, local noon
@@ -170,7 +171,19 @@ function toWeek2(s: SimulatorState): void {
   if (s.wks.length < 2) s.wks.push({ ph: 'base', rated: {}, skip: [] } as any);
 }
 
+/** An active rehab-phase injury (the plan is capped, the coach adds the injury blocker). */
+function injure(s: SimulatorState): void {
+  (s as any).injuryState = {
+    ...createDefaultInjuryState(),
+    active: true,
+    injuryPhase: 'rehab',
+    startDate: PLAN_MONDAY.toISOString(),
+    currentPain: 3,
+  };
+}
+
 const TIER = /(Big session|Solid session|Good training) today\. (\d+) TSS logged/;
+const INJURY_CAP = /injury-capped day/;
 const OLD_CARD_TIER = /Big session logged|Daily target well exceeded/;
 
 const ringTSS = (): number => {
@@ -243,6 +256,40 @@ for (const [mode, build] of [['running', runningState], ['HYROX', hyroxState], [
       expect(Math.round(cs.pctCapacity), 'strain over capacity').toBeLessThan(130);
       expect(expectOneTierEverywhere(s).word).toBe('Solid session');
     });
+
+    for (const [label, setup] of [['healthy', (_s: SimulatorState) => {}], ['injured', injure]] as const) {
+      it(`${label}: half the plan plus 20,000 or more steps prints no tier and no injury-cap line anywhere`, () => {
+        const s = build();
+        setup(s);
+        // The case that read as a finished session: the strain (steps
+        // included) in the Big tier and over the injury-cap margin, the session
+        // alone half the plan. Steps rise from 20,000 in 5,000s until the
+        // strain gets there (planned days differ in size by mode).
+        let steps = 20000;
+        sessionDay(s, 0.5, steps);
+        while (computeCapacityStrain(s).pctCapacity < 130 && steps < 60000) {
+          steps += 5000;
+          sessionDay(s, 0.5, steps);
+        }
+        const cs = computeCapacityStrain(s);
+        expect(Math.round(cs.pctCapacity), 'strain over capacity, steps included').toBeGreaterThanOrEqual(130);
+        expect(cs.todayTSS, 'strain over the 1.3 injury-cap margin').toBeGreaterThan(cs.plannedDayTSS * 1.3);
+        expect(Math.round(cs.sessionPctCapacity), 'the session alone').toBeLessThan(80);
+        expect(cs.injuryCapOvershoot).toBe(false);
+        setState(s);
+        renderHomeView();
+        expect(homeLine()).toBeUndefined();
+        expect(pageText()).not.toMatch(INJURY_CAP);
+        const coach = computeDailyCoach(s).primaryMessage;
+        expect(coach).not.toMatch(TIER);
+        expect(coach).not.toMatch(INJURY_CAP);
+        document.body.innerHTML = '<div id="app-root"></div>';
+        renderReadinessView();
+        expect(pageText()).not.toMatch(TIER);
+        expect(pageText()).not.toMatch(INJURY_CAP);
+        expect(document.getElementById('rdn-card-strain')?.textContent ?? '').not.toMatch(/Session complete/);
+      });
+    }
 
     it('steps alone on a planned day print no session line anywhere', () => {
       const s = build();
