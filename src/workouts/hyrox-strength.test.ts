@@ -730,6 +730,111 @@ describe('a station session under a partial station capacity', () => {
   }, 300000);
 });
 
+describe('a rebuilt plan under an injury against the plan without it', () => {
+  type Caps = [number, number, number];
+  /** The plan rebuilt from week 1 under [run, upper, lower] capacities. */
+  const rebuilt = (base: SimulatorState, [run, up, lo]: Caps): Week[] => {
+    const inj = structuredClone(base);
+    inj.w = 1;
+    (inj as unknown as { injuryState: unknown }).injuryState = { active: true, runCapacity: run, upperLoadCapacity: up, lowerLoadCapacity: lo, location: 'other' };
+    return regenerateHyroxWeeksFrom(inj, 1).map((wk, k) => wk ?? inj.wks[k]);
+  };
+  const isCircuitW = (w: Workout) => (w.t === 'hyrox_station_technique' || w.t === 'hyrox_station_density') && !!w.hyroxSpec;
+  /** A week's station work: its station sessions' and bricks' work minutes
+   *  and each side's work seconds (week 1's assessment, a fixed calibration
+   *  pass the gates scale by length, left out). */
+  const workOf = (wk: Week | undefined) => {
+    const ws = prescribed(wk).filter(w => (w.discipline === 'station' || w.discipline === 'brick') && w.t !== 'hyrox_assessment' && !!w.hyroxSpec);
+    return {
+      min: ws.reduce((a, w) => a + hyroxSessionWorkMin(w), 0),
+      upper: ws.reduce((a, w) => a + sideSecOf(w, 'upper'), 0),
+      lower: ws.reduce((a, w) => a + sideSecOf(w, 'lower'), 0),
+    };
+  };
+
+  it('no training week, and no plan in total, holds more station work or more of a restricted side\'s than the capacities\' shares of the plan without the injury, at the lowest and the default hours, singles and doubles (review round 8: the gates took their shares of the injured week\'s own sessions, built larger because the week\'s limits read the gated week, so at 2 h and lower body 90, 10 of 12 open singles men plans held more than 90% of the uninjured plan\'s lower-body station work, the worst 221%)', () => {
+    const variants: Array<[string, Partial<OnboardingState>]> = [
+      ['open singles men', { biologicalSex: 'male', hyroxDivision: 'men' } as Partial<OnboardingState>],
+      ['open doubles mixed', { hyroxFormat: 'open_doubles', hyroxDivision: 'mixed' } as Partial<OnboardingState>],
+    ];
+    const states: Caps[] = [[100, 100, 90], [100, 100, 70], [100, 70, 100], [100, 30, 50], [50, 50, 50]];
+    let weeks = 0; let plans = 0; let held = 0;
+    const off: string[] = [];
+    for (const [name, over] of variants) {
+      for (const band of BANDS) {
+        for (const hrs of [HYROX_HOURS_RANGE[band].min, HYROX_HOURS_RANGE[band].default]) {
+          const base = build(band, hrs, 12, over);
+          const tw = planTrainingWeeks(base);
+          for (const st of states) {
+            const [, up, lo] = st;
+            const sc = Math.min(up, lo);
+            const wks = rebuilt(base, st);
+            plans++;
+            const tot = { inj: { min: 0, upper: 0, lower: 0 }, un: { min: 0, upper: 0, lower: 0 } };
+            for (let i = 0; i < tw; i++) {
+              const a = workOf(wks[i]);
+              const b = workOf(base.wks[i]);
+              weeks++;
+              if (a.min > 0) held++;
+              for (const k of ['min', 'upper', 'lower'] as const) { tot.inj[k] += a[k]; tot.un[k] += b[k]; }
+              const label = `${name} ${band} ${hrs}h ${st.join('/')} W${i + 1}`;
+              if (a.min > (sc / 100) * b.min + 1e-6) off.push(`${label}: ${a.min.toFixed(1)} min of station work, the uninjured week ${b.min.toFixed(1)}`);
+              if (up < 100 && a.upper > (up / 100) * b.upper + 1e-6) off.push(`${label}: upper body ${a.upper} s, the uninjured week ${b.upper} s`);
+              if (lo < 100 && a.lower > (lo / 100) * b.lower + 1e-6) off.push(`${label}: lower body ${a.lower} s, the uninjured week ${b.lower} s`);
+            }
+            const label = `${name} ${band} ${hrs}h ${st.join('/')} plan`;
+            if (tot.inj.min > (sc / 100) * tot.un.min + 1e-6) off.push(`${label}: ${tot.inj.min.toFixed(1)} min, the uninjured plan ${tot.un.min.toFixed(1)}`);
+            if (up < 100 && tot.inj.upper > (up / 100) * tot.un.upper + 1e-6) off.push(`${label}: upper body above its share`);
+            if (lo < 100 && tot.inj.lower > (lo / 100) * tot.un.lower + 1e-6) off.push(`${label}: lower body above its share`);
+          }
+        }
+      }
+    }
+    expect(plans).toBe(120);
+    expect(weeks).toBeGreaterThan(1000);
+    expect(held).toBeGreaterThan(500);
+    expect(off.slice(0, 10)).toEqual([]);
+  }, 600000);
+
+  it('a week holding a station session holds one at a higher capacity too: as a side clears from 95 to 100 under a two-sided restriction, and as run capacity rises from 50 to 70 to 100 at upper and lower body 50, singles and doubles, every band at the lowest and the default hours, 12 and 16 weeks (review round 8: open doubles mixed training weeks holding a station session at upper body 30 fell from 140 to 88 of 468 as the lower body cleared, and at 50/50 run 50 to 70 four plans lost 24 station weeks)', () => {
+    const variants: Array<[string, Partial<OnboardingState>]> = [
+      ['open singles men', { biologicalSex: 'male', hyroxDivision: 'men' } as Partial<OnboardingState>],
+      ['open doubles mixed', { hyroxFormat: 'open_doubles', hyroxDivision: 'mixed' } as Partial<OnboardingState>],
+      ['pro doubles men', { hyroxFormat: 'pro_doubles', hyroxDivision: 'men', biologicalSex: 'male' } as Partial<OnboardingState>],
+    ];
+    const pairs: Array<[Caps, Caps]> = [
+      [[100, 30, 95], [100, 30, 100]], [[100, 40, 95], [100, 40, 100]], [[100, 95, 30], [100, 100, 30]],
+      [[50, 50, 50], [70, 50, 50]], [[70, 50, 50], [100, 50, 50]],
+    ];
+    let weeks = 0; let heldLow = 0;
+    const off: string[] = [];
+    for (const [name, over] of variants) {
+      for (const band of BANDS) {
+        for (const hrs of [HYROX_HOURS_RANGE[band].min, HYROX_HOURS_RANGE[band].default]) {
+          for (const len of [12, 16]) {
+            const base = build(band, hrs, len, over);
+            const tw = planTrainingWeeks(base);
+            const memo = new Map<string, Week[]>();
+            const at = (c: Caps) => { const k = c.join('/'); if (!memo.has(k)) memo.set(k, rebuilt(base, c)); return memo.get(k)!; };
+            for (const [lo, hi] of pairs) {
+              const a = at(lo); const b = at(hi);
+              for (let i = 0; i < tw; i++) {
+                weeks++;
+                if (!prescribed(a[i]).some(isCircuitW)) continue;
+                heldLow++;
+                if (!prescribed(b[i]).some(isCircuitW)) off.push(`${name} ${band} ${hrs}h ${len}w W${i + 1}: a station session at ${lo.join('/')}, none at ${hi.join('/')}`);
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(weeks).toBeGreaterThan(3000);
+    expect(heldLow).toBeGreaterThan(1500);
+    expect(off.slice(0, 10)).toEqual([]);
+  }, 900000);
+});
+
 describe('a station session\'s warm-up under an injury', () => {
   type Mode = NonNullable<NonNullable<Workout['hyroxSpec']>['warmup']>['mode'];
   /** The warm-up rule, an independent copy (review rounds 4 to 7): each way

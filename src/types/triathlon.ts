@@ -344,6 +344,11 @@ export interface HyroxSessionSpec {
    *  reference week's gated session passes through the gates at the same
    *  capacities uncut, so the gates' cut is not applied twice. */
   gatedAt?: { upper: number; lower: number };
+  /** Internal to a plan build under an injury: the station slot (`slot${i}`,
+   *  its place in the week's station kinds) a station session of the
+   *  uninjured build holds, which the injured build's slot starts from. Never
+   *  on a stored plan. */
+  slot?: string;
   /** Station sessions: the strength block that opens the session. */
   strength?: HyroxStrengthBlock;
   /** Station sessions: the easy erg finisher, the session's lever: it takes
