@@ -32,15 +32,18 @@ import { resolveWeekWorkouts } from './week-resolve';
 import { getPlannedDayTSSContext } from './planned-day-tss';
 import { isPlannedAdhocId } from '@/workouts/planned-adhoc';
 import type { SimulatorState, Week } from '@/types';
+import { addCalendarDays, localDateKey } from '@/utils/local-date';
 
-const todayIso = new Date().toISOString().split('T')[0];
+// The local calendar day, the day the app files activities and plan weekdays
+// by. The UTC day read yesterday between 00:00 and 01:00 BST (E9, 2026-10-22).
+const todayIso = localDateKey(new Date());
 const todayDow = (new Date(todayIso + 'T12:00:00').getDay() + 6) % 7;
+/** Local midnight today: on today's local day and never in the future. */
+const todayStartIso = (() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate(), 0, 0, 0).toISOString(); })();
 
 /** Monday of the current week, minus 4 weeks: week 5 of the plan is this week. */
 function planStartForWeek5(): string {
-  const d = new Date(todayIso + 'T12:00:00');
-  d.setDate(d.getDate() - todayDow - 28);
-  return d.toISOString().split('T')[0];
+  return addCalendarDays(todayIso, -todayDow - 28);
 }
 
 function week(w: number, ph: Week['ph']): Week {
@@ -115,7 +118,7 @@ describe('Benchmark check-in: a planned session, never done load', () => {
 
   it('the synced run carries the load: weekly and today totals equal the run alone', () => {
     const run = {
-      garminId: 'strava-501', startTime: `${todayIso}T07:00:00Z`, durationSec: 35 * 60,
+      garminId: 'strava-501', startTime: todayStartIso, durationSec: 35 * 60,
       distanceKm: 7, iTrimp: 6000, activityType: 'RUNNING', displayName: 'Morning Run',
     };
     (getState().wks![4] as any).garminActuals = { 'garmin-strava-501': run };
@@ -164,7 +167,7 @@ describe('Benchmark check-in: a planned session, never done load', () => {
     pick('threshold_check');
     const firstId = benchmarkEntries()[0].id!;
     (getState().wks![4] as any).garminActuals = {
-      [firstId]: { garminId: 'strava-77', startTime: `${todayIso}T07:00:00Z`, durationSec: 2100, distanceKm: 7 },
+      [firstId]: { garminId: 'strava-77', startTime: todayStartIso, durationSec: 2100, distanceKm: 7 },
     };
     pick('easy_checkin');
     const ids = benchmarkEntries().map(w => w.id);
