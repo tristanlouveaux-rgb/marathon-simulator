@@ -147,8 +147,8 @@ describe('Load drill-down: activity rows sum to the day', () => {
  * Readiness and Sleep pages, the coach) had its own per-activity rule: an
  * activity record counted only its iTRIMP, so a rated in-app HYROX session
  * counted 0 there and 133 on the Strain ring. It now calls the same helpers.
- * It still leaves out manual adhoc entries with no timestamp (filed by weekday)
- * and the double-day bonus.
+ * Without the plan start it still leaves out manual adhoc entries with no
+ * timestamp (filed by weekday) and the double-day bonus (see the next block).
  */
 describe('sleep-debt series prices an activity as today\'s strain does', () => {
   it('activity records: the rated HR-less session, strength override, skip and iTRIMP days agree', () => {
@@ -173,3 +173,50 @@ describe('sleep-debt series prices an activity as today\'s strain does', () => {
     expect(Math.round(byDate[key(0)])).toBe(computeTodaySignalBTSS(wk, key(0)));
   });
 });
+
+/**
+ * With the plan start (every app caller passes s.planStartDate), each day of
+ * the series is the day's own Signal B, computeTodaySignalBTSS: manual adhoc
+ * entries filed by weekday and the double-day bonus count too (E6,
+ * 2026-10-22). An activity outside its week's seven days counts once on its
+ * own day.
+ */
+describe('sleep-debt series: each day is the day\'s Signal B (with the plan start)', () => {
+  const PLAN_START = key(0);
+
+  it('every day of the week equals computeTodaySignalBTSS, the manual padel entry included', () => {
+    const wk = week();
+    const byDate = buildDailySignalBTSS([wk], undefined, PLAN_START);
+    for (const i of [0, 1, 2, 3, 4, 5, 6]) {
+      expect(Math.round(byDate[key(i)] ?? 0), `day ${i}`).toBe(computeTodaySignalBTSS(wk, key(i)));
+    }
+    expect(Math.round(byDate[key(4)])).toBe(Math.round(60 * TL_PER_MIN[6])); // the manual entry: was missing
+  });
+
+  it('a double day carries the bonus, as the day does', () => {
+    const wk = week();
+    (wk.garminActuals as any)['gym-1'].startTime = new Date(2026, 8, 28, 15, 0, 0).toISOString();
+    const bonus = computeTodayDoubleDayBonus(wk, key(0));
+    expect(bonus).toBeGreaterThan(0);
+    const byDate = buildDailySignalBTSS([wk], undefined, PLAN_START);
+    expect(Math.round(byDate[key(0)])).toBe(computeTodaySignalBTSS(wk, key(0)));
+    const withoutStart = buildDailySignalBTSS([wk]);
+    expect(Math.round(byDate[key(0)] - withoutStart[key(0)])).toBe(Math.round(bonus));
+  });
+
+  it('an activity outside its week\'s seven days counts once, on its own day', () => {
+    const wk = week();
+    // A late-filed ride from the Sunday before the plan started.
+    (wk.garminActuals as any)['ride-late'] = record('ride-late', -1, 60, { activityType: 'CYCLING' });
+    const byDate = buildDailySignalBTSS([wk], undefined, PLAN_START);
+    expect(Math.round(byDate[key(-1)])).toBe(Math.round(60 * TL_PER_MIN[5]));
+    expect(Math.round(byDate[key(0)])).toBe(computeTodaySignalBTSS(wk, key(0)));
+  });
+
+  it('an archived plan dates its weeks from its own start', () => {
+    const wk = week();
+    const byDate = buildDailySignalBTSS([], [{ planStartDate: PLAN_START, weeks: [wk] }], '2026-12-07');
+    expect(Math.round(byDate[key(4)])).toBe(Math.round(60 * TL_PER_MIN[6]));
+  });
+});
+

@@ -937,7 +937,7 @@ export function buildReadinessRing(s: SimulatorState): string {
 
   const effectiveSleepTarget0 = s.sleepTargetSec ?? deriveSleepTarget(s.physiologyHistory ?? []);
   const sleepBank = getSleepBank(s.physiologyHistory ?? [], effectiveSleepTarget0);
-  const _rdnDailyTSS = buildDailySignalBTSS(s.wks ?? [], (s as any).previousPlanWks);
+  const _rdnDailyTSS = buildDailySignalBTSS(s.wks ?? [], (s as any).previousPlanWks, s.planStartDate);
   const _rdnDebtOutlook = computeSleepDebtOutlook(s.physiologyHistory ?? [], _rdnDailyTSS, s.athleteTier ?? 'recreational', effectiveSleepTarget0);
   const sleepDebtExcessSec = _rdnDebtOutlook.typicalDebtSec != null
     ? _rdnDebtOutlook.debtSec - _rdnDebtOutlook.typicalDebtSec

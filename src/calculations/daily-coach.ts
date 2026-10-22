@@ -380,7 +380,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
 
   const sleepTarget = s.sleepTargetSec ?? deriveSleepTarget(physio);
   const sleepBank = getSleepBank(physio, sleepTarget);
-  const dailyTSSByDate = buildDailySignalBTSS(wks, (s as any).previousPlanWks);
+  const dailyTSSByDate = buildDailySignalBTSS(wks, (s as any).previousPlanWks, s.planStartDate);
   const sleepDebtSec = sleepBank.nightsWithData >= 3
     ? computeSleepDebt(physio, dailyTSSByDate, tier ?? 'recreational', sleepTarget)
     : null;

@@ -91,7 +91,7 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
   // Sleep debt excess above personal baseline. Same signal for all three disciplines
   // (sleep is systemic, not sport-specific).
   const sleepTarget = state.sleepTargetSec ?? deriveSleepTarget(physio);
-  const dailyTSS = buildDailySignalBTSS(state.wks ?? [], (state as any).previousPlanWks);
+  const dailyTSS = buildDailySignalBTSS(state.wks ?? [], (state as any).previousPlanWks, state.planStartDate);
   const debtOutlook = computeSleepDebtOutlook(physio, dailyTSS, state.athleteTier ?? 'recreational', sleepTarget);
   const sleepDebtExcessSec = debtOutlook.typicalDebtSec != null
     ? debtOutlook.debtSec - debtOutlook.typicalDebtSec

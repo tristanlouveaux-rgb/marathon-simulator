@@ -115,7 +115,7 @@ function getReadinessHTML(s: SimulatorState): string {
     : null;
   const effectiveSleepTarget = s.sleepTargetSec ?? deriveSleepTarget(s.physiologyHistory ?? []);
   const sleepBank = getSleepBank(s.physiologyHistory ?? [], effectiveSleepTarget);
-  const dailyTSSByDate = buildDailySignalBTSS(s.wks ?? [], archivedPlans);
+  const dailyTSSByDate = buildDailySignalBTSS(s.wks ?? [], archivedPlans, s.planStartDate);
   const debtOutlook = computeSleepDebtOutlook(
     s.physiologyHistory ?? [], dailyTSSByDate, s.athleteTier ?? 'recreational', effectiveSleepTarget,
   );
@@ -517,7 +517,7 @@ function getReadinessHTML(s: SimulatorState): string {
   // same debt number the user sees when they tap through.
   const cumulativeDebtSec = computeSleepDebt(
     s.physiologyHistory ?? [],
-    buildDailySignalBTSS(s.wks ?? [], s.previousPlanWks),
+    buildDailySignalBTSS(s.wks ?? [], s.previousPlanWks, s.planStartDate),
     s.athleteTier ?? 'recreational',
     effectiveSleepTarget,
   );
