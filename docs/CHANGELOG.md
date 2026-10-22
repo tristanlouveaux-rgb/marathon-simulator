@@ -74,7 +74,7 @@ Tristan's decisions on the first round's open questions, one commit each (D6 nee
 
 ### Third round: review fixes (2026-10-22)
 
-Fixes for the second round's review findings, one commit each. Unit-tested only; nothing device-verified; no OPEN_ISSUES item marked fixed.
+Fixes for the second round's review findings, one commit each. Unit-tested only; nothing device-verified; no OPEN_ISSUES item marked fixed. Full suite (four chunks), tsc and lint:ui pass, except the five clock-window tests listed in the second round (run at 00:56 BST) and, run again at 01:00 BST, one more in `readiness-strain-sensitivity.test.ts` ("the tri CTL pipe uses the SAME personal normalizer"): its ride is stamped 00:30Z of the UTC day, so between 01:00 and 01:30 BST it lies in the future and the CTL pipe drops it. It fails at the base commit `d754a16b` at that time too (checked in a temporary worktree).
 
 - **Load drill-down bars match their labels again (D9 fallout).** `getDailyLoadHistory` (`src/calculations/fitness-model.ts`) took each day's total from `computeTodaySignalBTSS`, which reads the rating since D9, but valued its activity rows (the source of the zone segments in `buildDailyZoneBars`, `src/ui/rolling-load-view.ts`, and the 4-week Load Focus totals) with the old rule: iTRIMP, else RPE 5, no rating, no strength override. A 60-minute HR-less session rated 8 drew a 69 TSS segment under a 133 label; a rated strength session with heart rate drew its 20 TSS iTRIMP under 107 (that gap predates D9). The rows now call `signalBActualTSS(actual, ratedRpeOf(wk.rated[key]))` and `signalBAdhocTSS`, so rows plus the double-day bonus equal the day. Tests in `day-week-signal-b-agreement.test.ts`.
 
