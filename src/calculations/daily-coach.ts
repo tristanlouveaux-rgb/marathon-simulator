@@ -942,15 +942,18 @@ function derivePrimaryMessage(
     : null;
 
   // ── Tier 0: Hard blockers ───────────────────────────────────────────────
+  // A logged session leads under an injury or illness blocker too:
+  // postSessionNote puts the injury-cap overshoot first ("X TSS logged against
+  // an injury-capped day of Y..."), then the tier. The Readiness Today's
+  // Strain card and triathlon Home print the same helper with no blocker
+  // check, so the coach printing "Injury is active..." here gave one session
+  // two different post-session lines (2026-10-22). With no logged session in
+  // a tier, the blocker sentence stands.
+  const blockerPostNote = (blockers.includes('injury') || blockers.includes('illness')) && cs
+    ? postSessionNote(cs)
+    : null;
+  if (blockerPostNote) return blockerPostNote;
   if (blockers.includes('injury')) {
-    // A logged session exceeded the injury-capped plan by the "Load exceeded"
-    // margin (computeCapacityStrain's injuryCapOvershoot). The ring stays
-    // capacity-based; the sentence carries the rehab-cap message. Same helper
-    // and gate as the triathlon call-out on Home and Readiness.
-    if (cs?.injuryCapOvershoot) {
-      const note = postSessionNote(cs);
-      if (note) return note;
-    }
     // Tailor the message to whether the user actually has training options.
     // Full-stop message only when the stance routed to 'rest' above; for
     // partially-restricted injuries (e.g. tri user with shoulder injury still

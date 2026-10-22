@@ -182,6 +182,11 @@ function injure(s: SimulatorState): void {
   };
 }
 
+/** An active light illness (the coach adds the illness blocker). */
+function makeIll(s: SimulatorState): void {
+  s.illnessState = { active: true, severity: 'light', startDate: '2026-09-28' };
+}
+
 const TIER = /(Big session|Solid session|Good training) today\. (\d+) TSS logged/;
 const INJURY_CAP = /injury-capped day/;
 const OLD_CARD_TIER = /Big session logged|Daily target well exceeded/;
@@ -288,6 +293,17 @@ for (const [mode, build] of [['running', runningState], ['HYROX', hyroxState], [
         expect(pageText()).not.toMatch(TIER);
         expect(pageText()).not.toMatch(INJURY_CAP);
         expect(document.getElementById('rdn-card-strain')?.textContent ?? '').not.toMatch(/Session complete/);
+      });
+    }
+
+    for (const [label, setup] of [['injured', injure], ['ill', makeIll]] as const) {
+      it(`${label}: a session at 1.1x the plan reads one tier on every surface, the coach page included`, () => {
+        const s = build();
+        setup(s);
+        sessionDay(s, 1.1, 0);
+        const cs = computeCapacityStrain(s);
+        expect(cs.injuryCapOvershoot, 'under the 1.3 overshoot margin').toBe(false);
+        expect(expectOneTierEverywhere(s).word).toBe('Solid session');
       });
     }
 
