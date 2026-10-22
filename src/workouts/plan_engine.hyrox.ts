@@ -466,7 +466,8 @@ import {
 //   without the injury, so no injured week holds more station work, or more
 //   of a restricted side's, than the capacities' shares of the uninjured
 //   week's; a ceiling repeats the reference week's gated session only when
-//   that copy is within those shares;
+//   that copy is within those shares, and the taper's station cut makes no
+//   cut the gates would then drop;
 // - a race-week circuit planned under the 15-min floor (a short primer)
 //   stays through a run restriction alone whatever its warm-up becomes;
 // - the cap on race week's easy runs applies only to a race week that, as
