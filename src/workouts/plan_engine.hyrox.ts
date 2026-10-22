@@ -450,6 +450,32 @@ import {
 //   never cut it twice, and a ceiling cut the gates would then drop repeats
 //   the reference week's gated session instead;
 // - race week never runs more than taper week 1 through its easy runs.
+// Still v19 (unreleased; part 2 review fixes, round 8, 2026-10-22):
+// - the injury cut's candidates take the same three cut orders and the same
+//   partial sets whichever sides are restricted: each side in turn pinned at
+//   the station share with the other side's sets (a side at 100 included)
+//   at the largest share that fits, and both pinned with the full-body sets
+//   at the largest share that fits; the choice ranks both sides, a side at
+//   100 too. So no kept session leaves, and the lower-capacity side's work
+//   never falls while it stays the lower, as any capacity rises, a side
+//   clearing to 100 included (round 7: open doubles sessions kept at upper
+//   body 40 fell from 174 to 86 as the lower body cleared);
+// - under a partial station capacity each current and future week's station
+//   sessions start from the sessions the same slots hold in the plan built
+//   without the injury, so no injured week holds more station work, or more
+//   of a restricted side's, than the capacities' shares of the uninjured
+//   week's; a ceiling repeats the reference week's gated session only when
+//   that copy is within those shares;
+// - a race-week circuit planned under the 15-min floor (a short primer)
+//   stays through a run restriction alone whatever its warm-up becomes;
+// - the cap on race week's easy runs applies only to a race week that, as
+//   scheduled, runs more than taper week 1, counting the primer only when
+//   the week keeps it (a Thursday race week gives the primer's day to the
+//   circuit), so race weeks within the rule are built as before;
+// - a race-pace session the hard-session limits turn into a technique
+//   session passes through the injury gates, and under an injury holds no
+//   more station work than the race-pace session it replaces (else it
+//   leaves).
 export const HYROX_GENERATOR_VERSION = 19;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
