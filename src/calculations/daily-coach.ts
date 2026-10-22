@@ -29,7 +29,7 @@ import { getSleepInsight, getSleepBank, deriveSleepTarget, computeSleepDebt, fmt
 import { getPlannedDayTSSContext } from '@/ui/planned-day-tss';
 import { isLongRun } from '@/workouts/long-run';
 import { localDateKey, isOnLocalDay } from '@/utils/local-date';
-import { computeCapacityStrain, postSessionSentence, injuryCapOvershootSentence } from './capacity-strain';
+import { computeCapacityStrain, postSessionSentence, postSessionNote, injuryCapOvershootSentence, hasTrainedOnDay, REST_DAY_OVERREACH_SENTENCE, type CapacityStrain } from './capacity-strain';
 import {
   computeRhrDeltaFromHistory, detectRaceCollision, getRaceDateISO,
   resolveEffectiveEntry,
@@ -104,12 +104,13 @@ export interface CoachSignals {
 
 /** Extra context from the view layer that daily-coach can't derive from state alone. */
 export interface StrainContext {
-  /** Today's actual TSS as % of target (0 = nothing logged yet). */
+  /** Today's logged session TSS as % of the planned day (0 = nothing logged yet). Drives the
+   *  in-progress copy only ("Nearly at today's target"); the post-session tiers read `capacity`. */
   strainPct: number;
   /**
    * Today's TSS as % of the capacity anchor (max(planned, CTL/7)) — the
    * canonical `computeCapacityStrain(s).pctCapacity`. This is what feeds the
-   * readiness strain floor; `strainPct` (plan-relative) stays for copy tiers.
+   * readiness strain floor and picks the post-session tier (postSessionNote).
    */
   capacityStrainPct?: number;
   /** True when no planned workout AND no matched activity today. */
@@ -135,6 +136,13 @@ export interface StrainContext {
    * computeReadiness call. Absent: actualTSS gates.
    */
   strainTSS?: number;
+  /**
+   * Today's canonical capacity strain (computeCapacityStrain(s)). The coach's
+   * post-session sentence comes from postSessionNote(capacity), the helper Home
+   * and the Readiness page call, so one session reads the same tier word and
+   * number everywhere. Absent (hand-built contexts): no post-session sentence.
+   */
+  capacity?: CapacityStrain;
   /** Full today-planned workout shape (if any) — used to expose richer context to the LLM. */
   todayPlannedWorkout?: {
     name: string;
@@ -161,7 +169,7 @@ export interface CoachState {
   sessionNote: string | null;
   /**
    * UI ring label. Always the underlying `readiness.label`. The post-session
-   * wording lives in the sentence below the ring (see `postSessionSentence`),
+   * wording lives in the sentence below the ring (see `postSessionNote`),
    * since the ring is too narrow for long copy.
    */
   ringLabel: string;
@@ -193,18 +201,8 @@ export function getTodayFeeling(s: SimulatorState): 'struggling' | 'ok' | 'good'
 // ─── Strain context auto-derivation ─────────────────────────────────────────
 // When no StrainContext is passed (e.g. from coach-view), derive it from state.
 
-/**
- * A training session was logged on the local day `day`: the day's Signal B TSS
- * from its activities alone (computeTodaySignalBTSS with no passive input) is
- * above 0. Passive step and active-minute load is strain, not a session, so it
- * never makes a day "trained": a morning walk before an evening Tempo Run left
- * Home reading "Light session was the right call." (ISSUE-406 (c)). The one
- * source for StrainContext.trainedToday on Home and in deriveStrainContext,
- * every mode. Tracking side.
- */
-export function hasTrainedOnDay(wk: Week, day: string): boolean {
-  return computeTodaySignalBTSS(wk, day) > 0;
-}
+/** hasTrainedOnDay lives in capacity-strain.ts (the post-session gate reads it there); re-exported for existing callers. */
+export { hasTrainedOnDay };
 
 /**
  * The coach's view of today, from state alone: the one source for Home's coach
@@ -294,6 +292,7 @@ export function deriveStrainContext(s: SimulatorState): StrainContext {
     strainPct,
     capacityStrainPct: capStrain.pctCapacity,
     strainTSS: capStrain.todayTSS,
+    capacity: capStrain,
     isRestDay,
     isRestDayOverreaching,
     trainedToday: hasTrainedOnDay(wk, today),
@@ -928,11 +927,12 @@ function derivePrimaryMessage(
   // Was today's actual session heavy relative to chronic daily load?
   // CTL in signals is already ÷7 (daily equivalent). Compare raw TSS to that.
   const actualTSS = strain?.actualTSS ?? 0;
-  // The TSS a sentence quotes: the day's strain TSS, the Strain ring's number
-  // (strainTSS), so the card never shows two numbers for today. The tiers stay
-  // gated on sessions (sp, actualTSS): steps alone never print "session".
-  // Triathlon's capacityStrainNote quotes the same number (cs.todayTSS).
-  const quotedTSS = strain?.strainTSS ?? actualTSS;
+  // Today's canonical capacity strain: the post-session sentence (injury-cap
+  // overshoot, then the Big / Solid / Good training tiers) comes from
+  // postSessionNote, the helper Home and the Readiness page call. It gates on
+  // a logged session, reads one percent (pctCapacity) and quotes the Strain
+  // ring's number.
+  const cs = strain?.capacity ?? null;
   const dailyCTL = sig.ctlNow > 0 ? sig.ctlNow : null;
   const sessionHeavy = trained && dailyCTL != null && actualTSS > dailyCTL * 1.2;
 
@@ -943,17 +943,13 @@ function derivePrimaryMessage(
 
   // ── Tier 0: Hard blockers ───────────────────────────────────────────────
   if (blockers.includes('injury')) {
-    // Session exceeded the injury-capped plan by the "Load exceeded" margin
-    // (sp ≥ 130% of plan). Mirrors the tri-mode home-view call-out: the ring
-    // stays capacity-based, the sentence carries the rehab-cap message.
-    if (trained && sp >= 130 && actualTSS > 0) {
-      const plannedTSS = actualTSS / (sp / 100);
-      // The clause reads the canonical capacity percent (computeCapacityStrain,
-      // the one triathlon's call-out reads) when the context carries it.
-      const capacityAnchor = Math.max(plannedTSS, dailyCTL ?? 0);
-      const capacityPct = strain?.capacityStrainPct
-        ?? (capacityAnchor > 0 ? (actualTSS / capacityAnchor) * 100 : sp);
-      return injuryCapOvershootSentence(quotedTSS, plannedTSS, capacityPct);
+    // A logged session exceeded the injury-capped plan by the "Load exceeded"
+    // margin (computeCapacityStrain's injuryCapOvershoot). The ring stays
+    // capacity-based; the sentence carries the rehab-cap message. Same helper
+    // and gate as the triathlon call-out on Home and Readiness.
+    if (cs?.injuryCapOvershoot) {
+      const note = postSessionNote(cs);
+      if (note) return note;
     }
     // Tailor the message to whether the user actually has training options.
     // Full-stop message only when the stance routed to 'rest' above; for
@@ -969,8 +965,8 @@ function derivePrimaryMessage(
 
   // ── Tier 1: Session complete (strain-based) ─────────────────────────────
   if (strain?.isRestDayOverreaching)
-    return 'High load on a rest day. Recovery for upcoming sessions is impaired.';
-  const postNote = postSessionSentence(quotedTSS, sp);
+    return REST_DAY_OVERREACH_SENTENCE;
+  const postNote = cs ? postSessionNote(cs) : null;
   if (postNote) return postNote;
 
   // ── Tier 2: Red flags ───────────────────────────────────────────────────

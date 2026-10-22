@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeCapacityStrain, capacityStrainNote, postSessionSentence, injuryCapOvershootSentence, type CapacityStrain } from './capacity-strain';
+import { computeCapacityStrain, capacityStrainNote, postSessionNote, postSessionSentence, injuryCapOvershootSentence, type CapacityStrain } from './capacity-strain';
 import type { SimulatorState } from '@/types/state';
 
 // computeCapacityStrain over minimal state: no weeks → all zeros, nothing anchors.
@@ -12,13 +12,42 @@ describe('computeCapacityStrain — minimal state', () => {
     expect(cs.pctPlan).toBe(0);
     expect(cs.anchorTSS).toBe(0);
     expect(cs.injuryCapOvershoot).toBe(false);
+    expect(cs.trainedToday).toBe(false);
+  });
+});
+
+// postSessionNote: the one post-session sentence every surface prints
+// (2026-10-22). One gate (a logged session), one percent (pctCapacity), the
+// ring's number quoted.
+describe('postSessionNote — one gate, one percent, the ring\'s number', () => {
+  const day: CapacityStrain = {
+    todayTSS: 58, plannedDayTSS: 40, hasPlannedWorkout: true, loggedSessionToday: true, trainedToday: true,
+    weeklyCtl: 140, anchorTSS: 40, pctPlan: 145, pctCapacity: 145,
+    ctlAnchored: false, injuryCapOvershoot: false,
+  };
+
+  it('the tier reads pctCapacity, not pctPlan', () => {
+    expect(postSessionNote(day)).toBe('Big session today. 58 TSS logged. Rest up and prioritise recovery for the next 24 hours.');
+    // Plan 40, CTL/7 50: the same 58 TSS is 116% of capacity, a Solid session.
+    expect(postSessionNote({ ...day, weeklyCtl: 350, anchorTSS: 50, pctCapacity: 116 }))
+      .toBe('Solid session today. 58 TSS logged. Rest up and recover.');
+  });
+
+  it('steps alone never print a session line, whatever the percent', () => {
+    expect(postSessionNote({ ...day, trainedToday: false, loggedSessionToday: false })).toBeNull();
+    expect(capacityStrainNote({ ...day, trainedToday: false, loggedSessionToday: false }, 'Chronic.')).toBeNull();
+  });
+
+  it('injury-cap overshoot comes first', () => {
+    expect(postSessionNote({ ...day, injuryCapOvershoot: true }))
+      .toBe('58 TSS logged against an injury-capped day of 40. That exceeds both the rehab cap and your typical daily load. Rest up and recover.');
   });
 });
 
 // capacityStrainNote priority: injury-cap overshoot wins over the strain tiers.
 describe('capacityStrainNote — note priority', () => {
   const base: CapacityStrain = {
-    todayTSS: 42, plannedDayTSS: 20, hasPlannedWorkout: true, loggedSessionToday: true,
+    todayTSS: 42, plannedDayTSS: 20, hasPlannedWorkout: true, loggedSessionToday: true, trainedToday: true,
     weeklyCtl: 317, anchorTSS: 45.3, pctPlan: 210, pctCapacity: 93,
     ctlAnchored: true, injuryCapOvershoot: true,
   };
@@ -50,7 +79,7 @@ describe('capacityStrainNote — note priority', () => {
 
   it('no acknowledgment without a real logged session (passive steps only)', () => {
     expect(capacityStrainNote(
-      { ...base, injuryCapOvershoot: false, pctCapacity: 60, loggedSessionToday: false },
+      { ...base, injuryCapOvershoot: false, pctCapacity: 60, loggedSessionToday: false, trainedToday: false },
       'Bike load is elevated relative to your baseline.',
     )).toBeNull();
   });

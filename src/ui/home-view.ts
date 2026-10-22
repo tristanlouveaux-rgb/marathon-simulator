@@ -1062,12 +1062,14 @@ export function buildReadinessRing(s: SimulatorState): string {
   // load is strain, not a session: ISSUE-406 (c)). Home built its own context
   // before, without the planned workout.
   const coach = computeDailyCoach(s, deriveStrainContext(s));
-  // Tri-mode post-session override: canonical capacityStrainNote — injury-cap
-  // overshoot first ("X TSS logged against an injury-capped day of Y…"), then
-  // the Big/Solid/Good-training tiers vs the capacity anchor. Same helper the
-  // Readiness detail page reads, so the two surfaces cannot diverge. Running
-  // mode gets the same copy via coach.primaryMessage. (Override restored from
-  // the 2026-05-19 snapshot — lost in the May crash.)
+  // Tri-mode post-session override: capacityStrainNote, which calls
+  // postSessionNote: gated on a logged session, injury-cap overshoot first
+  // ("X TSS logged against an injury-capped day of Y…"), then the Big / Solid /
+  // Good training tier from pctCapacity, quoting the ring's number. Running,
+  // HYROX and Just-Track get the same sentence from the same helper through
+  // coach.primaryMessage, and the Readiness page calls it too, so one session
+  // reads one tier word on every surface. (Override restored from the
+  // 2026-05-19 snapshot — lost in the May crash.)
   // Fallback = the chronic sentence this card would otherwise show, so a
   // trained day below the strain tiers still leads with "X TSS logged today."
   const triPostSessionNote = isTri

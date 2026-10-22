@@ -26,7 +26,7 @@ import {
 } from '@/calculations/readiness';
 import { getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildDailySignalBTSS, computeSleepDebtOutlook, mergeManualSleepHistory } from '@/calculations/sleep-insights';
 import { computeDailyCoach } from '@/calculations/daily-coach';
-import { computeCapacityStrain, capacityStrainNote } from '@/calculations/capacity-strain';
+import { computeCapacityStrain, capacityStrainNote, postSessionNote } from '@/calculations/capacity-strain';
 import { computeTriReadiness } from '@/calculations/tri-readiness';
 import { hyroxMtlAcwr, computeWeekActualMTL, computeWeekMTL } from '@/calculations/mtl';
 import { classifyActivity } from '@/calculations/tri-benchmarks-from-history';
@@ -394,20 +394,27 @@ function getReadinessHTML(s: SimulatorState): string {
        <div style="font-size:13px;color:#94A3B8">${strainLabel}</div>`
     : `<div style="font-size:24px;font-weight:600;color:${strainColor};line-height:1">${displayStrainPct}%</div>
        <div style="font-size:13px;color:#94A3B8">${strainLabel}</div>`;
+  // The post-session sentence (injury-cap overshoot, then the Big / Solid /
+  // Good training tier) comes from postSessionNote, the helper Home and the
+  // coach page call: gated on a logged session, tier from pctCapacity, the
+  // ring's number quoted. The card's own % stays plan-relative (its semantic:
+  // % of the daily target), so its tier lines used to read that percent and
+  // called one session "Big ... well exceeded" while Home said "Solid".
+  // Rest-day overreach leads, as on the coach line. The plan-relative lines
+  // below say "session" only when a session was logged (hasTrainedOnDay):
+  // steps alone read as daily activity.
+  const postNote = postSessionNote(capStrain);
+  const trainedToday = capStrain.trainedToday;
   const strainExplanation =
       isRestDayOverreaching ? 'High load on a rest day. This level of activity impairs recovery rather than aiding it.'
+      : postNote ? postNote
       : isRestDay && todaySignalBTSS > 0 ? 'Light activity on a rest day. No significant effect on recovery.'
       : isRestDay ? 'Scheduled rest day. No activity expected.'
       : isAdhoc ? `${Math.round(todaySignalBTSS)} TSS from unplanned activity. Readiness adjusted accordingly.`
-      // Injury-capped plan exceeded: the % is plan-relative (and stays — that
-      // is the card's semantic), but the canonical call-out explains the
-      // overshoot without the misleading "recovery is the priority" framing
-      // when the absolute load was normal (capacity anchor, SCIENCE_LOG §BJ).
-      : capStrain.injuryCapOvershoot ? capacityStrainNote(capStrain) ?? `Daily target exceeded (${Math.round(todaySignalBTSS)} TSS).`
-      : displayStrainPct >= 130 ? `Big session logged (${Math.round(todaySignalBTSS)} TSS). Daily target well exceeded. Recovery is the priority for the next 24 hours.`
-      : displayStrainPct >= 100 ? `Daily target reached (${Math.round(todaySignalBTSS)} TSS). Session complete. Readiness reduced accordingly.`
-      : displayStrainPct >= 50 ? 'Session in progress. Readiness adjusts downward as load accumulates.'
-      : displayStrainPct > 0 ? 'Light activity logged. No significant effect on readiness yet.'
+      : trainedToday && displayStrainPct >= 100 ? `Daily target reached (${Math.round(todaySignalBTSS)} TSS). Session complete. Readiness reduced accordingly.`
+      : trainedToday && displayStrainPct >= 50 ? 'Session in progress. Readiness adjusts downward as load accumulates.'
+      : trainedToday && displayStrainPct > 0 ? 'Light activity logged. No significant effect on readiness yet.'
+      : displayStrainPct > 0 ? `${Math.round(todaySignalBTSS)} TSS from daily activity. Planned session not yet logged.`
       : 'Planned session not yet logged.';
   const strainCard = card(`
     <div style="font-size:11px;color:${TEXT_S};margin-bottom:8px;font-weight:500">Today's Strain</div>
