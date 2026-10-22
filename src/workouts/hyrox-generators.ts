@@ -500,66 +500,57 @@ export function withoutHyroxStation(w: Workout, station: HyroxStation): Workout 
 }
 
 /**
- * The same station session with one station's sets cut to `fraction` of
- * their amount, rounded down to a whole metre or rep: each set's time, the
- * station's MTL (its component total) and each set's share of the race
- * volume follow in proportion (the injury gate's partial set,
- * applyHyroxInjuryGates: a restricted side's station keeps the capacity's
- * share of every set, as a run keeps the capacity's share of its duration).
- * Review round 6 cut a station held as one set only, which no cut of rounds
- * can reduce; round 7 cuts every set, so a 2-set station no longer goes by
- * whole rounds (100% or 50%). Null when the station holds no set, `fraction`
- * is not under 1, or the amount would fall under one metre or rep.
+ * The same station session with every set of each station cut to
+ * `fractionOf(station)` of its amount (null or 1 or more: kept whole; 0 or
+ * less: none), rounded down to a whole metre or rep (a set with no amount:
+ * its time, to the whole second). Each set's time, the station's MTL (its
+ * component total) and each set's share of the race volume follow in
+ * proportion, so a set never runs above its share (the injury gates,
+ * applyHyroxInjuryGates: every set at its side's capacity share, as a run
+ * keeps the run capacity's share of its duration). A station left with no
+ * whole metre or rep leaves the session, its rounds shrinking to the last
+ * round a station left still holds (withoutHyroxStation's rule). Its MTL,
+ * duration and text again; the session itself when nothing is cut.
  */
-export function withHyroxPartialSet(w: Workout, station: HyroxStation, fraction: number): Workout | null {
-  const comps = hyroxPartialComponents(w, st => (st === station ? fraction : null));
-  return comps ? finishHyroxSession({ ...w, hyroxComponents: comps }) : null;
-}
-
-/**
- * The components of a station session with each station's sets cut to
- * `fractionOf(station)` of their amount (null or 1 or more: kept whole), as
- * withHyroxPartialSet cuts one station's: rounded down to a whole metre or
- * rep, each set's time, the station's MTL and its share of the race volume in
- * proportion. A station whose amount would fall under one metre or rep keeps
- * its sets whole. Null when no station is cut. The injury gate evaluates its
- * candidates on these components (their work and each side's) and finishes
- * only the one it keeps (withHyroxPartialSets).
- */
-export function hyroxPartialComponents(w: Workout, fractionOf: (st: HyroxStation) => number | null): HyroxComponent[] | null {
-  if (!w.hyroxSpec) return null;
-  const rounds = Math.max(1, w.hyroxRounds ?? 1);
+export function withHyroxPartialSets(w: Workout, fractionOf: (st: HyroxStation) => number | null): Workout {
+  if (!w.hyroxSpec) return w;
+  const old = Math.max(1, w.hyroxRounds ?? 1);
   let cut = false;
-  const comps = (w.hyroxComponents ?? []).map(c => {
-    if (c.type === 'run') return c;
-    const fraction = fractionOf(c.type as HyroxStation);
-    if (fraction == null || !(fraction > 0) || fraction >= 1) return c;
-    if (hyroxComponentSets(c, rounds) < 1) return c;
-    const reps = typeof c.reps === 'number';
-    const old = reps ? (c.reps as number) : (c.distanceM ?? 0);
-    if (!(old > 0)) return c;
-    const amount = Math.floor(old * fraction + 1e-9);
-    if (amount < 1) return c;
-    const ratio = amount / old;
+  const comps: HyroxComponent[] = [];
+  for (const c of w.hyroxComponents ?? []) {
+    const fraction = c.type === 'run' ? null : fractionOf(c.type as HyroxStation);
+    if (fraction == null || fraction >= 1 || hyroxComponentSets(c, old) < 1) { comps.push(c); continue; }
     cut = true;
-    return {
+    const reps = typeof c.reps === 'number';
+    const was = reps ? (c.reps as number) : (c.distanceM ?? 0);
+    const sec = c.durationSec ?? 0;
+    const amount = was > 0 ? Math.floor(was * Math.max(0, fraction) + 1e-9) : 0;
+    const ratio = was > 0 ? amount / was : sec > 0 ? Math.floor(sec * Math.max(0, fraction) + 1e-9) / sec : 0;
+    if (!(ratio > 0)) continue;
+    comps.push({
       ...c,
-      ...(reps ? { reps: amount } : { distanceM: amount }),
-      // Rounded down, as the amount is: the set never runs above its share.
-      durationSec: Math.floor((c.durationSec ?? 0) * ratio + 1e-9),
+      ...(was > 0 ? (reps ? { reps: amount } : { distanceM: amount }) : {}),
+      durationSec: Math.floor(sec * ratio + 1e-9),
       mtl: c.mtl * ratio,
       ...(c.raceFraction != null ? { raceFraction: c.raceFraction * ratio } : {}),
-    } as HyroxComponent;
-  });
-  return cut ? comps : null;
+    } as HyroxComponent);
+  }
+  if (!cut) return w;
+  const left = new Set(comps.map(c => c.type));
+  const rounds = Math.max(1, ...comps.map(c => {
+    const rs = hyroxComponentRounds(c, old);
+    return rs.length > 0 ? rs[rs.length - 1] : 0;
+  }));
+  const { weakest: _weakest, ...unled } = w.hyroxSpec;
+  const spec = w.hyroxSpec.weakest && !left.has(w.hyroxSpec.weakest) ? unled : w.hyroxSpec;
+  return finishHyroxSession({ ...w, hyroxComponents: comps, hyroxRounds: Math.min(old, rounds), hyroxSpec: spec });
 }
 
-/** The same station session with each station's sets cut to
- *  `fractionOf(station)` of their amount (hyroxPartialComponents), its MTL,
- *  duration and text again; the session itself when none is cut. */
-export function withHyroxPartialSets(w: Workout, fractionOf: (st: HyroxStation) => number | null): Workout {
-  const comps = hyroxPartialComponents(w, fractionOf);
-  return comps ? finishHyroxSession({ ...w, hyroxComponents: comps }) : w;
+/** The erg an easy erg session runs on (generateHyroxEasyErg's text), or
+ *  null for any other session. */
+export function hyroxEasyErgStation(w: Workout): HyroxStation | null {
+  if (w.t !== HYROX_EASY_ERG_TYPE) return null;
+  return (['ski_erg', 'row_erg'] as HyroxStation[]).find(st => (w.d ?? '').includes(`easy on the ${STATION_DISPLAY[st].name}.`)) ?? null;
 }
 
 /**
@@ -930,18 +921,22 @@ export function hyroxWarmupOn(
   return { min, mode, mtl: computeComponentMTL(min, HYROX_EASY_RPE, mode === 'run' ? 'run_easy' : mode, undefined, bodyWeightKg) };
 }
 
-/** The same session with its warm-up and strength block set (null clears
- *  one; undefined keeps it) and round 1 as the warm-up or not
+/** The same session with its warm-up, strength block and finisher set (null
+ *  clears one; undefined keeps it) and round 1 as the warm-up or not
  *  (`warmupRound`: true sets it, false clears it), its MTL, duration and text
  *  again. */
 export function withHyroxSessionParts(
-  w: Workout, parts: { warmup?: HyroxSessionSpec['warmup'] | null; strength?: HyroxStrengthBlock | null; warmupRound?: boolean },
+  w: Workout, parts: {
+    warmup?: HyroxSessionSpec['warmup'] | null; strength?: HyroxStrengthBlock | null; warmupRound?: boolean;
+    finisher?: HyroxSessionSpec['finisher'] | null;
+  },
 ): Workout {
   if (!w.hyroxSpec) return w;
   const spec: HyroxSessionSpec = { ...w.hyroxSpec };
   if (parts.warmup === null) delete spec.warmup; else if (parts.warmup) spec.warmup = parts.warmup;
   if (parts.warmupRound === true) spec.warmupRound = true; else if (parts.warmupRound === false) delete spec.warmupRound;
   if (parts.strength === null) delete spec.strength; else if (parts.strength) spec.strength = parts.strength;
+  if (parts.finisher === null) delete spec.finisher; else if (parts.finisher) spec.finisher = parts.finisher;
   return finishHyroxSession({ ...w, hyroxSpec: spec });
 }
 
@@ -1165,19 +1160,12 @@ function generateStationRacePace(p: StationParams): Workout {
 /** The station a cut takes out of a circuit (the MTL cap, the ceilings, the
  *  deload and taper caps): the heaviest by MTL, never a race-pace session's
  *  weakest station while another is left (the sheet's race-pace session
- *  includes the weakest). Null when the session holds no station.
- *  `rank` (the injury cut, applyHyroxInjuryGates): stations of the lowest
- *  rank go first, the restricted side's under a one-sided restriction; the
- *  weakest and the MTL order hold within a rank, so a weakest station on the
- *  restricted side leaves before the other side's stations. */
-export function hyroxStationToCut(w: Workout, rank?: (s: HyroxStation) => number): HyroxStation | null {
+ *  includes the weakest). Null when the session holds no station. */
+export function hyroxStationToCut(w: Workout): HyroxStation | null {
   const st = (w.hyroxComponents ?? []).filter(c => c.type !== 'run');
   if (st.length === 0) return null;
-  const rankOf = (c: HyroxComponent) => (rank ? rank(c.type as HyroxStation) : 0);
-  const first = Math.min(...st.map(rankOf));
-  const group = st.filter(c => rankOf(c) === first);
-  const pool = group.filter(c => c.type !== w.hyroxSpec?.weakest);
-  return (pool.length > 0 ? pool : group).reduce((a, c) => (c.mtl > a.mtl ? c : a)).type as HyroxStation;
+  const pool = st.filter(c => c.type !== w.hyroxSpec?.weakest);
+  return (pool.length > 0 ? pool : st).reduce((a, c) => (c.mtl > a.mtl ? c : a)).type as HyroxStation;
 }
 
 // ─── Brick session generators ─────────────────────────────────────────────────

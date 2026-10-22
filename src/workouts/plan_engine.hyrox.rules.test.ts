@@ -1937,27 +1937,35 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
     expect(short).toBeGreaterThan(0);
   }, 120000);
 
-  it('an injury that gates the stations never trades an easy run for an easy erg session the gates drop', () => {
+  it('an injury that gates the stations keeps every run of the athlete\'s own uninjured plan, adds none, and holds no erg or station work (injury gate v2)', () => {
     // Review 2026-10-13: with the station capacity at 0 and running open,
     // the chosen sessions counted as full (the gated stations' slots), the
     // shortest easy run left for an easy erg session, and the gates then
-    // dropped the erg: 138 of 630 training weeks lost an easy run, the
-    // injured athlete's only gate-safe training (novice 10 h 12 weeks, W5: 3
-    // runs and 170 min became 2 runs and 105 min).
-    let weeks = 0;
+    // dropped the erg: 138 of 630 training weeks lost an easy run (novice
+    // 10 h 12 weeks, W5: 3 runs and 170 min became 2 runs and 105 min).
+    // Injury gate v2 (2026-10-22) builds each injured week as the athlete's
+    // own uninjured week and passes it through the gates, adding no session
+    // the uninjured week lacks. At upper body 0 and run 100 every run of the
+    // uninjured week stays whole; an easy erg session the uninjured week
+    // planned leaves with nothing in its place. Against the same athlete
+    // without ergs (whose plan funds those minutes as running) that is a
+    // disclosed cost, counted here, not a rule.
+    let weeks = 0; let lessThanNoErg = 0; let runLost = 0;
     for (const band of BANDS) {
       const r = HYROX_HOURS_RANGE[band];
       for (const hrs of [r.default, 10, 12].filter((h, i, a) => a.indexOf(h) === i && h >= r.min && h <= r.max)) {
         for (const len of [12, 16, 20]) {
-          const s = structuredClone(build(band, hrs, len));
+          const base = structuredClone(build(band, hrs, len));
+          const s = structuredClone(base);
           (s as unknown as { injuryState: unknown }).injuryState = { active: true, runCapacity: 100, upperLoadCapacity: 0, lowerLoadCapacity: 100 };
           const { detail } = generateHyroxPlanDetailed(s);
-          // The same athlete without erg access, where no easy run can leave
-          // for erg work: the runs must be the same.
+          const own = generateHyroxPlanDetailed(structuredClone(base)).detail;
           const noErg = structuredClone(s);
           noErg.hyroxConfig!.stationAccess = { ...noErg.hyroxConfig!.stationAccess, skiErg: false, rowErg: false };
           const ref = generateHyroxPlanDetailed(noErg).detail;
-          const runMin = (ws: Workout[]) => ws.filter(w => w.discipline === 'run' && w.commute !== true).map(w => w.estimatedDurationMin ?? 0).sort((a, b) => a - b).join(',');
+          const runs = (ws: Workout[]) => ws.filter(w => w.discipline === 'run' && w.commute !== true);
+          const runMin = (ws: Workout[]) => runs(ws).map(w => w.estimatedDurationMin ?? 0).sort((a, b) => a - b).join(',');
+          const total = (ws: Workout[]) => runs(ws).reduce((a, w) => a + (w.estimatedDurationMin ?? 0), 0);
           for (const d of detail) {
             if (d.phase === 'taper') continue;
             weeks++;
@@ -1965,13 +1973,18 @@ describe('HYROX round 5 decisions (2026-10-13)', () => {
             expect(d.workouts.some(isHyroxEasyErg), label).toBe(false);
             expect(d.adjustments.some(n => /left out for an easy erg session/.test(n)), label).toBe(false);
             expect(d.workouts.some(isWork), label).toBe(false);
-            expect(runMin(d.workouts), label).toBe(runMin(ref[d.week - 1].workouts));
+            expect(runMin(d.workouts), label).toBe(runMin(own[d.week - 1].workouts));
+            const ids = new Set(own[d.week - 1].workouts.map(w => w.id));
+            expect(d.workouts.every(w => ids.has(w.id)), label).toBe(true);
+            if (total(d.workouts) < total(ref[d.week - 1].workouts)) lessThanNoErg++;
+            if (runs(d.workouts).length < runs(ref[d.week - 1].workouts).length) runLost++;
           }
         }
       }
     }
+    console.info(`[hyrox injury v2] upper body 0, run 100: ${lessThanNoErg} of ${weeks} training weeks run less than the same athlete without ergs, ${runLost} hold fewer runs (the uninjured week's easy erg work leaves with nothing in its place)`);
     expect(weeks).toBeGreaterThan(500);
-  }, 60000);
+  }, 120000);
 
   it('the hours line (round 6, item 7): only a loaded week the chosen session count holds, with the week\'s own numbers', () => {
     // Week.hyroxHoursFit drives the plan view's one muted line ("Your 5

@@ -142,15 +142,21 @@ export function hyroxSessionPlannedTss(w: Pick<Workout, 't' | 'rpe' | 'r' | 'est
   const rate = plannedTssPerMin(w.t ?? '', rpe);
   if (!w.hyroxSpec) return dur * rate;
   const parts = hyroxSessionPartsMin(w);
-  // Round 1 at the easy RPE (only above it, as the MTL's rule).
+  // Round 1 at the easy RPE (only above it, as the MTL's rule). Priced from
+  // the session's seconds, so a set that grows never lowers the price (the
+  // rounded length less round 1 can fall as round 1 grows).
   const easyRound = w.hyroxSpec.warmupRound && rpe > HYROX_EASY_RPE ? hyroxRoundOneSec(w) / 60 : 0;
-  if (parts.easy + parts.strength + easyRound <= 0) return dur * rate;
-  // The injury gates scale a session's length; the parts keep theirs, so the
-  // work is what is left (never negative).
+  if (easyRound > 0) {
+    return Math.max(0, hyroxSessionWorkSec(w) / 60 - easyRound) * rate
+      + (parts.easy + easyRound) * plannedTssPerMin('', HYROX_EASY_RPE)
+      + parts.strength * plannedTssPerMin('gym', w.hyroxSpec.strength?.rpe ?? rpe);
+  }
+  if (parts.easy + parts.strength <= 0) return dur * rate;
+  // The work is what the parts leave of the session's length (never
+  // negative).
   const work = Math.max(0, dur - parts.easy - parts.strength);
-  const easyWork = Math.min(work, easyRound);
-  return (work - easyWork) * rate
-    + (parts.easy + easyWork) * plannedTssPerMin('', HYROX_EASY_RPE)
+  return work * rate
+    + parts.easy * plannedTssPerMin('', HYROX_EASY_RPE)
     + parts.strength * plannedTssPerMin('gym', w.hyroxSpec.strength?.rpe ?? rpe);
 }
 

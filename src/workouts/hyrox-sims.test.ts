@@ -274,17 +274,23 @@ describe('the race simulation week', () => {
     expect(loaded(full - 1).length + loaded(full).length).toBeGreaterThan(0);
   }, 60000);
 
-  it('an injury that would drop a brick plans no sim; the week keeps its structure for the gates', () => {
+  it('under any restriction the injury gates leave the sim out of the uninjured sim week, and the week says so (injury gate v2: the week is the uninjured week through the gates, so its other sessions keep their slots)', () => {
     const s = build('intermediate', 8, 18);
     const tw = planTrainingWeeks(s);
-    const simWeeks = [...hyroxSimWeeks(s, tw).keys()];
+    const simWeeks = [...hyroxSimWeeks(s, tw).keys()].filter(w => !!simOf(s.wks[w - 1]));
     expect(simWeeks.length).toBeGreaterThan(0);
-    const inj = structuredClone(s);
-    (inj as unknown as { injuryState: unknown }).injuryState = { active: true, runCapacity: 100, upperLoadCapacity: 50, lowerLoadCapacity: 100 };
-    const wks = generateHyroxPlan(inj);
-    for (const w of simWeeks) {
-      expect(simOf(wks[w - 1])).toBeUndefined();
-      expect((wks[w - 1].hyroxPlanNotes ?? []).some(n => /no race simulation \(injury\)/.test(n))).toBe(true);
+    for (const caps of [[100, 50, 100], [100, 100, 95], [90, 100, 100]]) {
+      const inj = structuredClone(s);
+      (inj as unknown as { injuryState: unknown }).injuryState = { active: true, runCapacity: caps[0], upperLoadCapacity: caps[1], lowerLoadCapacity: caps[2] };
+      const wks = generateHyroxPlan(inj);
+      for (const w of simWeeks) {
+        const label = `W${w} at ${caps.join('/')}`;
+        expect(simOf(wks[w - 1]), label).toBeUndefined();
+        expect((wks[w - 1].hyroxPlanNotes ?? []).some(n => /Race Simulation left out \(injury: runs and stations stacked/.test(n)), label).toBe(true);
+        // No session the uninjured sim week does not hold.
+        const ids = new Set(prescribed(s.wks[w - 1]).map(x => x.id));
+        expect(prescribed(wks[w - 1]).every(x => ids.has(x.id)), label).toBe(true);
+      }
     }
   }, 60000);
 });

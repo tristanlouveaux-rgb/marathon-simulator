@@ -339,16 +339,6 @@ export interface HyroxSessionSpec {
    *  0 and no erg): the first round's sets run at the easy RPE
    *  (HYROX_EASY_RPE) as the warm-up. */
   warmupRound?: boolean;
-  /** Station sessions the injury gates cut: the upper- and lower-body
-   *  capacities they cut it at. A deload or taper week that repeats the
-   *  reference week's gated session passes through the gates at the same
-   *  capacities uncut, so the gates' cut is not applied twice. */
-  gatedAt?: { upper: number; lower: number };
-  /** Internal to a plan build under an injury: the station slot (`slot${i}`,
-   *  its place in the week's station kinds) a station session of the
-   *  uninjured build holds, which the injured build's slot starts from. Never
-   *  on a stored plan. */
-  slot?: string;
   /** Station sessions: the strength block that opens the session. */
   strength?: HyroxStrengthBlock;
   /** Station sessions: the easy erg finisher, the session's lever: it takes
