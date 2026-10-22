@@ -24,6 +24,7 @@ vi.mock('@/data/supabaseClient', () => ({
 
 import { getDefaultState, setState, resetState } from '@/state/store';
 import { generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
+import { generateTriathlonPlan } from '@/workouts/plan_engine.triathlon';
 import { HYROX_WEEKLY_SESSIONS, HYROX_MTL_CAP, HYROX_HOURS_RANGE } from '@/constants/hyrox-constants';
 import { renderHomeView } from './home-view';
 import { computeDailyCoach, deriveStrainContext } from '@/calculations/daily-coach';
@@ -79,13 +80,39 @@ function runningState(): SimulatorState {
 
 const text = () => (document.getElementById('app-root')!.textContent ?? '').replace(/\s+/g, ' ');
 
-/** Fake today to the first day of week 1 whose planned session is hard. */
+/** Fake today to the first day of week 1 whose planned session is hard and
+ *  not the long run (the long run has its own poor-sleep line, E8). */
 function onFirstHardDay(s: SimulatorState): string {
   const ctx = getPlannedDayTSSContext(s, 1);
-  const dow = [0, 1, 2, 3, 4, 5, 6].find(d => ctx.workoutsForDay(d).some(w => w.isHard));
+  const dow = [0, 1, 2, 3, 4, 5, 6].find(d => ctx.workoutsForDay(d).some(w => w.isHard) && !ctx.workoutsForDay(d).some(w => w.longRun));
   expect(dow, 'week 1 holds a hard session').toBeDefined();
   vi.setSystemTime(new Date(PLAN_MONDAY.getTime() + dow! * 86400000));
   return ctx.workoutsForDay(dow!).find(w => w.isHard)!.name;
+}
+
+function triState(): SimulatorState {
+  const s = {
+    ...getDefaultState(),
+    eventType: 'triathlon',
+    trackOnly: false,
+    planStartDate: '2026-09-28',
+    w: 1,
+    tw: 20,
+    v: 50,
+    pac: { e: 300, t: 250, i: 230, m: 275, r: 200 },
+    wks: [],
+    triConfig: {
+      distance: '70.3',
+      timeAvailableHoursPerWeek: 12,
+      volumeSplit: { swim: 0.175, bike: 0.475, run: 0.35 },
+      skillRating: { swim: 3, bike: 3, run: 3 },
+      bike: { hasPowerMeter: true, ftp: 220 },
+      swim: { cssSecPer100m: 100 },
+      weeksToRace: 20,
+    },
+  } as unknown as SimulatorState;
+  s.wks = generateTriathlonPlan(s);
+  return s;
 }
 
 beforeEach(() => {
@@ -147,7 +174,8 @@ describe('HYROX long run is a hard day on the coach line (D13)', () => {
     s.physiologyHistory = [{ date: localDateKey(new Date()), sleepScore: 40 } as any];
     const ctx = deriveStrainContext(s);
     expect(ctx.todayIsHard).toBe(true);
-    expect(computeDailyCoach(s).primaryMessage).toBe(`Sleep 40/100 last night. Consider converting ${lr!.n} to easy effort.`);
+    // E8: the long run is already easy effort, so the line suggests shortening it.
+    expect(computeDailyCoach(s).primaryMessage).toBe(`Sleep 40/100 last night. Consider shortening today's ${lr!.n}.`);
   });
 
   it('the day before the long run: the look-ahead carries its plan name', () => {
@@ -163,3 +191,32 @@ describe('HYROX long run is a hard day on the coach line (D13)', () => {
     if (hardTomorrow.length === 1) expect(ctx.upcomingHard?.name).toBe(lr!.n);
   });
 });
+
+// The poor-sleep line on the long-run day is shared by running, triathlon and
+// HYROX: "Consider shortening today's Long Run." (E8, 2026-10-22). It said
+// "Consider converting Long Run to easy effort.", which the HYROX long run
+// (hyrox_run_easy) already is.
+for (const [mode, build] of [['running', runningState], ['triathlon', triState], ['HYROX', hyroxState]] as const) {
+  describe(`${mode}: poor sleep on the long-run day`, () => {
+    it('the coach line suggests shortening the long run, on the coach page and Home', () => {
+      const s = build();
+      setState(s);
+      const ctx1 = getPlannedDayTSSContext(s, 1);
+      const dow = [0, 1, 2, 3, 4, 5, 6].find(d => ctx1.workoutsForDay(d).some(w => w.longRun));
+      expect(dow, 'week 1 holds a long run').toBeDefined();
+      vi.setSystemTime(new Date(PLAN_MONDAY.getTime() + dow! * 86400000));
+      const lr = ctx1.workoutsForDay(dow!).find(w => w.longRun)!;
+      s.physiologyHistory = [{ date: localDateKey(new Date()), sleepScore: 40 } as any];
+      const ctx = deriveStrainContext(s);
+      expect(ctx.todayIsHard).toBe(true);
+      expect(ctx.todayPlannedWorkout?.longRun).toBe(true);
+      const msg = computeDailyCoach(s).primaryMessage;
+      expect(msg).toBe(`Sleep 40/100 last night. Consider shortening today's ${lr.name}.`);
+      if (mode !== 'triathlon') { // triathlon Home shows the triathlon readiness sentence
+        renderHomeView();
+        expect(text()).toContain(msg);
+      }
+    });
+  });
+}
+

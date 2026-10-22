@@ -150,7 +150,7 @@ export interface StrainContext {
     description: string | null;
     plannedTSS: number | null;
     plannedDurationMin: number | null;
-    /** Running: today's workout fills the long-run slot (PlannedDayWorkout.longRun). */
+    /** Today's workout is the week's long run (PlannedDayWorkout.longRun; running, triathlon and HYROX). */
     longRun?: boolean;
   } | null;
 }
@@ -1010,6 +1010,11 @@ function derivePrimaryMessage(
       return sessionHeavy
         ? `Sleep ${sig.sleepLastNight}/100. Hard session on poor sleep blunts the training stimulus.`
         : `Sleep ${sig.sleepLastNight}/100. Light session was appropriate.`;
+    // A long run is already easy effort (the HYROX long run is hyrox_run_easy),
+    // so converting it to easy asks for what is already true; its load is the
+    // duration. Running, triathlon and HYROX share the line (E8, 2026-10-22).
+    if (hard && strain?.todayPlannedWorkout?.longRun)
+      return `Sleep ${sig.sleepLastNight}/100 last night. Consider shortening today's ${wn}.`;
     return hard
       ? `Sleep ${sig.sleepLastNight}/100 last night. Consider converting ${wn} to easy effort.`
       : 'Poor sleep last night. Rest or easy movement is appropriate.';

@@ -45,8 +45,10 @@ export interface PlannedDayWorkout {
   plannedDurationMin: number;
   isHard: boolean;
   status?: string;
-  /** Running only: the workout fills the week's long-run slot (isLongRun), so a
-   *  fast-finish long run (type 'progressive') still reads as the long run. */
+  /** The workout is the week's long run: running and triathlon isLongRun (a
+   *  fast-finish long run, type 'progressive', still reads as the long run),
+   *  HYROX isHyroxLongRun (hyrox_run_easy in the long-run slot). The coach's
+   *  poor-sleep line suggests shortening it (E8). */
   longRun?: boolean;
 }
 
@@ -163,6 +165,7 @@ export function getPlannedDayTSSContext(s: SimulatorState, viewWeek: number): Pl
           plannedDurationMin: Math.round(durMin),
           isHard: isHardStoredPlanSession(s, w),
           status: w.status,
+          ...((s.eventType === 'hyrox' ? isHyroxLongRun(w) : isLongRun(w)) ? { longRun: true } : {}),
         });
       }
     } else {
