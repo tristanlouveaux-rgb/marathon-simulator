@@ -466,8 +466,7 @@ import {
 //   without the injury, so no injured week holds more station work, or more
 //   of a restricted side's, than the capacities' shares of the uninjured
 //   week's; a ceiling repeats the reference week's gated session only when
-//   that copy is within those shares, and the taper's station cut makes no
-//   cut the gates would then drop;
+//   that copy is within those shares;
 // - a race-week circuit planned under the 15-min floor (a short primer)
 //   stays through a run restriction alone whatever its warm-up becomes;
 // - the cap on race week's easy runs applies only to a race week that, as
@@ -1819,17 +1818,19 @@ function generateWeekSessions(
     out = capToRef(out, uninjured ? start : undefined);
     if (omit.has('stations')) {
       // The ceiling's station cut: the heaviest stations leave first. Under
-      // an injury, no cut the gates would then leave out, as for the
-      // reference week's caps (capToRef; review round 8: open doubles mixed
-      // novice 6 h 12 weeks at upper and lower body 50, taper week 1 kept its
-      // circuit at run capacity 70 and lost it at 100 to this cut).
+      // an injury it can make a cut the gates then drop (a known limit,
+      // review round 8: open doubles mixed novice 6 h 12 weeks at upper and
+      // lower body 50, taper week 1 kept its circuit at run capacity 70 and
+      // lost it at 100 to this cut). Refusing such a cut kept a floor-length
+      // session that the deload ceiling or the taper fraction could not hold
+      // (open doubles at run capacity 0, lower body 50: 8 more deload weeks
+      // above the deload ceiling, 7 taper weeks above their fraction).
       let cut = 0;
       for (;;) {
         const st = (out.hyroxComponents ?? []).filter(c => c.type !== 'run');
         if (st.length <= MIN_CIRCUIT_STATIONS) break;
         const next = withoutHyroxStation(out, hyroxStationToCut(out) as HyroxStation);
         if (next === out || !holdsStationFloor(next)) break;
-        if (gates?.active && asGated(out) && !asGated(next)) break;
         out = next;
         cut++;
       }
