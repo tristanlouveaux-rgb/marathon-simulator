@@ -1287,6 +1287,62 @@ describe('HYROX review fixes, round 2 (2026-10-13)', () => {
     expect(off.slice(0, 10)).toEqual([]);
   }, 600000);
 
+  it('Thursday races: race week never runs more than taper week 1, its primer gives its day to the circuit, and a race week within the rule keeps its easy runs and holds no erg finisher in their place, singles, 7-session singles and doubles (review round 8: the cap on race week\'s easy runs counted the primer a Thursday race week then left out, so 27 race-dated plans within the rule gained an erg finisher, open doubles mixed beginner 4 h racing 2026-11-19 from 39 to 49 min, and 8 seven-session singles plans halved race week\'s running from 40 to 20 min)', () => {
+    const ORIGINAL_TZ = process.env.TZ;
+    process.env.TZ = 'Europe/London';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const off: string[] = [];
+    const pinned: Record<string, { min: number; run: number }> = {};
+    let checked = 0; let gaveDay = 0;
+    try {
+      vi.setSystemTime(new Date('2026-10-21T12:00:00'));
+      const variants: Array<[string, Partial<OnboardingState>]> = [
+        ['open singles men', { biologicalSex: 'male', hyroxDivision: 'men' } as Partial<OnboardingState>],
+        ['7-session open singles men', { biologicalSex: 'male', hyroxDivision: 'men', hyroxWeeklySessionCount: 7 } as Partial<OnboardingState>],
+        ['open doubles mixed', { biologicalSex: 'female', hyroxFormat: 'open_doubles', hyroxDivision: 'mixed' } as Partial<OnboardingState>],
+        ['Row Erg only open doubles', { biologicalSex: 'female', hyroxFormat: 'open_doubles', hyroxDivision: 'mixed', hyroxHasSkiErg: false } as Partial<OnboardingState>],
+      ];
+      for (const [name, over] of variants) {
+        for (const exp of ['beginner', 'intermediate', 'advanced']) {
+          for (const hrs of [4, 8, 12]) {
+            for (const race of ['2026-11-19', '2026-11-26', '2027-03-18']) {
+              resetState();
+              initializeHyroxSimulator({
+                ...defaultOnboardingState, name: 'QA', currentStep: 'initializing', trainingMode: 'hyrox', hyroxFormat: 'open_singles',
+                experienceLevel: exp, triTimeAvailableHoursPerWeek: hrs, planDurationWeeks: 16, customRaceDate: race, ...over,
+              } as OnboardingState);
+              const s = getState();
+              const tw = planTrainingWeeks(s);
+              const rw = s.wks[tw - 1];
+              const t1 = s.wks[tw - 2];
+              if (t1?.ph !== 'taper' || !rw) continue;
+              checked++;
+              const label = `${name} ${exp} ${hrs}h ${race} W${tw}`;
+              const ws = prescribed(rw);
+              if (notes(rw).some(n => /Tempo Run left out \(its day/.test(n))) gaveDay++;
+              if (runningMin(rw) > runningMin(t1) + 1e-6) off.push(`${label}: ${runningMin(rw)} min of running against taper week 1's ${runningMin(t1)}`);
+              if (notes(rw).some(n => /\(the taper never rises\)/.test(n)) && notes(rw).some(n => n.endsWith("holds the primer's run slot"))) off.push(`${label}: easy runs left out for the taper beside an easy run holding the primer's slot`);
+              // A race week whose easy runs are left out for the taper ran more
+              // than taper week 1 as built: with them it would.
+              if (notes(rw).some(n => /\(the taper never rises\)/.test(n)) && ws.some(w => w.hyroxSpec?.finisher) && runningMin(rw) + HYROX_RUN_FLOOR_MIN <= runningMin(t1) + 1e-6) off.push(`${label}: an easy run left out for the taper and an erg finisher in its place, with room for the run`);
+              if (exp === 'beginner' && hrs === 4 && race === '2026-11-19') pinned[name] = { min: minutes(rw), run: runningMin(rw) };
+            }
+          }
+        }
+      }
+    } finally {
+      vi.useRealTimers();
+      if (ORIGINAL_TZ === undefined) delete process.env.TZ; else process.env.TZ = ORIGINAL_TZ;
+    }
+    expect(checked).toBeGreaterThan(100);
+    expect(gaveDay).toBeGreaterThan(30);
+    // The review's examples, as round 6 built them (within the rule).
+    expect(pinned['open doubles mixed']).toEqual({ min: 39, run: 20 });
+    expect(pinned['Row Erg only open doubles']).toEqual({ min: 35, run: 20 });
+    expect(pinned['7-session open singles men']?.run).toBe(40);
+    expect(off.slice(0, 10)).toEqual([]);
+  }, 600000);
+
   it('race week keeps the reference week\'s run count whenever 0.30 of the reference week holds an easy run at the run floor beside the primer and the circuit (review round 2: 23 of 168 race weeks held fewer runs, 4 before)', () => {
     // Sheet taper.content: keep the run count. The exempt circuit's warm-up
     // is exempt in race week (a fixed part of the exempt circuit), so a race

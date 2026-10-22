@@ -994,6 +994,14 @@ interface HyroxWeekInputs {
   /** Set on the uninjured plan build that reads uninjuredStations: each
    *  station session carries its slot (hyroxSpec.slot). */
   stampSlots?: boolean;
+  /** Race week built again because, as built, it ran more than taper week 1
+   *  (prevRunMin; buildHyroxTrainingWeeks): its easy runs are capped so it
+   *  does not. Unset: no cap. */
+  raceRunCap?: boolean;
+  /** With raceRunCap: the week as scheduled left its primer out (its day,
+   *  race week's one day 3 or more days out, went to the circuit), so the cap
+   *  counts no primer. */
+  racePrimerOut?: boolean;
 }
 
 /** What a training week over its size (the acute:chronic guard, the deload
@@ -2067,7 +2075,12 @@ function generateWeekSessions(
   // at least HYROX_RUN_FLOOR_MIN; a share below the floor is merged into
   // fewer runs. Taper weeks and race week keep the run count (Bosquet et al.
   // 2007: no benefit from cutting frequency; the existing race-week rule) and
-  // never fall below the floor. Taper week 1's easy runs may use the week's
+  // never fall below the floor, except where the taper never rises: a taper
+  // week drops an easy run whose run floor would lift it above the week
+  // before's running, and race week one that would lift it above taper week
+  // 1's (review round 7, finding 12). Bosquet found no benefit from cutting
+  // frequency, so that drop rests on the rule that the taper never rises, not
+  // on the taper literature. Taper week 1's easy runs may use the week's
   // unspent minutes beyond the running share; race week's take what the
   // running share leaves after the primer, so the primer stays the one quality
   // touch and a shorter circuit does not lengthen them.
@@ -2115,9 +2128,21 @@ function generateWeekSessions(
     // takes over stays as it is (review round 7, finding 12: seven-session
     // open singles race weeks ran two 20-min easy runs beside the primer, 65
     // min against taper week 1's 63).
-    const raceCapRoom = raceWeek && inputs.prevRunMin != null ? inputs.prevRunMin - brickRunMin - (longMin ?? 0) - qMin() : Infinity;
+    // Only in a race week built again because, as built, it ran more than
+    // taper week 1 (raceRunCap, buildHyroxTrainingWeeks), and the primer
+    // counts only when that week kept it (review round 8: the cap ran on
+    // every race week, so it cut easy runs the race-day rules would have
+    // left out anyway, and against a primer a Thursday race week then left
+    // out, so race weeks within the rule lost running or gained an erg
+    // finisher: 35 of 378 race-dated plans changed what they prescribe).
+    // Under a run restriction the trigger compares the gated weeks, but the
+    // cap sizes the easy runs before the gates scale them, so it can leave
+    // out one more than needed (less load, not more; a known limit).
+    const raceCapRoom = raceWeek && inputs.raceRunCap && inputs.prevRunMin != null
+      ? inputs.prevRunMin - brickRunMin - (longMin ?? 0) - (inputs.racePrimerOut ? 0 : qMin())
+      : Infinity;
     if (n > 0 && n * each > raceCapRoom + 1e-9) {
-      const keep = quality ? 0 : 1;
+      const keep = quality && !inputs.racePrimerOut ? 0 : 1;
       while (n > keep && n * HYROX_RUN_FLOOR_MIN > raceCapRoom + 1e-9) n--;
       if (n > 0) each = Math.max(HYROX_RUN_FLOOR_MIN, Math.min(each, Math.floor(raceCapRoom / n)));
     }
@@ -4184,7 +4209,7 @@ export function buildHyroxTrainingWeeks(
   };
   // One week, built on the weeks before it. `nominal`: week 1 with a station
   // session in the assessment's slot (the D4 chronic seed, below).
-  const buildWeek = (w: number, nominal = false, sim?: HyroxSimWeek): HyroxWeekDetail => {
+  const buildWeek = (w: number, nominal = false, sim?: HyroxSimWeek, raceCap?: { primerOut: boolean }): HyroxWeekDetail => {
     const { phase, raceWeek, deload, runCeilingKm, prevLongRun, prevLoadedLong, refWeek, deloadRef, acwrCapTss, weekPrevSunday } = historyLimits(w, nominal);
     const effortMult = w >= (state.w ?? 1) ? effortNow : 1.0;
     const firstDow = firstTrackedDow(state.planStartDate, w, state.planCreatedAt);
@@ -4476,6 +4501,7 @@ export function buildHyroxTrainingWeeks(
         // with a station session in the assessment's slot).
         uninjuredStations: nominal ? undefined : uninjuredByWeek[w - 1],
         stampSlots: opts.stampSlots,
+        ...(raceCap ? { raceRunCap: true, racePrimerOut: raceCap.primerOut } : {}),
       }, adjustments);
       return attemptOf(workouts, adjustments);
     };
@@ -5632,6 +5658,26 @@ export function buildHyroxTrainingWeeks(
         : `W${w}: no race simulation (it leaves the week without ${lost}): the week keeps its brick`];
       d = alt;
       sim = down;
+    }
+    // Race week never runs more than taper week 1 (the taper never rises, as
+    // taper week 1 against the week before, counted the same way: the primer,
+    // the easy runs, run legs; the race is not in the week). Checked on the
+    // week as built, after the taper's own limits, so a race week within it
+    // is built as before (review round 8: the cap ran inside every build, so
+    // it cut easy runs the taper fraction or the race-day rules would have
+    // left out anyway: 20 of 1,152 no-race plans changed, 19 of them in their
+    // race-week notes alone): one that runs more is built again with its
+    // easy runs capped,
+    // counting the primer only when the week keeps it (a Thursday race week
+    // gives the primer's day to the circuit; a week built without the primer
+    // counted that then keeps it is built once more, the primer counted).
+    const weekBefore = built[w - 2];
+    if (d.raceWeek && weekBefore && runningOf(d.workouts) > runningOf(weekBefore.workouts) + 1e-6) {
+      const primerOut = (x: HyroxWeekDetail) => x.adjustments.some(n => n.includes("left out (its day, race week's one day"));
+      const out = primerOut(d);
+      let capped = buildWeek(w, false, sim, { primerOut: out });
+      if (out && !primerOut(capped)) capped = buildWeek(w, false, sim, { primerOut: false });
+      d = capped;
     }
     built.push(d);
     noteLoadSteps(built[built.length - 1]);
