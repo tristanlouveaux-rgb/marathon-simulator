@@ -55,7 +55,7 @@ function renderComponents(components: HyroxComponent[], w: Workout): string {
     const display = STATION_DISPLAY[c.type as HyroxStation];
     if (!display) return '';
     // Lane H2b sessions: the station's sets and prescription; older ones: the amount.
-    const dist = w.hyroxSpec ? hyroxStationRowText(c, w) : c.reps ? `${c.reps} reps` : display.distance;
+    const dist = w.hyroxSpec ? hyroxStationRowText(c, w) : c.reps ? `${c.reps} ${c.reps === 1 ? 'rep' : 'reps'}` : display.distance;
     return `<li style="margin-bottom:2px">${display.name}, ${dist}</li>`;
   });
 

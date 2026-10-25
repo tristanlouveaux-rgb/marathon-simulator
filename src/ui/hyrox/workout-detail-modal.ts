@@ -35,7 +35,7 @@ function renderStationRow(
   // Lane H2b sessions: the station's sets and prescription ("2 × 250 m,
   // damper 6"); an older session: its amount.
   // The race-pace set target sits in its own column, so the row leaves it out.
-  const distStr = workout.hyroxSpec ? hyroxStationRowText(c, workout, false) : c.reps ? `${c.reps} reps` : display.distance;
+  const distStr = workout.hyroxSpec ? hyroxStationRowText(c, workout, false) : c.reps ? `${c.reps} ${c.reps === 1 ? 'rep' : 'reps'}` : display.distance;
   const targetStr = c.durationSec ? ftRounded(c.durationSec) : '—';
   const perSet = !!workout.hyroxSpec;
   const targetLabel = options.context === 'technique' ? 'per round'

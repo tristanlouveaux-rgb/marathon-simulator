@@ -181,7 +181,7 @@ export function hyroxComponentAmount(c: HyroxComponent): string {
     return m >= 1000 ? `${fmtAmount(m / 1000)} km` : `${fmtAmount(m)} m`;
   }
   const station = c.type as HyroxStation;
-  if (typeof c.reps === 'number') return `${c.reps} reps`;
+  if (typeof c.reps === 'number') return `${c.reps} ${c.reps === 1 ? 'rep' : 'reps'}`;
   if (c.raceFraction == null || c.distanceM == null) return STATION_DISPLAY[station]?.distance ?? '';
   if (station === 'sled_push' || station === 'sled_pull') {
     const lanes = c.distanceM / HYROX_SLED_LANE_M;
