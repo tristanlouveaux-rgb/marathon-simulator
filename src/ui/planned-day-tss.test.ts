@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { getPlannedDayTSSContext } from './planned-day-tss';
+import { isHighIntensity as isHyroxHardSession } from '@/workouts/scheduler.hyrox';
 import { reconcileTriCompletions } from '@/calculations/activity-matcher.triathlon';
 import { resolveWeekWorkouts } from './week-resolve';
 import { computePlannedDaySignalBTSS } from '@/calculations/fitness-model';
@@ -111,6 +112,98 @@ describe('getPlannedDayTSSContext — HYROX', () => {
     const ctx = getPlannedDayTSSContext(s, 1);
     expect(ctx.plannedTSSForDay(2)).toBe(Math.round(45 * TL_PER_MIN[7])); // 80
     expect(ctx.plannedTSSForDay(3)).toBe(0);
+  });
+});
+
+describe('getPlannedDayTSSContext — hardness in the stored-plan modes (ISSUE-406 (b))', () => {
+  // Each mode's own classifier: HYROX isHighIntensity (scheduler.hyrox.ts),
+  // triathlon / cycling isTriQualitySession (tri-suggestion-apply.ts). The
+  // running token check alone called a HYROX Tempo Run, a station density
+  // session and a brick easy.
+  function weekOf(eventType: 'hyrox' | 'triathlon', sessions: Array<Record<string, unknown>>): SimulatorState {
+    return triState({
+      eventType,
+      wks: [{
+        ph: 'build',
+        triWorkouts: sessions.map((w, i) => ({ id: `W1-${i}`, n: String(w.t), d: '50min', r: 6, estimatedDurationMin: 50, dayOfWeek: i, ...w })),
+        adhocWorkouts: [],
+        rated: {},
+      }],
+    } as any);
+  }
+  const hardByType = (s: SimulatorState) => {
+    const ctx = getPlannedDayTSSContext(s, 1);
+    const out: Record<string, boolean> = {};
+    for (let d = 0; d < 7; d++) for (const w of ctx.workoutsForDay(d)) out[`${w.type}${w.name.includes('light') ? ' (light)' : ''}`] = w.isHard;
+    return out;
+  };
+
+  it('HYROX: tempo and interval runs, station density, bricks and the long run are hard; easy work is not', () => {
+    const s = weekOf('hyrox', [
+      { t: 'hyrox_run_tempo', discipline: 'run' },
+      { t: 'hyrox_run_intervals', discipline: 'run' },
+      { t: 'hyrox_station_density', discipline: 'station' },
+      { t: 'hyrox_brick', discipline: 'brick' },
+      { t: 'hyrox_mini_brick', discipline: 'brick' },
+      { t: 'hyrox_run_easy', discipline: 'run', longRun: true },
+      { t: 'hyrox_station_technique', discipline: 'station' },
+    ]);
+    expect(hardByType(s)).toEqual({
+      hyrox_run_tempo: true,
+      hyrox_run_intervals: true,
+      hyrox_station_density: true,
+      hyrox_brick: true,
+      hyrox_mini_brick: true,
+      // The long run, as running's and triathlon's 'long' (D13).
+      hyrox_run_easy: true,
+      hyrox_station_technique: false,
+    });
+  });
+
+  it('HYROX: only the long-run stamp makes an easy run hard; the scheduler\'s spacing set is unchanged', () => {
+    const s = weekOf('hyrox', [
+      { t: 'hyrox_run_easy', discipline: 'run', longRun: true },
+      { t: 'hyrox_run_easy', discipline: 'run' },
+    ]);
+    const ctx = getPlannedDayTSSContext(s, 1);
+    expect([0, 1].map(d => ctx.workoutsForDay(d)[0].isHard)).toEqual([true, false]);
+    expect(isHyroxHardSession({ t: 'hyrox_run_easy', longRun: true } as any)).toBe(false);
+  });
+
+  it('HYROX: the light secondary brick and easy erg work are not hard (the scheduler\'s own set)', () => {
+    const s = weekOf('hyrox', [
+      { t: 'hyrox_mini_brick', n: 'Mini brick light', discipline: 'brick', hyroxLight: true },
+      { t: 'hyrox_erg_easy', discipline: 'erg' },
+      { t: 'hyrox_run_easy', discipline: 'run' },
+    ]);
+    const ctx = getPlannedDayTSSContext(s, 1);
+    expect([0, 1, 2].map(d => ctx.workoutsForDay(d)[0].isHard)).toEqual([false, false, false]);
+  });
+
+  it('triathlon / cycling: brick, sweet spot, over-under, tempo and hills are hard; endurance is not', () => {
+    const s = weekOf('triathlon', [
+      { t: 'brick', discipline: 'bike' },
+      { t: 'bike_sweet_spot', discipline: 'bike' },
+      { t: 'bike_over_under', discipline: 'bike' },
+      { t: 'tempo', discipline: 'run' },
+      { t: 'bike_hills', discipline: 'bike' },
+      { t: 'bike_endurance', discipline: 'bike' },
+      { t: 'swim_technique', discipline: 'swim' },
+    ]);
+    expect(hardByType(s)).toEqual({
+      brick: true,
+      bike_sweet_spot: true,
+      bike_over_under: true,
+      tempo: true,
+      bike_hills: true,
+      bike_endurance: false,
+      swim_technique: false,
+    });
+  });
+
+  it('the running token check still applies on top (a threshold run stays hard)', () => {
+    const s = weekOf('hyrox', [{ t: 'threshold', discipline: 'run' }]);
+    expect(getPlannedDayTSSContext(s, 1).workoutsForDay(0)[0].isHard).toBe(true);
   });
 });
 

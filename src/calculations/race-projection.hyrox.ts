@@ -35,8 +35,10 @@ import { HYROX_TAPER_DAYS } from '@/constants/hyrox-constants';
 import { applyTrainingHorizonAdjustment } from './training-horizon';
 import { hyroxMtlChronicVsPlan, isMtlSessionCompleted } from './mtl';
 import { bandFromVdot } from './hyrox-staleness';
+import { hyroxRunBaseVdot } from './hyrox-run-pace';
 import { runInjuryBuildWeeks } from './hyrox-injury';
 import { raceForecastHorizonISO } from '@/workouts/race-week-layout';
+import { localDateKey } from '@/utils/local-date';
 import { hyroxImprovementCeiling } from './hyrox-results';
 import { doublesTotalInSinglesTermsSec, hyroxDoublesTablesForState } from './hyrox-doubles';
 import { isHyroxDoublesFormat, resolveHyroxAthleteSex } from './hyrox-division';
@@ -93,6 +95,23 @@ export function hyroxForecastBandPct(
   return pct;
 }
 
+/**
+ * The forecast's likely range, exactly as the Forecast hero shows it
+ * ("Likely X–Y"): the forecast ± hyroxForecastBandPct of it (the band widens
+ * with weeks to race day and with lower calibration). One source for the
+ * hero and the goal feasibility grading (hyroxGoalBackCalcOptions), so a goal
+ * reads "inside your forecast's likely range" only when the hero's range
+ * contains it.
+ */
+export function hyroxLikelyRangeSec(
+  state: SimulatorState,
+  prediction: Pick<HyroxPrediction, 'totalSec' | 'confidence'>,
+): [number, number] {
+  const pct = hyroxForecastBandPct(prediction.confidence, computeWeeksRemaining(state));
+  const half = prediction.totalSec * pct;
+  return [Math.round(prediction.totalSec - half), Math.round(prediction.totalSec + half)];
+}
+
 /** Days between two ISO dates. Negative if `to` is before `from`. */
 function daysBetween(fromISO: string, toISO: string): number {
   const a = new Date(fromISO).getTime();
@@ -109,7 +128,10 @@ function daysBetween(fromISO: string, toISO: string): number {
 function computeWeeksRemaining(state: SimulatorState): number {
   const raceDate = state.hyroxConfig?.raceDate ?? state.onboarding?.customRaceDate;
   if (!raceDate) return 0;
-  const today = new Date().toISOString().slice(0, 10);
+  // The athlete's local calendar day, the day plan weeks and race dates are
+  // kept in. The UTC day read one day early between 00:00 and 01:00 BST, so
+  // weeks remaining ran a day long for that hour (E9, 2026-10-22).
+  const today = localDateKey(new Date());
   const days = daysBetween(today, raceForecastHorizonISO(state, raceDate));
   if (days <= 0) return 0;
   return days / 7;
@@ -119,7 +141,7 @@ function computeWeeksRemaining(state: SimulatorState): number {
 function raceStillAhead(state: SimulatorState): boolean {
   const raceDate = state.hyroxConfig?.raceDate ?? state.onboarding?.customRaceDate;
   if (!raceDate) return false;
-  return daysBetween(new Date().toISOString().slice(0, 10), raceDate) > 0;
+  return daysBetween(localDateKey(new Date()), raceDate) > 0;
 }
 
 /**
@@ -241,18 +263,26 @@ export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPre
   // inside `predictHyroxRace` via `buildStationProjection`). Run uses the
   // VDOT horizon: there's no station-class curve for "running an 8 km race
   // portion", so we map to a 10k VDOT projection.
+  //
+  // The horizon projects from the run base the forecast's run pace uses
+  // (hyroxRunBaseVdot): state.v for a measured runner, else the band seed
+  // expressed as the CP model's VDOT. It read state.v ungated, so an
+  // unmeasured athlete's run leg came from the band seed (D5) while its gain
+  // came from the default VDOT 50 (beginners -71 s over 16 weeks against
+  // -207 s at the band's VDOT; E5, 2026-10-22).
   let runHorizonProjectedSec = prediction.runSec;
   let runHorizonImprovementPct = 0;
   let runSessions = 0;
-  if (weeksRemaining > 0 && state.v > 0) {
-    const runVdotBand = toRunAbilityBand(bandFromVdot(state.v) ?? band);
+  const runBaseVdot = hyroxRunBaseVdot(state) ?? 0;
+  if (weeksRemaining > 0 && runBaseVdot > 0) {
+    const runVdotBand = toRunAbilityBand(bandFromVdot(runBaseVdot) ?? band);
     runSessions = (hx.runsPerWeek ?? 0) + 0.5 * (hx.bricksPerWeek ?? 0);
     // Injury debit: the run portion only banks build time for the weeks the
     // athlete can run. A blocked run → 0 build weeks → no projected run gain.
     // Unchanged when there is no active injury (returns full weeksRemaining).
     const runBuildWeeks = runInjuryBuildWeeks(state.injuryState, weeksRemaining);
     const runHorizon = applyTrainingHorizonAdjustment({
-      baseline_vdot: state.v,
+      baseline_vdot: runBaseVdot,
       target_distance: '10k',
       weeks_remaining: runBuildWeeks,
       sessions_per_week: runSessions,

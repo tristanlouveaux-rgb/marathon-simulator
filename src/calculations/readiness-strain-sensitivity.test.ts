@@ -127,14 +127,19 @@ describe('capacity-strain scale mismatch (ISSUE-263 class) — numerator vs deno
   const setPersonal = () => setAthleteNormalizer(PROFILE.ltHR, PROFILE.restingHR, PROFILE.maxHR);
   afterEach(() => setAthleteNormalizer()); // no args → 15000 fallback
 
-  const today = new Date().toISOString().split('T')[0];
-  const ride = {
-    activityType: 'cycling',
-    durationSec: 56 * 60,
-    // Early-morning stamp: must be in the past at test runtime or the CTL
-    // pipe's `day < 0` guard drops the activity entirely.
-    startTime: `${today}T00:30:00Z`,
-    iTrimp: 5202,
+  // Today's ride, stamped at local midnight: on the local day the strain reads
+  // (localDateKey) and never in the future, whatever the hour, so the CTL
+  // pipe's `day < 0` guard keeps it. It was stamped 00:30Z of the UTC day:
+  // between 00:00 and 01:00 BST that is yesterday's local day, and between
+  // 01:00 and 01:30 BST it is in the future (E9, 2026-10-22).
+  const ride = () => {
+    const now = new Date();
+    return {
+      activityType: 'cycling',
+      durationSec: 56 * 60,
+      startTime: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0).toISOString(),
+      iTrimp: 5202,
+    };
   };
 
   function triState(weeklyCtlParts: { swim: number; bike: number; run: number; cross: number }): SimulatorState {
@@ -145,7 +150,7 @@ describe('capacity-strain scale mismatch (ISSUE-263 class) — numerator vs deno
       trackOnly: false,
       wks: [{
         triWorkouts: [],
-        garminActuals: { 'bike-1': { ...ride, distanceKm: 30 } },
+        garminActuals: { 'bike-1': { ...ride(), distanceKm: 30 } },
         adhocWorkouts: [],
       }],
       physiologyHistory: [],
@@ -178,7 +183,7 @@ describe('capacity-strain scale mismatch (ISSUE-263 class) — numerator vs deno
     // pipe through normalizeiTrimp (personal, plausibility-gated), so the two
     // pipes now agree by construction.
     setPersonal();
-    const est = estimateDirectPerDisciplineCTLFromActivities([ride]);
+    const est = estimateDirectPerDisciplineCTLFromActivities([ride()]);
     // One ride today: bike weekly CTL = (iTrimp×100/personalNorm ÷ 42) × 7
     expect(est.bike.ctl).toBeCloseTo((((5202 * 100) / personalNorm) / 42) * 7, 1);
   });

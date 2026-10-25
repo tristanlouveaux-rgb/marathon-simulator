@@ -183,6 +183,8 @@ Suppressed entirely on deload weeks (already a planned reduction) and floored at
 
 **Limitations.** (1) The displayed "Current VO2max" can be a Daniels VDOT proxy (LT-derived or PB-median tiers), which understates lab VO2max for economy-poor athletes and overstates it for efficient ones; the placement inherits this. Acceptable because the placement always refers to the number the user is looking at (two-numbers rule). (2) FRIEND is a US clinical-referral population, not endurance athletes; well-trained users will cluster above the 90th percentile, where the table flattens (clamped at 95). (3) A 2022 FRIEND update exists (16,278 treadmill tests, ages 20-89; Mayo Clin Proc 2022;97(2):285-293) but its tables are paywalled and could not be verified; swap in when verifiable. The 2015/2022 p50 deltas are ~1-2 mL/kg/min. (4) Marathon finishers are a self-selected population; "faster than 64% of finishers" describes people who completed a major, not the general public. (5) Coggan W/kg bands are male 60-min-power referenced; female athletes read about one band low (documented at `wattsPerKgTier`).
 
+> **Update 2026-10-13 (§DK, lane H3b).** Item 4 and the refusal rules: the HYROX field position reads the S8 to S9 results of the field the previous race was raced in (its format, by sex for singles, by the pair's division for doubles; `review.ts:1415`), e.g. "Faster than 66% of Open Singles women" for 1:30:00, with `hyroxResultsCaption` underneath. Pro Doubles has data, so `hyroxPlacement` (`fitness-placement.ts:235`, which now takes the cohort) no longer returns null for it.
+
 ---
 
 ## §BJ — Adhoc strain anchor: unplanned sessions floor readiness via CTL/7 (2026-06-03)
@@ -195,13 +197,13 @@ Suppressed entirely on deload weeks (already a planned reduction) and floored at
 
 **Injury-cap overshoot call-out.** When injury is active and `todayTSS > plannedDayTSS × 1.3` (the existing "Load exceeded" ring margin), the sentence becomes `injuryCapOvershootSentence`: "42 TSS logged against an injury-capped day of 20. Load is within your normal range, but well above the rehab cap." (or, when capacity is also exceeded, "...That exceeds both the rehab cap and your typical daily load. Rest up and recover."). The ring stays capacity-based; this sentence is the injury layer's message. Mirrored into running mode's `derivePrimaryMessage` Tier-0 injury branch (fires when trained and plan-strain ≥ 130%).
 
-**Acknowledgment tier at 80% (CTL-dominated anchor only).** Tristan (2026-06-03): "if strain is high from 80% up, we say good training." When the capacity anchor is CTL-dominated (`CTL/7 ≥ plannedDayTSS` — adhoc days and small-plan days), the session is finished, so 80–99% earns "Good training today (X TSS), most of a typical day's load." When the planned dose dominates the anchor, 80–99% can mean a session still in progress, so that path keeps the running-mode "Nearly at today's target" copy — the tier is gated on `ctlAnchored` in `postSessionSentence`. The 80 breakpoint mirrors running's existing Tier-4 partial-strain threshold; it is not a new constant.
+**Acknowledgment tier at 80% (CTL-dominated anchor only).** Tristan (2026-06-03): "if strain is high from 80% up, we say good training." When the capacity anchor is CTL-dominated (`CTL/7 ≥ plannedDayTSS` — adhoc days and small-plan days), the session is finished, so 80–99% earns "Good training today. X TSS logged, most of a typical day's load." (copy from 2026-10-22; X is the Strain ring's number) When the planned dose dominates the anchor, 80–99% can mean a session still in progress, so that path keeps the running-mode "Nearly at today's target" copy — the tier is gated on `ctlAnchored` in `postSessionSentence`. The 80 breakpoint mirrors running's existing Tier-4 partial-strain threshold; it is not a new constant.
 
 **Guards.** (1) A real logged session must exist today (`garminActuals` or a Garmin-imported adhoc workout). `computeTodayStrainTSS` includes passive step/active-minute TSS, so without this guard a long walk on a rest day would anchor against CTL/7 and crater the score for low-CTL athletes; rest-day passive load stays the domain of `isRestDayOverreaching`. (2) Weekly CTL < 10 → no anchor (percent stays 0). Mirrors `perDisciplineACWR`'s existing CTL ≥ 10 noise guard: dividing by a near-zero chronic load produces degenerate percentages (a detrained athlete's first session would pin the floor at 10).
 
 **Canonical module (2026-06-04).** The anchor lives in `src/calculations/capacity-strain.ts` (`computeCapacityStrain`, `capacityStrainNote`, plus the sentence helpers re-exported via daily-coach). Incident that forced it: Home fed the capacity percent (93% → 61) while the Readiness detail page kept its own plan-anchored percent (210% → strain floor 10 "Ease Back") — two hand-rolled assemblies of "the same" input. All three strainPct producers (home-view, readiness-view, daily-coach `deriveStrainContext`) now read the helper; hand-rolling a strain percent for `computeReadiness` is forbidden. `StrainContext.capacityStrainPct` carries it into daily-coach's internal readiness call while plan-relative `strainPct` stays for copy tiers.
 
-**Coherence.** The same `strainPctEffective` feeds the floor *and* the tri-mode post-session sentence (`postSessionSentence`, shared with running's Tier 1 copy), so the score, the ring label, and the sentence move together — no more "Manage Load + chronic-load lecture" while the Strain ring shows a just-completed hard session.
+**Coherence.** The same capacity anchor feeds the floor *and* the post-session sentence on every surface (`postSessionNote` since 2026-10-22, §DQ item 1; before, running's coach line and the Readiness card read their own plan-relative percents). The floor reads strain over the anchor; the sentence reads the session alone over it, so steps never finish a half-done session. The score and the sentence move together (the Readiness card's own label is plan- or per-session-relative, §DQ item 1 limitations) — no more "Manage Load + chronic-load lecture" while the Strain ring shows a just-completed hard session.
 
 **Limitations.** CTL/7 understates a planned hard day's intended dose (plans periodise; CTL is the average), so on adhoc days the floor engages slightly earlier than it would against a true planned target. Acceptable: adhoc days have no planned target by definition, and erring toward "rest up" after an unplanned hard session is the conservative direction. Planned days are unchanged.
 
@@ -1183,6 +1185,10 @@ In doubles each athlete runs all 8 legs but only completes 4 of 8 stations (part
 
 > **Superseded 2026-10-13 (§DH, `b739051`).** `DOUBLES_TO_SINGLES_PACE_FACTOR` and `convertHyroxRunPaceFormat` are removed. The premise was wrong: doubles partners split the work inside every station and run every leg together (26/27 Doubles rulebook s7.2, s7.3), and the results tables show open_doubles runs slower than open_singles (P50 2762 s against 2695 s). `formatFactor` for doubles is now `doublesRunPaceFactor` (`hyrox-run-pace.ts:110`): the percentile-matched doubles/singles run ratio at the athlete's singles run total, about 1.02 at P50, applied to the seed fallback too. The personal-offset back-computation of a doubles race uses the same ratios.
 
+> **Update 2026-10-13 (§DK, lane H3b).** `doublesRunPaceFactor` (`hyrox-run-pace.ts:117`) reads the athlete's doubles tables (the pair's division against the athlete's own-sex singles field, S8 to S9): at the median 1.01 to 1.06 in the same-sex divisions, 0.98 for a Mixed pair against women's singles and 1.09 against men's. The seed fallback pace is the band's median run total ÷ 8 in the athlete's field (`hyroxSeedRunPaceSecKm`). The recalibration flagged under "v1 calibration source" is done with cohort tables, not same-athlete pairs.
+
+> **Update 2026-10-13 (§DL, lane H3c, `f8269f4`).** On the S8-S9 tables (lane H3b) the median doubles/singles run ratio is 1.01 to 1.06 in the same-sex divisions, Open and Pro; a Mixed pair reads 0.98 against women's singles and 1.09 against men's (values in `HYROX_S89_PERCENTILES`, checked at `5068d8b`, unchanged at `d8432d2`). The "about 1.02 at P50" above is the S4 to S6 pooled value.
+
 ### Bayesian personalisation
 
 The population model (CP-ratio + format) is the **prior**. Each logged HYROX race provides an **observation** (back-computed run pace from `finish − stations − roxzone`, divided by 8). The **residual** `observed − model_at_that_format` updates a personal offset:
@@ -1228,6 +1234,8 @@ posterior_offset = existing × (1 − w) + residual × w
 - `src/calculations/hyrox-personal-pace.test.ts` (17) — back-computation correctness, blend math, clamp, decay function (12-month boundary, half-life proportionality).
 - `src/calculations/hyrox-marker-bumps.test.ts` — updated for v2 expected numerical ranges.
 
+**Update 2026-10-22 (§DQ items 2 and 3).** Since D5 (2026-10-21) a runner with no real running-fitness signal runs on the band seed, not the VDOT model. The personal offset is now a residual on the base in use (the VDOT model when measured, the band seed otherwise), stamped with that base and refitted when it changes, and the race-day run horizon projects from the same base (`hyroxRunBaseVdot`).
+
 ---
 
 ## §Z — Plan Phasing: capped single arc + double periodization for long plans (2026-05-11; refined 2026-05-12)
@@ -1252,6 +1260,8 @@ Three changes applied a day after the initial entry:
 3. **Double-periodization threshold differs by format**: running 33+, tri 28+, HYROX 28+. The lower tri/HYROX threshold reflects compressed productive single-arc windows in multi-discipline training (more concurrent modalities → faster monotony onset, evidenced by Hellard et al. 2019 in swimmers and Lehmann et al. 1997 in cyclists).
 
 The single-arc capped-allocation rule and the double-periodization cycle structure are otherwise unchanged.
+
+> **Update 2026-10-14 (§DN).** For triathlon and cycling the race taper is no longer a share of the plan: `computeTriPlanPhases` fixes it at `triRaceTaperWeeks` (sprint 1, others 2, cycling 2, race week only for a low-hours sprint or Olympic athlete). The tri taper ratios and the cap of 2 now apply only to plans shorter than the taper plus 2 weeks. Running and HYROX are unchanged.
 
 ---
 
@@ -1511,6 +1521,10 @@ Initial wiring of §V only fed `confidenceCap` into `predictHyroxRace` — the p
 
 **Test coverage**: `race-prediction.hyrox.test.ts` adds 4 tests pinning the blend at fresh-race no-blend, `very_stale` blend toward seed, partial-mitigation band shift, and strong-physiology weight-recovery boundaries.
 
+> **Update 2026-10-13 (§DL, lane H3c, `3162847`): per-entry splits decay.** A station value now decays by its own date. A half test, full test or guided-session best reads `hyroxEntrySplitsWeight(entry.dateISO, mitigation)` (`hyrox-staleness.ts:168`): the same splits curve (`baseDecayAt`, `:136`) at the entry's age, with the same mitigation (the race's when a race date is on file, else `computePhysiologyMitigation(state)`, now exported). Race splits, the boot migration's 'manual' seed and slot values with no history entry keep the race-age `splitsWeight`; a race with no date is still 'unknown' (weight 1). `bandWeight` (the seed blend toward the VDOT band), the re-band gate and the confidence cap still read the race's age (ISSUE-398 (b)). Limitation: the curve was set for race splits and is applied to tests uncalibrated. `hyrox-staleness.test.ts` now has 17 tests (the Files line above says 11).
+
+> **Update 2026-10-22: VDOT is read only for a measured runner.** Both VDOT reads in the staleness model now need a real running-fitness signal (`hyroxVdotIsMeasured`, `hyrox-staleness.ts`, on `hasRealRunningFitnessSignal`: the canonical rule, no claims off the bare-baseline VDOT, which D5 applied to the run pace). (1) Mitigation Signal 1 (VDOT vs the band-implied VDOT) is skipped without one: the default VDOT 50 on a beginner band (implied 32) scored the maximum 1.0 and released the stale-race penalty off no evidence. (2) The `bandWeight` seed blend toward the VDOT band (`seedBasis`, `race-prediction.hyrox.ts`) is skipped without one: VDOT 50 maps to intermediate, so every stale race blended its seeds toward intermediate whatever the athlete's band. No constant changed. Probe (6 bands x race age none / 3 / 9 / 15 / 30 months x CTL baseline none / 60 x 15-month station tests or none x singles / doubles, bare vs watch VO2max; 480 states): 150 forecasts move, all bare-baseline, none measured, and none without a race older than 6 months or old station tests. Total beginner and beginner +1.5 to +9.1 min, novice +0.8 to +4.2, intermediate +0.4 to +1.8 (old tests only), advanced -0.6 to -6.9, competitive -1.2 to -12.8 (+10 to +17 s with recent race and old tests). Limitation: without a measured runner a stale race now decays only through `splitsWeight` toward the athlete's own band seeds; there is no fitness evidence to blend toward another band.
+
 ---
 
 ## §U — HYROX VDOT-Derived Run Pace + Provenance (2026-05-08)
@@ -1564,6 +1578,12 @@ VDOT was tracked but unused for HYROX run pace. Strong runners with weak HYROX h
 - Ratio is back-calibrated to seed paces, not measured from longitudinal HYROX run-leg data.
 - `HYROX_FATIGUE_TO_THRESHOLD_RATIO` doesn't model temperature, altitude, or floor surface — those are layered separately by the venue model.
 
+> **Update 2026-10-13 (§DK, lane H3b).** `SEED_RUN_PACE_SEC_KM` is no longer hand-set: it is the Open Singles band median run total ÷ 8, women and men pooled (intermediate 305 to 329 s/km), and the seed fallback reads the athlete's own field (`hyroxSeedRunPaceSecKm`). The ratio table above was back-calibrated to the old seeds.
+
+> **Update 2026-10-21 (lane ctd, D5): the VDOT branch needs a real running-fitness signal.** `deriveHyroxRunPace` runs the population model (`derivePopulationRunPace`, which reads `state.v`) only when `hasRealRunningFitnessSignal(state)` is true: a VDOT from a race, PB, watch VO2max, HR calibration, measured LT or override, not the bare baseline (the default VDOT 50 or a stale carried value). Otherwise the pace is the band seed (`hyroxSeedRunPaceSecKm`, the band's median run total / 8; doubles × the same run ratio), captioned "Population est.". This applies the canonical rule that no claim is made off the bare-baseline VDOT (onboarding placement, Forecast grid and Stats VO2 bars already gate on it): a VDOT-50 pace was captioned "Updated from your runs" for a runner with no runs. The personal offset from a logged HYROX race is a residual on that model (observed minus model at the previous race), so it is not applied without the signal either. `applyHyroxRunPaceDerivation` clears a pace it stored earlier (`hyroxRunPaceSource: 'derived'`) when no derivation is possible now, so the plan, the forecast and Stats fall back together; an entered pace (`'user'`) is never cleared.
+>
+> *What moves.* Only athletes without a real signal; measured runners are unchanged (288-state probe: 6 bands x Open Singles, Open Doubles, Pro Singles x VDOT 50 and 40 x with and without a logged race x fresh and after the launch pass; all 144 bare-baseline states move, none of the 144 measured states). At the default VDOT 50 (pace 253 s/km singles, 264 doubles) the seed is slower for every band below competitive: total beginner and beginner 514 s/km, the finish +33 to +35 min; novice 405 (+20 min); intermediate 329 (+10 min); advanced 271 (+2.4 to +2.7 min); competitive 226 (-3.6 to -4.1 min, faster). With a logged race (a 2:00 finish in the probe) the offset had already moved the pace, so the change differs: intermediate Open Singles +3.5 min, advanced Pro Singles -4.3 min. A stale VDOT 40 moves the other way for advanced (-8 min) and competitive (-14 to -15 min). The seed is read from the HYROX results-derived band medians (ISSUE-404); the call already ran on every derivation, so no new read of those tables is added, but more forecasts now rest on its output.
+
 ---
 
 ## §T — HYROX Bidirectional Cross-Format Same-Athlete Factor (2026-05-08)
@@ -1573,6 +1593,8 @@ VDOT was tracked but unused for HYROX run pace. Strong runners with weak HYROX h
 **Supersedes §N.** The single-direction `DOUBLES_TO_SINGLES_FACTOR = 0.92` previously documented in §N was wrong-direction at the population level (singles is harder than doubles, not easier) and ignored the same-athlete picture. Replaced with two anchored constants.
 
 > **Superseded 2026-10-13 by §DH (lane H1, `c6f090b`, `88b0d52`, `8e07c12`).** Both constants are removed. Every target is banded on the previous time in singles terms: a doubles time converts with `doublesTotalInSinglesTermsSec` (the open_singles total at the same percentile of the ingested results, about × 1.125 at P50), a singles time stays as is (`hyroxBandingTimeSec`). The old doubles-target rule banded on doubles terms, so the doubles conversion ran twice. Per-station cross-format inference is now done through the same quantile mapping, and a converted station caps confidence at medium instead of forcing low. This entry is kept for history.
+
+> **Update 2026-10-13 (§DK, lane H3b).** The quantile mapping §DH describes now reads the S8 to S9 tables per station and per division. `doublesTotalInSinglesTermsSec` survives only in the improvement ceiling's band lookup (`race-projection.hyrox.ts:400`); banding moved to field-relative thresholds at this merge, then to lane H3c's planning band (§DL), which lane H2 (`d8432d2`) also gave the onboarding initializer when it removed `hyroxBandingTimeSec`. The "population data lower bound" below (the S4 to S6 cohort ratio 1.125) is history.
 
 **Files**: `src/constants/hyrox-constants.ts:32-36`, `src/state/initialization.hyrox.ts:111-124`, `src/calculations/hyrox-format-band.test.ts` (8 tests).
 
@@ -1698,7 +1720,9 @@ Where:
 
 A single `plannedHyroxSessionsPerWeek` count drives all three classes. Why: one Hyrox-style workout typically hits multiple stations and a run, so per-station counting would either double-count (every workout = 1 to every class) or be structurally noisy (only 0.3 sled sessions/wk would read as undertraining for sled even though every Hyrox session involves loaded movement). The literature reports class-level adaptation rates against total Hyrox-style frequency — we mirror that.
 
-`plannedHyroxSessionsPerWeek` reads `wk.triWorkouts` over the next 4 weeks and averages session count. Lesson from triathlon: PLANNED sessions, not historical. Historical reads 0/wk on a fresh plan and trips the undertrain penalty, making the projection slower than current.
+`plannedHyroxSessionsPerWeek` reads `wk.triWorkouts` over 4 plan weeks starting at the current week (`wks[s.w - 1]`) and averages session count. Lesson from triathlon: PLANNED sessions, not historical. Historical reads 0/wk on a fresh plan and trips the undertrain penalty, making the projection slower than current.
+
+*Window start (2026-10-21, lane ctd, `eefe083`).* Until then the window started at `wks[s.w]`. `s.w` is 1-based (store default `w: 1`), so that is next week: the week in progress never counted, and in race week the loop read past the plan and returned 0 sessions/week, the undertrain case the paragraph above warns about. It now starts at the current week; window length, the easy-erg exclusion and the closing-week skip are unchanged, and no constant changed. What moves: the `sessions_per_week` input to the station and Roxzone horizon (`buildStationProjection`, `race-prediction.hyrox.ts`), so the race-day station projection, and the Race order footer and Training chip that print the same number. The review measured sessions/week shifting by -0.25 to +0.5 across plan weeks and race week reading 3 to 4 instead of 0; the current-time headline totals did not change. Ported from the unmerged `fix/week-index-followup` (`bbdb7bf`, 2026-10-07). Kept pending Tristan's keep or revert call.
 
 ### Anchoring `currentSec` — display consistency rule
 
@@ -1753,6 +1777,8 @@ Both tests reflect Mujika & Padilla 2003 (*Med Sci Sports Exerc* 35(7):1182–11
 
 **Update 2026-10-13 (§DH, §DI, lane H1).** These tables now also drive the doubles forecast (percentile-matched open_doubles ÷ open_singles ratios) and the one doubles-to-singles total conversion. Every surface that cites them uses `hyroxPopulationCaption`: the format's finisher count, women and men together, seasons 4 to 6 (2021/22 to 2023/24), the 75-rep Women Open era note and, for Open Doubles, the pooled-pairs note. The docstring's percentile direction is corrected (cumulative = % at or faster). The S7 to S9 re-ingest (`src/data/hyrox-results-s79.ts`, merged in `3e4b08d`, lane H3a) is not wired yet; these tables stay live until lane H3b.
 
+> **Update 2026-10-13 (§DK, lane H3b).** No app code reads these tables any more. They stay as the calibration field of the band field percentiles (`HYROX_S89_BAND_FIELD_PERCENTILES`, pinned to this file's open singles total table by `hyrox-results-s79.test.ts`) and are read by tests. Every live percentile, the doubles mapping and the seeds read the S8 to S9 tables in `src/data/hyrox-results-s79.ts`.
+
 ---
 
 ## §Q — HYROX `hxFormat` workout tagging (deferred decision, 2026-05-07)
@@ -1792,6 +1818,8 @@ Adjusts the current "if you raced today" prediction toward race day via four sta
 - No discipline-split CTL (we don't separately track run CTL vs station CTL) — would require extending `mtlHistory` similar to triathlon's `fitnessHistory.{swimCtl, bikeCtl, runCtl}`. Listed as a follow-up.
 - Race-day fatigue interaction with venue factors not modelled separately — projection is applied to current total, then venue factors are already in that total via `predictHyroxRace`.
 
+> **Update 2026-10-13 (§DK, lane H3b).** A further factor, "Results ceiling", applied last: the projected gain may not exceed the upper-quartile gain of repeat HYROX athletes over a comparable gap (`hyroxImprovementCeiling`, `race-projection.hyrox.ts:389`). Its explanation reads "Gain held to N%. A quarter of N repeat HYROX athletes improved more than that over about 6 months, relative to each event's median." It rarely binds; the first known limitation (heuristic weights) stands.
+
 **Side**: tracking. Surfaced on the forecast view; not used for plan generation.
 
 ---
@@ -1808,6 +1836,8 @@ Adjusts the current "if you raced today" prediction toward race day via four sta
 **Known limitations**: confidence does not account for calibration recency (a 6-month-old benchmark may be outdated), for format-conversion bias (doubles→singles via the 0.92 factor introduces additional uncertainty), or for venue extrapolation accuracy.
 
 **Update 2026-10-13 (§DH).** The calibrated count is `hyroxCalibrationCoverage` (`hyrox-station-history.ts:262`): stations with an athlete time from either format's slot, out of all 8 raced stations, the same count the benchmark card, Stats, Account and the chip detail show. A station converted from the other format's benchmark counts as calibrated and caps confidence at medium in either direction (`crossFormatCapped` when that cap is what holds it there). The 0.92 limitation above is obsolete: format conversion goes through the quantile mapping and its uncertainty is the medium cap.
+
+> **Update 2026-10-13 (§DK, lane H3b).** Option A: for a doubles target every calibrated value except the target family's own doubles race splits counts as converted (singles values, the doubles slot's solo tests and session bests, doubles race splits from the other weight family), so only those splits reach high. At 6 or more calibrated stations the caption names what holds a medium forecast ("No race venue is set, so confidence is medium.", "The race is 9 months old, so confidence is medium."), and a race-age cap to low at 3 or more reads "8/8 stations calibrated. The race is 20 months old, so confidence is low." instead of "Mostly seed data".
 
 **Side**: tracking (prediction, not planning).
 
@@ -2577,6 +2607,8 @@ total = (runPaceSecKm × 8) + Σ(8 station times) + roxzoneSec
 ```
 where station times come from `stationBenchmarks` (calibrated) or `STATION_SEED_TIMES_SEC[band]` (population averages from HyroxDataLab + roxlyfe.com).
 
+> **Update 2026-10-13 (§DK, lane H3b).** Untested station times are the real band medians of the athlete's own-sex field at the target's weights (`hyroxStationSeedsAtTarget`), not HyroxDataLab and roxlyfe.com averages.
+
 Venue factors (heuristic — confidence low-medium, see `src/data/hyrox-venues.ts` for derivation):
 
 1. **Floor surface** — affects sled stations primarily. Concrete is cleaner on the run loop (-0.5%) but slower on sleds (+10s per station). Mixed surfaces add inconsistency (+6s per sled).
@@ -2865,6 +2897,8 @@ cssSdSensitivity    = 0.10  // 1 sec/100m/week SD reduction → +10% ratio bump
 ```
 
 Each signal's adjustment is bounded by its own cap (HRV: ±0.10, RPE: ±0.15, HR-at-power: ±0.10, Pa:Hr: ±0.10, CSS-SD: ±0.05).
+
+**Lookback windows** (`triathlon-adaptation-params.ts`). HR-at-power, Pa:Hr and CSS-SD each regress over the 8 plan weeks ending at the current week, `wks[s.w - 8]` to `wks[s.w - 1]` with the in-progress week included (`s.w` is 1-based). RPE walks back from the current week until it has 6 rated sessions. Until 2026-10-21 every walk started at `wks[s.w]`, next week (ported from the unmerged `fix/week-index-followup`, `9339d5d`, 2026-10-07). That week holds no actuals or ratings in practice, so the data covered was the same 8 weeks; the fix stops the read of next week without changing the window, so forecasts do not move in practice.
 
 ### Limitations
 
@@ -4047,7 +4081,7 @@ Readiness uses **label-based bands** (75/55/35) matching the Primed/On Track/Man
 
 **perSessionAvg**: Derived from current week's planned TSS / training day count (not CTL baseline). Tracks plan intent so targets rise during build phases and drop during taper, rather than lagging behind via 42-day EMA.
 
-**Rest-day overreach threshold**: `perSessionAvg × 0.33` (`REST_DAY_OVERREACH_RATIO`). Based on Whoop's ~33% recovery-day cap and Seiler's polarised model (Zone 1 recovery sessions ≈ 25-35% of a hard session).
+**Rest-day overreach threshold**: `perSessionAvg × 0.33` (`REST_DAY_OVERREACH_RATIO`). Based on Whoop's ~33% recovery-day cap and Seiler's polarised model (Zone 1 recovery sessions ≈ 25-35% of a hard session). Since 2026-10-21 (D4) the load compared is the day's logged sessions only (`isRestDayOverreached`, `fitness-model.ts`), not the strain TSS with passive step and active-minute load: the threshold is framed against a recovery session, and steps are background movement, not a session (`hasTrainedOnDay`, ISSUE-406 (c)). Every surface reads the helper; Just-Track (no planned per-session average) never fires.
 
 **Limitations**: Readiness modulation is binary (label-based thresholds), not continuous. A more sophisticated model would use the readiness score as a continuous multiplier.
 
@@ -5671,7 +5705,7 @@ So a per-sport step in running CTL remains at plan start for athletes whose hist
 
 **Comparisons stay on one signal (2026-10-05).** The coach `ctlTrend` compares live Signal B CTL with Signal B CTL four weeks back (`computeSameSignalCtlHistory`, same seed and walk as `computeSameSignalTSB`); comparing live B with the Signal A history read every steady cross-trainer as "building" (ISSUE-320 asks Tristan to confirm B). The running CTL-gap re-anchor values planned gym sessions at the strength runSpec, the currency of the Signal A actual side (§BR limitation 1).
 
-**Limitations.** (1) The seed-table exceptions above. (2) Label and slot fallbacks only apply where the writer dropped `activityType`; a run-slot actual with a generic `activityType` ('Workout', 'CARDIO') counts at generic 0.40 until the user reclassifies it. (3) Signal A excludes GPS and manual adhocs (B9). (4) The per-day Signal B builders still disagree on a no-HR twin: `buildDailySignalBTSS` gives the twin 0 and counts the adhoc RPE estimate, `computeTodaySignalBTSS` gives the twin duration × `TL_PER_MIN[5]` and skips the adhoc (ISSUE-324). (5) Running CTL history shifts down once for cross-trainers, because past weeks are recomputed with the discount.
+**Limitations.** (1) The seed-table exceptions above. (2) Label and slot fallbacks only apply where the writer dropped `activityType`; a run-slot actual with a generic `activityType` ('Workout', 'CARDIO') counts at generic 0.40 until the user reclassifies it. (3) Signal A excludes GPS and manual adhocs (B9). (4) The per-day Signal B builders disagreed on a no-HR twin: `buildDailySignalBTSS` gave the twin 0 and counted the adhoc RPE estimate, `computeTodaySignalBTSS` gives the twin duration × `TL_PER_MIN[rating, else 5]` and skips the adhoc (ISSUE-324). Since 2026-10-22 `buildDailySignalBTSS` calls `signalBActualTSS` / `signalBAdhocTSS` and skips the twin the same way, and with the plan start (every app caller passes it) takes each day from `computeTodaySignalBTSS`, so manual adhoc entries and the double-day bonus count too (§DQ item 4; unit-tested, not device-verified). (5) Running CTL history shifts down once for cross-trainers, because past weeks are recomputed with the discount.
 
 ## HR Drift (Cardiovascular Decoupling) (2026-04-15)
 
@@ -6266,6 +6300,8 @@ Hidden entirely (`vo2 = null`, reason `'insufficient-sessions'`) below 3 session
 
 **Update 2026-10-13 (§DH, §DI).** Finish percentiles read the ingested S4 to S6 tables (§R) where a format has rows; the synthetic table above is the fallback for Pro Doubles, whose pair total is first converted to singles terms (`doublesTotalInSinglesTermsSec`). Station percentiles (`getStationPercentile`) are synthetic, placed on the band seed times at hand-picked percentiles (P5, P15, P35, P60, P80, P95), and are labelled as estimates ("est. pN").
 
+> **Update 2026-10-13 (§DK, lane H3b).** Finish percentiles read the S8 to S9 tables by format and sex (doubles by division), Pro Doubles included, so the synthetic table above is no longer read; station percentiles are real race-split percentiles. The 60/80/100/120-min anchors above were considered as the band thresholds' calibration and rejected (60 min sits below p1 of the S4 to S6 field, not p5); the thresholds are positions in the S4 to S6 open singles table re-expressed per field (§DK). The Stats rank line closes the age-group gap listed under limitations (pooled S7 to S9 age tables).
+
 ## VO2 Resolver Audit (2026-05-07)
 
 **Purpose.** Systematic audit of `getPhysiologicalVdot` resolver chain (`src/calculations/physiological-vdot.ts:144`) and supporting sync paths before adding conflict-surfacing UI (WS-2b).
@@ -6389,6 +6425,8 @@ where `lerpDurability(a, t, f) = a + max(0, t − a) × clamp(f, 0, 1)` — neve
 **Known limitations.** The taper invariant assumes `usefulWeeks = max(0, weeksRemaining − taperWeeks)` is the right way to model "no plan-execution time available." This already drives the race-readiness penalty closure share, so applying the same factor to durability cap relaxation keeps the model coherent. If future divergence sources are added between projected and current race-time calls, they must also be gated through `executionFactor` to preserve the invariant.
 
 **Files.** `src/calculations/race-prediction.triathlon.ts` (reordered penalty-share computation, added `lerpDurability`, threaded `EffectiveBaselines` through `buildProjection`), `src/calculations/race-prediction.triathlon.test.ts` (new invariant test).
+
+> **Update 2026-10-14 (§DN, lane tri-taper, `5068d8b`).** The taper window is now the plan's own race taper, the same for swim, bike and run (`triPlanTaperWeeks`, `race-week-layout.ts:248`; `race-prediction.triathlon.ts:170`); `TRI_TAPER_WEEKS[discipline][distance]` is removed. The per-discipline Friel 2018 durations quoted above (swim longest, bike shortest) also conflict with Friel's own stagger in the coaching research (run tapered first, about 3 weeks; bike 2; swim last, 1). The invariant itself and its test are unchanged.
 
 ---
 
@@ -6713,6 +6751,8 @@ This mirrors the brick generator's fill-the-budget intent (`generateFullBrick`),
 1. **Phone-stopwatch noise.** Times come from the user tapping "Complete set". The sanity floor catches gross slips; small mis-taps that still clear the floor could set a slightly-optimistic benchmark. PB-only means a later honest test cannot *raise* it back, so a bad tap can stick until beaten — accepted risk for a single-user dev build, revisit if it bites.
 2. **Doubles sanity floor uses the singles elite seed.** Doubles station times are faster (half the work), so the singles floor is conservative for doubles — it may occasionally decline to auto-update a legitimate fast doubles time. Errs toward not-updating (safe).
 3. **Raw fatigued time** (see "Conservative on fatigue").
+
+> **Update 2026-10-13 (§DK, lane H3b).** The sanity floor is the station split's timing-slip fence in the athlete's singles field (`hyroxStationLowerFenceSec`, the ingest's rule 6; Open Singles women: wall balls 87 s, sled push 54 s), with the round converted to that field's loads first. The competitive seed, once filled from the results, is the median split of the field's top 1% and would have rejected genuine elite rounds. Limitation 2 no longer applies: a guided round is one athlete's time and is compared with one athlete's benchmark (`hyroxCalibratedStationBenchmarks`), and the fence comes from the singles field. The summary's percentile reads "Faster than N% of Open Singles women on race splits".
 
 **Code.** `src/calculations/hyrox-session-benchmarks.ts` (`isRacePaceHyroxSession`, `summariseHyroxSession`, `applyHyroxSessionBenchmarks`). Wired from `src/guided/strength-complete.ts`; summary in `src/ui/guided-strength-overlay.ts` (`buildHyroxFinishSummary`). Source enum `'session'` added in `hyrox-station-history.ts` + `triathlon.ts`; label in `station-detail-view.ts`. Tests: `hyrox-session-benchmarks.test.ts` (9).
 
@@ -7124,6 +7164,8 @@ We anchor at the band **floor** on purpose: a no-data start must **under-prescri
 
 **Taper.** TAPER_DAYS sprint [4,7] / olympic [5,8] / t100 [7,10]; per-discipline `TRI_TAPER_WEEKS` scaled with swim longest, bike shortest. Mujika 2002/2010 (detraining onset scales with race duration) + Friel 2018. **Confidence: medium.**
 
+> **Superseded 2026-10-14 (§DN, `5068d8b`).** `TAPER_DAYS` (read only by a completeness test) and the forecast's per-discipline `TRI_TAPER_WEEKS` are removed. Taper length is `TRI_TAPER_WEEKS_BY_DISTANCE` (sprint 1 week; Olympic, T100, 70.3 and Ironman 2; cycling 2), read by the plan and, through `triPlanTaperWeeks`, by the forecast.
+
 **Durability thresholds.** sprint 1.0h ride / 0.5h run; olympic 1.5h / 0.75h; t100 = 70.3 (2.5h / 1.5h). Pfitzinger & Douglas per-distance long-session guidance + Rüst 2012. **Confidence: medium.**
 
 **Run-horizon (VDOT projection).** t100 reuses the 70.3 params verbatim; olympic and sprint reuse 70.3's max_gain/tau but lower the run-frequency bands by 0.5 and 1.0 sessions respectively (floored at 1.0/wk) via `withReducedRunFrequency` — concurrent swim/bike stimulus + a short run leg need fewer run sessions (Friel 2012, Dixon 2015). Keeping 70.3's max_gain/tau for 10k/5k legs is a deliberate simplification (modelling distance-specific Daniels curves for the tri run leg is deferred). **Confidence: medium.**
@@ -7248,6 +7290,8 @@ The trust level is threaded as `weeklyRunKmIsEstimate` into `blendPredictions` �
 
 **Provisional gating.** Any non-high confidence surfaces an inline calibration banner rather than leaving the caveat behind the confidence badge: `low` (cross-format or seed-dominated) → strong "Provisional forecast"; `medium` (partially calibrated) → soft "Sharpen your forecast" with the calibrated-station count. Both explicitly tell the user a station assessment makes the prediction more accurate and name the protocol (half distance, race effort) so they do it right. This is the calibration-honesty half of the same problem: a doubles-time-only athlete racing singles is correctly *not* given per-station singles estimates inferred from doubles (not defensible — 4 vs 8 stations, partner rest; see race-prediction.hyrox.ts:190), so the number rests on band seeds and the UI must say so. **Confidence: high** (this is a display/uncertainty-communication change; no user-facing number's underlying math changed).
 
+**Update 2026-10-20 (§DO).** The hero's "Likely" line and goal feasibility read one helper, `hyroxLikelyRangeSec` (`race-projection.hyrox.ts:104`): the forecast ± this band. A reachable goal faster than the range's fast end is graded a stretch.
+
 ## §BZ — Engine vs race-readiness: capacity is not buried by training volume; the forecast credits the plan's ramp (2026-06-16, ISSUE-297)
 
 **Context.** A 20:00 5K with no other data, ~8 km/wk, marathon target was shown a ~3:50–4:00 "today" marathon that was then *written back into the global engine* `s.v` (VDOT 50 → ~40), and a 20-week forecast barely faster than today (~3:40). Re-running produced different answers (3:33 vs 4:00). Ground truth: a 40:00-10K runner (the same engine class) has actually run ~3:10. Tristan's framing was exact: a low-mileage runner whom the plan ramps "through the long haul" must not be predicted as a permanently low-mileage runner. Full diagnostic: `docs/PREDICTION_FEEDBACK_LOOP_DIAGNOSTIC.md`.
@@ -7309,6 +7353,8 @@ The existing generation code is then driven from this reduced `weekHours` unchan
 **Why this is defensible.** No new number is introduced — `BRICK_BIKE_SHARE`, the per-distance `runShare` (`TRI_BRICK_POLICY`), the gym 45-min block, and the volume split all pre-exist. The solve is exact algebra over those. The commute easy pace reuses the run session's pace (`gp(vdot, lt).e`, or the run-skill estimate `easyPaceSecPerKmFromSkill` as fallback) — the same pace shown on the user's easy runs.
 
 **Honest limitations.** (1) When fixed commitments alone exceed the cap (e.g. a long commute on a deep taper week, where the phase-scaled cap is small but the commute is unchanged), `sbrMin` floors at 0 and the solo sessions drop out — the cap genuinely cannot fit them. This is correct behaviour, not a bug, but it means commute-heavy taper weeks can read as commute-dominated. (2) The brick is sized from the *reduced* budget like every other session, so on a tight cap the race-specific brick shrinks proportionally rather than being protected. (3) Running mode is not yet mirrored — its commute model is still additive per §AM; evaluate parity if running grows an hours cap (Mirror rule).
+
+> **Update 2026-10-14 (§DN).** Race-taper weeks no longer size their swim, bike and run sessions from the phase-scaled cap: taper week 1 and race week take 0.55 and 0.30 of the reference week (itself inside the cap), with the week's own commutes and gym. Limitation (1) (commute-heavy taper weeks whose solo sessions drop out) now applies to the inter-cycle 'taper' weeks of 28+ week plans only.
 
 **Guard:** `plan_engine.triathlon.test.ts` — "weekly hours cap is honoured" describe block: every week ≤ cap (10h + rounding tolerance) with commutes + gym, the heaviest peak week binds at ≥8h, and commute slots carry a real sub-45min duration (never the 60min default).
 
@@ -7378,6 +7424,8 @@ It builds to **2:30 (150 min), not the ~30 km of standalone-marathon prep**, bec
 
 **Confidence: high** for the compute path (guard-tested, full suite green apart from an unrelated date-sensitive demo-seed test). **NOT device/browser-verified** — the real bar is the rendered IM plan showing a long run that builds past 20 km toward ~28–32 km, alternating with the long ride, and the run-emphasis note appearing on the right weeks.
 
+> **Update 2026-10-14 (§DN).** The ×0.65 taper cut in `triLongRunTargetMin` (`plan_engine.triathlon.ts:245`) now reaches only the inter-cycle 'taper' weeks of 28+ week plans. In the race taper, taper week 1's long run is 0.55 of the reference week's long run (plus its share of the brick's run), and race week has none.
+
 ## §CE — Race week is sharpening, not training: the final-week primer (2026-06-17)
 
 **Context (dogfood report).** A 14-week half-marathon plan prescribed a full **Threshold 3×8** (24 min of threshold work) on the Thursday of week 14, three days before a Sunday race. The user flagged it: that is a build-phase session inside race week. Audit across modes: running carried the **full** bug, triathlon/cycling a **partial** version (right session count, wrong intensity flavour), HYROX was **already correct** (it downgrades intervals→tempo, density→technique, brick→mini-brick in taper) and became the model to mirror.
@@ -7403,6 +7451,8 @@ It builds to **2:30 (150 min), not the ~30 km of standalone-marathon prep**, bec
 **Confidence: high** for the compute path (guard-tested). **NOT device/browser-verified** — the real bar is the rendered race week showing the short primer in place of the 3×8, across running, tri, and cycling.
 
 **Update 2026-10-06 to 08 (§CT, §CW).** (1) Race week is now the final training week of a race plan whatever its phase label, and it has no long run: the race takes the long-run slot (running and triathlon). A continuous plan never has a race week, so its block weeks get no primer. (2) Limitation 2 above is resolved for running: the race-day rules (`race-day-rules.ts`) keep the primer 3 to 5 days out for every race weekday, move it to the latest race-week day at least 3 days out otherwise, and drop it when no such day exists. Race week is the calendar week holding the day 3 days before race day, so the primer window always falls inside it. Triathlon, cycling and HYROX race weeks are not yet placed relative to race day (ISSUE-364). (3) Wording: Bosquet et al. (2007) found the best outcomes with volume cut by 41 to 60% while intensity and frequency were maintained; they found no benefit from cutting frequency. Counting the race as the week's long effort removes one prescribed session in race week. (4) Race week keeps the primer whenever it holds a run (Tristan 2026-10-08, visual QA, `e421a73`). With 2 or more runs a week, race week holds the primer in full plans and sharpening blocks. A block no longer drops it when its reference week held no quality session; on a tight budget it takes an easy run's place (27 min against a 25-min easy run), and the easy runs fill what the taper ceiling leaves. ACWR caution no longer removes it: the primer is 6 min of quality in a week whose volume is already cut, the reason race week was already exempt from the high-ACWR ease-back (`generator.ts`, ISSUE-298). The full-plan deload backstop no longer applies to race week. Exceptions: a user-excluded workout type (threshold, or VO2 for a 5K), and the race-day rules (no race-week day 3 or more days out on or after the first schedulable day). No new constants. Guards: `race-week-primer.test.ts` (504 plans through `initializeSimulator`, every race weekday, 1 to 6 runs), the block grid property in `plan_engine.sharpening.test.ts`, `plan_engine.taper-primer.test.ts`. Review probe: without ACWR caution full plans are byte-identical to before; under caution 117 full-plan race weeks in a 189,000-race-week probe grow 1 to 3 min over the previous taper week (primer 27 min against an easy run of 24). (5) §CZ (2026-10-08) resolves limitation 3 for triathlon and cycling: race week holds one distinct primer, a 30-min ride with 8 to 10 min of sub-threshold work. It resolves limitation 2 for HYROX, whose tempo primer takes running's primer day for every race weekday, and for triathlon and cycling within the 3 to 5-day window: their primer takes running's day for Monday to Friday races and often lands 3 days out for Saturday and Sunday races (ISSUE-380).
+
+> **Superseded for triathlon and cycling, 2026-10-14 (§DN, `5068d8b`).** The **Model (triathlon / cycling)** paragraph no longer holds: taper week 1 keeps the reference week's quality count (Ironman 1/1/1, run quality kept), `TRI_QUALITY_SLOTS` taper rows mirror peak for inter-cycle taper weeks, and taper quality is capped by distance (`TRI_TAPER_INTENSITY_CEILING`: 30:30 rides and speed swims for sprint and Olympic, race pace for T100, 70.3 and Ironman, sweet spot or tempo for cycling); the sub-threshold gate now serves base weeks and cycling's taper. Update (5)'s single primer, a 30-min ride with 8 to 10 min of sub-threshold work, is replaced by race-pace openers 3 to 5 days out (run, bike and swim; rides only for cycling), Byrn's brick for long course and a day-before activation. Limitation 3 (no final-week distinction) is resolved for these modes. Running's primer is unchanged.
 
 ## §CF — ACWR response policy: keep-ramping vs ease-back, with an L_max-targeted load reduction (2026-06-17, ISSUE-295)
 
@@ -7453,6 +7503,8 @@ Per-session TSS = `workMinutes × plannedTssPerMin(slot) + (totalMinutes − wor
 
 **Confidence: high** for the mechanism and the no-invented-constants claim (probe-verified propagation, guard-tested doses). **NOT device-verified** — the in-app bar is the tri Forecast marquee + the "Average build week" training chip reading the same doses, on a real early-plan athlete with a demonstrated race split.
 
+**Addendum 2026-10-21 (week index, lane ctd D7, ported from `fix/week-index-followup` `c6b86f8`).** "Remaining" weeks start at the current week, `wks[s.w - 1]` (`s.w` is 1-based), so the week in progress counts toward both doses and the 4-week look-ahead. The helpers indexed `wks[s.w]` and started at next week; in race week they read past the plan and returned 0. The recent-actuals iterator (`recentHoursByDiscipline`, `sessionsPerWeekByDiscipline`, `longestSessionByDiscipline`) walked from next week too; its window stays the `weeks` plan weeks ending at the current week (the callers' divisor and the persisted fallback's `weeks x 7`-day cutoff). No constant changed. Forecast moves (probe: generated sprint, olympic, 70.3 and Ironman plans at 10 h, every week of 20, race date at the plan's end): 72 of 80 week-forecasts change. Sprint -56 to +11 s, olympic -47 to +24 s, 70.3 -128 to +88 s, Ironman -274 to +343 s. In race week the dose was 0 and is now the race week's own (sprint -56 s, Ironman -240 s, faster); elsewhere the sign follows whether the week in progress is heavier or lighter than the week after the old window (early base weeks +3 to +29 s; around deload weeks either way).
+
 ## §CH — Weekly load target follows deload and taper weeks; carry judged per week (2026-10-05, audit A10/A11)
 
 **Side.** Planning: the prescribed weekly load. Tracking surfaces (Plan card and Adjust-week strip, Load & Taper, debrief, excess-load adjustment) compare actual load against it. These are running-plan views. Triathlon (cycling) and HYROX route to their own Plan, Load, Stats and debrief views, and none of them reads the target. In those modes it reaches the user only as the daily coach's Signal A figure in the AI Coach context (`planned_week_tss`).
@@ -7496,6 +7548,8 @@ target_A(week)      = baseline × m(week), baseline = median(historicWeeklyTSS, 
 **Confidence.** High that the phase selection matches the generator (unit-tested). Not device-verified.
 
 **Update 2026-10-07 (`5e5aa88`, §CV).** The 1-week taper special case is gone: a 1-week taper is race week alone, so it takes the 0.55 race-week endpoint of Tristan's 2026-10-05 decision (was 0.70). The ramp now lives in `taperFraction` (`phases.ts:165`), which `taperMultiplier` delegates to and the sharpening block's taper weeks read, so plan and target keep one shape. Taper lengths changed with it: a marathon plan of 2 or more training weeks tapers at least 2 weeks (`MARATHON_MIN_TAPER_WEEKS`, Bosquet et al. 2007), including the 8-week full plan; half, 10K and 5K plans of 8 weeks or fewer keep 1. Sharpening blocks deload by `isSharpeningDeloadWeek` (never the week before the taper), and the weekly target follows it. A closing week (§CW) targets the race-week row, and the taper ends before it.
+
+> **Update 2026-10-14 (§DN, `e56775e`, `bd7d23b`).** A triathlon or cycling plan's race taper reads `triTaperFraction` (0.55 then 0.30; 0.55 for a one-week taper), passed as `taperFractionOf` to `computePlannedWeekTSS` and `computePlannedSignalB`; running and HYROX keep `taperFraction`. The taper-length sentence at the end of the taper-position paragraph (line 7488) no longer describes triathlon and cycling: they taper by race distance (sprint 1 week, others 2, cycling 2). In limitation (1), the tri engine now builds 0.55 then 0.30 of a reference week per discipline, and HYROX (lane H2, `d8432d2`) 0.70 then 0.55 of its reference week's planned minutes, the fractions its weekly target uses. In limitation (6), the triathlon fixture now reads 0.86 then 0.77 of a base week (510 and 460 against 594); HYROX keeps 0.91 then 0.86.
 
 ---
 
@@ -7812,6 +7866,8 @@ The 6-day window is the span the generator already treated as race week for a Su
 
 **Guards.** `race-week-layout.test.ts`, `race-day-rules.test.ts`, `race-plan-race-week.test.ts`, `race-plan-calendar-weeks.test.ts`, `race-window.stored-plan.test.ts`, `race-window-forecast.test.ts`, `race-closing-week-forecast.test.ts`, `closing-week-forecast.test.ts`, `race-day-drop.tri-hyrox.test.ts`, `plan-complete-race-day.test.ts`, `setup-plan-length.test.ts`, `plan-anchor-local.test.ts`, `hyrox-volume.test.ts`. Not device-verified.
 
+> **Update 2026-10-14 (§DN, `6fe94ce`, `5068d8b`).** CW.1: a Tuesday or Wednesday triathlon or cycling race's closing week now holds the day-before activation (a spin of at most 30 min and a jog of at most 10, on Monday or Tuesday) besides the race; a Monday race's closing week and HYROX's hold only the race. CW.4(a): the closing week holds no training session the forecast counts; the forecast and the planned dose still skip it. Limitation (2)'s §CZ resolution and limitation (6)'s no longer describe triathlon and cycling: race week is composed relative to race day for every weekday, a Monday to Wednesday race week holds the same per-discipline budget as the Sunday race before it on different days (within 20 min per discipline, `race-plan-race-week.test.ts`), and the forecasts are equal while training weeks remain and within 0.5% once only taper weeks remain (`race-closing-week-forecast.test.ts`).
+
 ---
 
 ## §CX — Continuous plans deload the week labelled Deload (2026-10-08)
@@ -7926,6 +7982,14 @@ For triathletes, `triRunEasyPaceSec` = `gp(s.v, s.lt).e` (`tri-run-pace.ts:40`).
 13. *No doubles is an assumption.* No literature in this log supports counting race-week frequency by days rather than sessions. It also works against the frequency rule above: in cycling it cuts race-week frequency below the week before, 4 rides against 5 (limitation 5).
 
 **Guards.** `state/tri-race-week.test.ts`, `state/hyrox-race-week.test.ts`, `workouts/hyrox-race-week-units.test.ts`, `workouts/race-window.stored-plan.test.ts`, `workouts/scheduler.triathlon.test.ts`, `state/race-plan-race-week.test.ts`, `state/race-closing-week-forecast.test.ts`. Not device-verified.
+
+> **Superseded for triathlon and cycling, 2026-10-14 (§DN, `5068d8b`).** Race week is composed from the reference week (`composeTriRaceWeekWithClosing`, `tri-taper.ts:688`).
+> - **Side**: a Monday to Wednesday race forecasts exactly like the Sunday before only while training weeks remain; within 0.5% once only taper weeks remain.
+> - **Model (triathlon and cycling)**: *Frequency* (`triRaceWeekCounts`, removed), *One primer* and *Primer day* (`placeStoredPlanRaceWeekPrimer`, no longer called by the engine) are replaced. *No doubles* still applies (one session per discipline a day, now also in taper week 1, `spreadTaperDoubles`; still a product rule). *Spacing* still applies, with the eased run reseated as quality where an earlier day allows (`reseatEasedQualityRuns`). *Rides* still applies (race week and taper week 1).
+> - **Constants**: a one-week triathlon race week is now 0.55 of the reference week and a two-week one 0.30, per discipline; the race taper's floor is 20 min (`TRI_TAPER_SESSION_FLOOR_MIN`); the 30-min `TRI_SESSION_FLOOR_MIN` stays for training weeks. HYROX's race week is now 0.55 of its reference week (`taperFraction`, lane H2, `d8432d2`).
+> - **Results**: these triathlon checks no longer hold: more than one quality session (race week holds up to three openers); primer a 30-min ride with at most 10 min of work; primer outside 3 to 5 days out; long session (long-course race week holds Byrn's 60-min brick, which `isTriLongSession` counts; the race-plan tests treat it as race-week content); more than 2 empty days before race day (by construction a Thursday race has 4 empty days in the last 6 and a Friday race 3: the race window clears the week before, 2 days out is empty, and the day before holds only the activation); closing week not empty (Tuesday and Wednesday closing weeks hold the activation); Monday to Wednesday race-week content equal to the Sunday race's (now equal per-discipline budget, different days). "Race week against the week before: median 0.43, maximum 0.67" describes the old model.
+> - **Limitations** 2, 3, 5, 6 and 10 are superseded (Ironman taper quality 1/1/1; swim openers exist; cycling race week follows the 80% rule as counted; no single primer; no primer day). Limitation 4 changed: Thursday to Saturday race weeks are composed, while the race window still cuts taper week 1 (§DN limitation 8). Limitation 13 stands, now named a product rule in the code.
+> - The HYROX and scheduler parts of §CZ are unchanged.
 
 ---
 
@@ -8228,6 +8292,8 @@ The old `STATION_EXTERNAL_LOAD_KG` table was labelled "Open weights" and mixed t
 5. World Championships: the 25/26 Singles rulebook and the hyroxus.com FAQ say under-60 Open qualifiers race Pro weights at Worlds; the 26/27 rulebooks do not restate it, so a World Championships target keeps the athlete's own tier (not implemented on purpose).
 6. Generator output changed without a `HYROX_GENERATOR_VERSION` bump (still 17); stored plans keep the old MTL until a regeneration.
 
+> **Update 2026-10-13 (§DK, lane H3b, `ee19331`).** Limitation 3: the Open-to-Pro conversion is now per station and per sex from the S8 to S9 Pro and Open singles results (a difference in differences, `hyroxProConversionAt`, `hyrox-results.ts:583`); `HYROX_PRO_STATION_MULTIPLIER` (`hyrox-constants.ts:40`) stands in only for an adjusted ratio below 1, which no loaded station reaches on the current tables. At the median women's sled push converts × 1.573 and men's × 1.405 (both were 1.15). Limitation 4: seeds are the real band medians of the athlete's own-sex field (`HYROX_S89_BAND_SEEDS`), converted per station to the target's loads, so the tier changes the seed times as well as the loads; a woman in Mixed Doubles is seeded and read at the Women Pro tier (M-Open). Limitation 6: lane H2 (`d8432d2`) bumped `HYROX_GENERATOR_VERSION` to 18, and existing plans regenerate on launch (`applyHyroxGeneratorRegen`).
+
 **Guards.** `hyrox-division.test.ts` (33: every division and format, Mixed under Pro, unknown sex, labels, loads sentence, race standard), `workouts/hyrox-load-tier-callers.test.ts` (5: every non-test generator call passes `loadTier`; mini brick farmer-carry MTL W-Open < M-Open < M-Pro; erg mini brick unchanged; full brick tier reaches MTL), `ui/wizard/steps/hyrox-setup-division.test.ts` (12: Division row visibility, prefill, Mixed cleared under Pro, `setupBand`), `constants/hyrox-rule-copy.test.ts` (3). Not device-verified.
 
 ---
@@ -8339,6 +8405,10 @@ Rows: open_singles 50,364 finishers, open_doubles 28,046 (`HYROX_FORMAT_FINISHER
 
 > **Update 2026-10-13 (§DM, lane HP).** The HYROX Doubles partner pair forecast reads each partner's own doubles station and Roxzone lines and runs at the slower partner's singles pace, where this entry's single-athlete doubles forecast applies the cohort run ratio. Two identical partners therefore match the solo doubles stations and Roxzone and differ on the run (§DM limitation 1).
 
+> **Update 2026-10-13 (§DK, lane H3b, `ee19331`).** The mapping now reads the S8 to S9 results through `hyrox-results.ts`, one ratio per station, with the pair's division against the athlete's own-sex singles field in the target's weight family (`hyroxDoublesTables`, `hyrox-doubles.ts:114`); §DK's per-division table replaces the Data table above. Limitations 2 to 5 no longer apply: divisions are separate tables, each station has its own ratio, the data is the 100-rep era, and Pro Doubles has its own rows (16,614 women's and 28,149 men's pairs). Limitation 6: the code now does option A (§DK; no report records it as Tristan's decision, ISSUE-395 (a)). Limitation 9: history views show one frame per card, labelled once. Limitation 10: untested stations read one seed at the target's weights on every surface, plan included. A value from the other weight regime converts per station and sex, not by `HYROX_PRO_STATION_MULTIPLIER`. Banding: at this merge setup, log-a-race and the previous-format fix banded a previous time in the field it was raced in, replaced by lane H3c's planning band (§DL), and lane H2 (`d8432d2`) moved the onboarding initializer to the same band and removed `hyroxBandingTimeSec`. The planned re-check is done.
+
+> **Update 2026-10-13 (§DL, lane H3c; lane H2, `d8432d2`).** `hyroxBandingTimeSec` is deleted (lane H2). Setup, Log a previous time, the previous-format fix and the onboarding initializer (`initialization.hyrox.ts:144`) band through `hyroxPlanningBandFor`: a doubles finish converts per component (each station with `doublesStationSoloSec`, run and Roxzone with `doublesRatioAtTeamTime`) into Open Singles terms of the athlete's own sex, and is banded on that field. `doublesTotalInSinglesTermsSec` stays live for the improvement ceiling (`race-projection.hyrox.ts:400`); its comment (`hyrox-doubles.ts:218`) still names the deleted helper.
+
 ---
 
 ## §DI — HYROX forecast honesty: one volume count, planned-slot adherence, no gain without equipment, provenance captions (2026-10-12, lane H1)
@@ -8382,7 +8452,481 @@ station horizon weeks = 0 for a station not in availableStations(stationAccess)
 5. Not fixed: a fresh half test is doubled into a full-station forecast with no fresh-to-race fade (`benchmark-card.ts:193`). No sourced fade constant exists in the code, the research files or the results tables (ISSUE-395).
 6. Pooled sexes and the S4 to S6 era remain until lane H3b wires the S7 to S9 tables (`src/data/hyrox-results-s79.ts`, merged unwired in `3e4b08d`).
 
+> **Update 2026-10-13 (§DK, lane H3b, `ee19331`).** Station percentiles are real: the forecast line's station time placed on the cohort's S8 to S9 race splits at that station (`hyroxStationPercentile`, `hyrox-results.ts:283`), shown as tiers ("top 27%", "median") with no "est." label, so limitation 4 no longer applies. Every caption reads `hyroxResultsCaption`, by sex or division ("HYROX results, seasons 8 and 9 (2025 to 2026), 119,468 Open Singles women finishers, via the open pyrox project."): the pooled-sex and 75-rep-era notes are gone and limitation 6 is done. The results now also set the band seed times and the Pro conversions, and the forecast hero detail and the methodology page say so (`hyrox-population.ts:94`, `:108`). The guided session summary reads "Faster than N% of Open Singles women on race splits". The projection gains a "Results ceiling" factor (§DK).
+
 **Guards.** `race-projection.hyrox.test.ts` (18: no weekly-volume factor, planned-slot adherence ignoring adhoc records, no gain for unprogrammed stations), `hyrox-population-captions.test.ts` (8: caption content per format, the estimate caveat, the radar subtitle, provenance and methodology captions, the hardcoded-count guard). Not device-verified.
+
+---
+
+## §DJ — HYROX results seasons 7 to 9: ingest, hygiene and the improvement data (2026-10-13, lane H3a)
+
+**Side.** Tracking: descriptive tables of what real finishers did (`scripts/ingest-hyrox-results-s79.py:26-27`). At `3e4b08d` nothing reads them. Planning consumers state their own use; lane H3b's wiring is §DK.
+
+**Sources.** Kaggle dataset "HYROX Race Results, Seasons 7-9 (Anonymised)" by Tanvi Jivani, built from public HYROX results via pyrox-client (MIT). Kaggle licence "Other"; the results are not licensed by HYROX (script `:5-9`, module `:4-7`, `HYROX_S79_SOURCE` `:115`, attribution string `HYROX_S79_ATTRIBUTION` `:116`: "HYROX results, seasons 7 to 9 (2024 to 2026), via the open pyrox project"). Two files: `hyrox_results_anonymised.parquet` (1,159,421 rows, one per result, times in minutes) and `repeat_athletes.csv` (77,913 pairs of a first and a latest race by the same athlete). The data's (season, calendar year) pairs are S7-2024, S7-2025, S8-2025, S8-2026 and S9-2026, so S7 is 2024/25, S8 2025/26 and S9 a partial 2026/27. Statistics: Tukey (1977), *Exploratory Data Analysis*, far-out fences; Dvoretzky-Kiefer-Wolfowitz inequality with Massart's constant (Massart 1990, *Ann Probab* 18:1269-1283); Hyndman and Fan (1996, *Am Stat* 50:361-365) type-7 quantiles; the exact two-sided sign test; Oldham (1962, *J Chronic Dis* 15:969-977) for change against initial value. Merged in `3e4b08d` (`b8ce51d`, `ddf5013`, `eb9434c`, `7cf2c1d`).
+
+**Supersedes.** Nothing at `3e4b08d`. The S4 to S6 tables (§R, `src/data/hyrox-population-distributions.ts`) stayed the live source until lane H3b (§DK).
+
+**Where.** Script: `ingest` (`:314`; R1 `:320`, R2 `:355`, R3 `:387`, R3b `:405`, R4 `:514`, share fence `:559-572`, R5 `:574`, R6 `:592` and `:627`), `log10_chance_match_bound` (`:165`), `sign_test_p` (`:185`), `to_sec` (`:205`), `quantile` (`:214`), `log_fences` (`:230`), `percentile_table` (`:238`), `DOUBLES_AGE_MAP` (`:274`), `map_age` (`:286`), `build_tables` (`:683`), `build_age_tables` (`:727`), `season_windows` (`:763`), `build_season_medians` (`:775`), `build_venue_spread` (`:795`), `build_same_venue_drift` (`:832`), `BAND_THRESHOLDS` (`:885`), `build_improvement` (`:1032`), `emit` (`:1216`). Module: `HYROX_S79_INGEST_REPORT` (`:143`), `HYROX_S79_CROSS_LABEL_RESOLUTIONS` (`:178`), `HYROX_S79_TOTAL_FENCES_SEC` (`:186`), `HYROX_S79_PERCENTILES` (`:232`), `HYROX_S89_PERCENTILES` (`:420`), `HYROX_S79_RUN_LEG_MEDIANS_SEC` (`:653`), `HYROX_S79_AGE_TOTAL_PERCENTILES` (`:753`), `HYROX_S79_SEASON_MEDIANS` (`:882`), `HYROX_S79_SAME_VENUE_SEASON_SHIFT` (`:916`), `HYROX_S79_VENUE_SPREAD` (`:950`), `HYROX_S79_IMPROVEMENT_BAND_THRESHOLDS` (`:1122`), `HYROX_S79_IMPROVEMENT` (`:1129`), `HYROX_S79_IMPROVEMENT_REPORT` (`:1536`).
+
+**Model.**
+
+```
+sec = floor(minutes × 60 + 0.5)                                   whole seconds; null stays null
+
+R1  division relay, adaptive, elite, elite_doubles → excluded
+    open → open_singles, pro → pro_singles, doubles → open_doubles, pro_doubles → pro_doubles
+    any other division → the ingest stops
+R2  total null or ≤ 0 → dropped (reported per event and format)
+R3  identical labels and 18 timing fields (total, roxzone, 16 splits) → one copy kept, if B < α
+R3b same event, 18 timing fields identical, different (format, sex, age) label, B < α:
+      only the age label differs → one copy kept, left out of the age tables
+      format or sex differs → copies pooled per event and label pair; each copy votes for the label L minimising
+        z_L = |ln(work/run) − median_L| / IQR_L        (L's own format × sex cell, fully timed rows outside copy groups)
+      exact two-sided sign test p < α → keep the winning label's copies, drop the twins; else drop every copy
+    B = log10 C(n_event, 2) + Σ over timed fields log10( Σ_v share_v² )     (fields treated as independent)
+R4  per format × sex on ln(total): lo = exp(Q1 − 3·IQR), hi = exp(Q3 + 3·IQR)
+      total < lo → dropped
+      total > hi → kept only if all 16 splits timed, R5 passes, and max(segment) / total ≤ share_hi
+        share_hi = far-out upper fence of that share on fully timed, consistent rows inside both total fences
+R5  roxzone timed:   |total − Σ16 splits − roxzone| ≤ 17 s, else dropped
+    roxzone untimed: total − Σ16 splits inside the cell's roxzone far-out fences, else dropped
+R6  a missed split mat, or any split (or timed roxzone) below its far-out lower fence → total tables only
+
+Tables per format × sex × metric (total, run_total, work_total, roxzone, 8 stations):
+  breakpoint p = type-7 quantile of kept values, rounded to the second; cumulativePercentile = % at or under
+  grid = finest in the ladder with smallest gap ≥ 2ε(n), ε(n) = sqrt(ln(2/α) / (2n))
+  a format × sex cell is published only when every metric has n ≥ 119
+  S8-S9 set: the same rows restricted to seasons 8 and 9
+
+Improvement (repeat file, singles, first race a, latest race b, both totals inside the R4 fences):
+  relPct = (t_b / median_event(b)) / (t_a / median_event(a)) − 1     event = season × venue × year × format × sex, n ≥ 119
+  absPct = t_b / t_a − 1;   absMedianSec = median(t_b − t_a)
+  gap = window(b) − window(a)                                         window = one (season, calendar year) half-season
+  band = HYROX_TIME_TO_BAND_THRESHOLDS on t_a (first_race) or on (t_a + t_b) / 2 (mean_of_races)
+  each cell: [p25, median, p75] of relPct and absPct; cells under 119 withheld
+```
+
+**Hygiene counts** (`HYROX_S79_INGEST_REPORT`).
+
+| Rule | Rows |
+|---|---|
+| Input | 1,159,421 |
+| R1 excluded divisions (relay 7,111, adaptive 232, elite 229, elite_doubles 232) | 7,804 |
+| R2 zero totals (2,282 Vienna 2026 Open Singles, 2 Guadalajara 2025 Open Doubles; none null) | 2,284 |
+| R3 exact duplicates | 1,044 |
+| R3b age-only copies / resolved twins (Mechelen 2026) / isolated pairs | 54 / 520 / 136 |
+| R4 below the lower fence | 33 |
+| R4 above the upper fence: kept / missed mat / one dominant segment / inconsistent (in R5) | 571 / 86 / 88 / 12 of 757 |
+| R5 sum off by more than 17 s / implied Roxzone outside its fences | 3,068 / 1,358 |
+| R6 total only: missed mat / split below its fence | 14,743 / 7,633 |
+| Kept for totals / splits / Roxzone | 1,142,946 / 1,120,570 / 1,055,444 |
+
+Mechelen 2026 resolutions (`HYROX_S79_CROSS_LABEL_RESOLUTIONS`): women 225 votes for Pro Singles against 15, 13 abstained, p 2.99e-49; men 249 against 18, p 3.76e-53.
+
+**Pooled medians, seasons 7 to 9** (`HYROX_S79_PERCENTILES` p50, m:ss; n = total-table rows).
+
+| Format, sex | n | Total | Runs | Work | Roxzone | Sled push | Wall balls |
+|---|---|---|---|---|---|---|---|
+| Open Singles women | 162,792 | 95:57 | 46:44 | 40:54 | 8:02 | 2:52 | 6:42 |
+| Open Singles men | 295,627 | 87:57 | 41:52 | 38:11 | 7:28 | 3:02 | 7:02 |
+| Pro Singles women | 25,178 | 87:04 | 40:29 | 39:32 | 6:40 | 3:54 | 6:18 |
+| Pro Singles men | 55,200 | 81:16 | 37:06 | 37:31 | 6:19 | 3:44 | 6:48 |
+| Open Doubles women | 182,049 | 88:01 | 49:17 | 30:35 | 7:53 | 1:51 | 4:22 |
+| Open Doubles men | 175,038 | 76:22 | 42:25 | 26:52 | 6:49 | 1:50 | 4:23 |
+| Open Doubles mixed | 190,881 | 82:55 | 45:40 | 29:37 | 7:17 | 2:11 | 4:34 |
+| Pro Doubles women | 20,748 | 79:57 | 42:56 | 30:10 | 6:37 | 2:27 | 4:12 |
+| Pro Doubles men | 35,394 | 70:01 | 37:14 | 26:53 | 5:40 | 2:12 | 4:12 |
+
+Seasons 8 and 9 only (`HYROX_S89_PERCENTILES` p50): Open Singles women total 96:56, wall balls 6:54, sled push 2:57 (n 119,468); men 88:48, 7:17, 3:09 (n 210,236).
+
+**Season effects** (`HYROX_S79_SEASON_MEDIANS`, `HYROX_S79_SAME_VENUE_SEASON_SHIFT`). Raw median totals, Open women: S7 93:23, S8 96:17, S9 101:01; Open men 86:02, 87:57, 94:19. Same venue, same half of the season, one year apart: Open Singles total +12 to +120 s (smallest total IQR in the format 1,418 s), Open Doubles +36 to +149 s (1,017 s), Pro −314 to +100 s on 2 to 24 venues. Station step at S7 to S8: Open Singles wall balls +30 to +33 s and sled push +13 to +20 s; Pro Singles sled push +29 to +40 s. From S8-2025 to S9-2026 Open women's wall balls move +14 s more and the total +65 s.
+
+**Improvement** (`HYROX_S79_IMPROVEMENT`, `relPct` median; negative = faster; 75,332 athletes).
+
+| Band | Grouped by first race | n | Grouped by mean of both races | n |
+|---|---|---|---|---|
+| Competitive (under 1:00) | +1.8% | 229 | −2.2% | 279 |
+| Advanced (1:00 to 1:20) | −2.1% | 20,711 | −3.9% | 22,928 |
+| Intermediate (1:20 to 1:40) | −4.0% | 34,729 | −4.2% | 34,945 |
+| Novice (1:40 to 2:00) | −6.6% | 14,051 | −4.3% | 12,647 |
+| Beginner (2:00 and over) | −9.9% | 5,612 | −4.1% | 4,533 |
+| All | −4.1% (p25 −9.7%, p75 +1.7%; raw −4.0%, −204 s) | 75,332 | | |
+
+By gap (relPct median): about 6 months −3.6% (n 39,169), 12 months −4.6% (23,573), 18 months −4.6% (10,656), 24 months −6.2% (1,934). By format and sex: Open women −4.3% (21,353), Open men −4.5% (44,865), Pro women −1.2% (1,619), Pro men −1.5% (7,495). The typical gain from first to latest race is about 4%. Grouping on the first race builds in regression to the mean: an athlete banded beginner on one slow race tends to post a faster next race whatever the training, so the first-race beginner figure of −9.9% falls to −4.1% when the band is read on the mean of both races. 179 cells published, 76 withheld.
+
+**Constants.**
+- `TUKEY_FAR_OUT_K` = 3 (`:76`): Tukey's far-out rule, on the log scale because times are positive and right-skewed.
+- `CONSISTENCY_TOLERANCE_SEC` = 17 (`:86`): 17 segments plus the total, each rounded to the whole second, can differ from their true sum by less than 18 s; residuals are integers, so 17 s is the largest gap rounding explains.
+- `DKW_ALPHA` = `ALPHA` = 0.05 (`:95`, `:126`): one significance level for the DKW band, the chance-match bound and the sign test.
+- Grid ladder minimums 73,778 / 4,612 / 738 / 328 / 119 (`:107-122`): derived from ε(n) at half each grid's smallest gap; 119 is `MIN_CELL_N`. A test re-derives them.
+- Share fence `share_hi` (0.197 to 0.234 across published cells, `HYROX_S79_TOTAL_FENCES_SEC.maxSegmentShare`): fitted per cell from the data by the same far-out rule.
+- `CURRENT_JUDGING_SEASONS` = (8, 9) (`:132`): chosen from the same-venue station step in the data.
+- `BAND_THRESHOLDS` (`:885`): a copy of `HYROX_TIME_TO_BAND_THRESHOLDS` (60, 80, 100, 120 min), applied the way the onboarding initializer's `bandFromTime` applied them at `3e4b08d` (the first threshold the time is under; lane H2, `d8432d2`, later replaced that function with the planning band, §DL); emitted and pinned by a test.
+No hand-picked number: every threshold comes from the timing format, a named rule or the data (script `:22-24`).
+
+**Decisions.** None by Tristan in this lane. The implementer chose three things, open for confirmation in ISSUE-396: pooled S7 to S9 as the main set with the S8 and S9 set alongside; keeping above-fence totals that their own splits corroborate (the first review's option A); and the R3b sign-test hybrid. Lane H3b's brief later settled which set feeds what (decision 1: S8 and S9 for percentiles, seeds, band thresholds and conversions; pooled S7 to S9 for age groups) and treated Pro Doubles mixed rows as data errors (decision 3).
+
+**Why defensible.**
+- *Reproduced independently.* The final reviewer re-implemented every rule from the raw files and matched every drop count, the kept-row totals and all 108 pooled tables at every breakpoint (reviewer's probe at `7cf2c1d`). In the same probe a looser, separate hygiene (total above zero, exact dedupe, all splits timed, 17 s tolerance) agrees within 0 to 5 s from p1 to p95.
+- *Resolution set by cell size.* The DKW ladder guarantees neighbouring breakpoints are resolved at 95% for the cell's n, so a thin cell gets fewer breakpoints.
+- *Timing rules come from the timing format.* The 17 s bound is a hard rounding limit; a missed mat sometimes folds its time into a neighbour, so those rows keep only their start-to-finish total.
+- *Label errors are tested.* A copy is treated as one result only when a chance match is implausible by more than 25 orders of magnitude, and a cross-label set resolves only on a significant sign test; work-to-run ratio separates singles from doubles because doubles partners split the stations and run together.
+- *Venue removed, regression to the mean exposed.* Normalising by the event's own median removes course and venue effects; reporting both band groupings shows how much of the beginner gain is selection on a slow first race.
+
+**Effect.** At `3e4b08d` none: no consumer. Pinned by tests (`hyrox-results-s79.test.ts`): the smoke medians (Open women within 60 s of 95:55, Open men within 60 s of 87:57, 6:42 inside the women's wall-ball p45 to p55 band); S8 and S9 wall-ball and sled-push medians above the pooled ones in Open Singles; the improvement band thresholds equal the app's. Review fixes, from the committed tables at `ddf5013` and `7cf2c1d`: Pro Doubles women's work total p99 3032 to 2992 s and sled push p99 331 to 317 s; p99 totals Open women 10227 to 10265 s and Pro women 9354 to 9450 s; medians move 4 s or less.
+
+**Limitations.**
+1. Venues differ. Event medians as a share of the pooled median, p10 to p90 of events, Open men: run total 0.94 to 1.15, sled push 0.84 to 1.23, sled pull 0.88 to 1.20, Roxzone 0.77 to 1.31; widest single-cell ranges sled push 0.70 to 1.88, sled pull 0.75 to 1.69, Roxzone 0.54 to 2.04 (`HYROX_S79_VENUE_SPREAD`). Event medians mix venue with field strength; the data cannot separate them.
+2. The S7 to S8 station step is attributed to a judging change without a rulebook check, and drift continues inside the S8 and S9 set (+14 s Open women's wall balls, S8-2025 to S9-2026). The Women Open rep change (75 to 100) came in 2024/25 (§DG), which is S7, so it does not explain the step, and Open men's wall balls step by +33 s too.
+3. The one-dominant-segment rule uses a share fence fitted on mostly sub-2 h finishers, while the share rises with total time. Reviewer's probe at `7cf2c1d`: 51 of the 88 dropped rows look like genuine slow finishers (2.8 to 5.4 h, share under 0.4, mostly wall balls); p99 totals read 0 to 24 s fast (Pro Singles women 9450 against 9474 s), p95 7 s or less, medians unchanged. The script comment's "a genuine slow finisher is slow throughout" (`:559-565`) does not hold for them.
+4. R5 drops cluster at a few S7-2025 doubles events, with residuals just past 17 s (reviewer's probe: Manchester 736 of 2,199 Open Doubles rows, Toulouse 897 of 2,664, Auckland 426 of 1,640, Guadalajara 148 of 643). Pooled tables move 1 s or less, but the Open Doubles women's S7-2025 to S8-2026 same-venue shift reads +149 s against +130 s with those totals kept, and +149 s is the upper end of the field-drift range quoted in the improvement header.
+5. The improvement figure is first-to-latest, with an unknown number of races between, for athletes who raced again (survivor sample). relPct includes field drift: a slower field flatters it. The repeat file has no month (`monthsBetweenNonEmpty` 0), so gap g means roughly 6g months, anywhere from 6(g − 1) to 6(g + 1). The dataset's own relative columns give −2.3% (`authorRelMedianPct`); their venue-typical time drifts against the recomputed event median across seasons (implementer's and first reviewer's probes: +2.9% in S7-2024 to −2.5% in S9-2026), so they are not used. Repeat-athlete linkage is the dataset author's and cannot be checked here.
+6. The improvement normaliser needs an event cell of 119 rows: 2,556 repeat pairs are dropped for that, among them 44 at Taipei S7-2025 Pro men, whose cell fell to 117 after the R3b isolated-pair drops (implementer's and final reviewer's probes).
+7. R2 is one division published with zero times plus 2 stray zeros; no row has a null total. The file holds finishers only, so the tables carry no DNF or DNS information.
+8. Doubles age groups use 10-year bands so S7 can be pooled. The dataset carries one age label per team; how HYROX assigns it cannot be checked from the data.
+9. The chance-match bound treats fields as independent; they are positively correlated (a fast athlete is fast everywhere), and the margin (10^-27.1 against 0.05) absorbs that.
+10. Two report fields are single results (`keptAboveFenceMaxTotalSec` 21735, `droppedAboveFenceOneSegmentTotalRangeSec` [10109, 107488]), and the fences export publishes lo, hi and share for the withheld Pro Doubles mixed cell (39 rows). ISSUE-396 (e), (f).
+11. Licence: the dataset's Kaggle licence is "Other" and the underlying results are HYROX's. Whether derived aggregates may be used commercially is undecided (ISSUE-396 (a)).
+
+**Guards.** `src/data/hyrox-results-s79.test.ts` (29 at `3e4b08d`, 36 at `5068d8b` after H3b): provenance, size under 400 KB, the DKW ladder, every table monotonic and on its grid with the resolution check, lower fence respected, row accounting across every rule, R2 by event, per-cell fence counts, every above-fence row classified, cross-label bounds and resolutions, published plus suppressed counts, shared split row sets, season partitions, same-venue coverage, the S8 and S9 set (grids, counts, the station step), venue spread, age tables, improvement minimums and counts, the band-threshold pin, smoke medians. No user-facing surface at `3e4b08d`; nothing to device-verify.
+
+---
+
+## §DK — HYROX reads the S8 to S9 results: per-station percentiles, per-division conversions, band seeds and the improvement ceiling (2026-10-13, lane H3b)
+
+**Side.** Mostly tracking: finish and station percentiles, the age and sex rank line, the doubles mapping and the Open-to-Pro conversion inside the forecast, and the improvement ceiling on the race-day projection. Two planning inputs read the same numbers: the band seeds are the plan's station targets for untested stations (`hyroxPlanningStationBenchmarks`), and at this merge the field-relative thresholds set the band (MTL cap, sessions, hours, plan weeks) in setup, log-a-race and the previous-format fix (replaced for planning by lane H3c, §DL). The Open-to-Pro conversion serves both sides because a station prescribed at the target's tier and that station's forecast time describe the same work at the same loads.
+
+**Sources.** Kaggle "HYROX Race Results, Seasons 7-9 (Anonymised)" (Tanvi Jivani), built with pyrox-client (MIT) from public HYROX results; ingested by lane H3a (`3e4b08d`) into `src/data/hyrox-results-s79.ts`, aggregates only. This lane extends `scripts/ingest-hyrox-results-s79.py` (pooled-by-format tables, season labels, band thresholds, band seeds, station lower fences); the product reviewer (at `f4b7bf7`) and the statistics reviewer (at `9dc35bc`) reproduced the module byte for byte from the raw files (outside the repo). Repeat-athlete improvement cells grouped by the mean of both races (Oldham's method, per the data module) remove the regression to the mean that grouping by the first race builds in. HYROX 26/27 rulebooks for the load tiers (§DG). Merged in `ee19331` (`a4060ba`, `ee9e742`, `71f85dc`, `6c98b78`, `64f9c44`, `f4b7bf7`, `0ae4c96`, `a4db61f`, `db68f21`, `8457518`, `9dc35bc`).
+
+**Supersedes.** §DH's single aggregate station ratio on the pooled S4 to S6 tables and its Pro Doubles fallback to the Open ratios; §DI's synthetic station percentiles ("est. pN") and pooled-sex S4 to S6 captions; §DG limitation 3, `HYROX_PRO_STATION_MULTIPLIER` (sleds 1.15, other loaded stations 1.08, both sexes), now a fallback; the hand-set HyroxDataLab, roxlyfe.com and Hyroxy.com seed times (race-specific course factors entry); the competitive-seed session floor (§AP).
+
+**Where.** `src/calculations/hyrox-results.ts`: cohorts `hyroxResultsCohort` `:106`, `hyroxSinglesCohort` `:123`; solo frame `hyroxSoloLoadsArePro` `:143`, `hyroxSoloFrame` `:177`, `hyroxSoloToFieldSec` `:189`, `hyroxFieldToSoloSec` `:195`; tables `hyroxResultsTable` `:226`, `hyroxFasterThanPct` `:265`, `hyroxStationPercentile` `:283`, `hyroxStationLowerFenceSec` `:297`; captions `hyroxResultsCaption` `:345`, `hyroxCohortLabel` `:320`; age `hyroxCohortPlacement` `:409`, `hyroxPlacementHeadline` `:459`, `hyroxPlacementFigure` `:475`; bands `hyroxBandThresholds` `:499`, `hyroxBandFor` `:506`, `hyroxBandForPreviousTime` `:534`; Pro `hyroxProConversionAt` `:583`, `hyroxOpenToProSec` `:614`, `hyroxProToOpenSec` `:621`; ceiling `hyroxImprovementGapFor` `:633`, `hyroxImprovementCeiling` `:672`; seeds `hyroxBandField` `:716`, `hyroxSeedField` `:728`, `hyroxStationSeedsAtTarget` `:745`, `hyroxSeedRunPaceSecKm` `:758`. `hyrox-doubles.ts`: `hyroxDoublesTables` `:114`, `doublesStationTeamSec` `:199`, `doublesStationSoloSec` `:208`. `race-prediction.hyrox.ts`: `convertToTarget` `:366`, `entryIsPro` `:410`, `stationInputs` `:458` (option A `:478`), `hyroxStationHistoryInTargetFrame` `:524`, `hyroxCalibratedStationBenchmarks` `:753`, `hyroxPlanningStationBenchmarks` `:769`. `race-projection.hyrox.ts:389-423` (ceiling). `hyrox-session-benchmarks.ts:143` (floor). `src/constants/hyrox-benchmarks.ts:62-102` (seed readers). Data: `HYROX_S89_BAND_FIELD_PERCENTILES` `:1417`, `HYROX_S89_BAND_THRESHOLDS_SEC` `:1420`, `HYROX_S89_BAND_SEEDS` `:1427`, `HYROX_S79_STATION_LOWER_FENCES_SEC` `:197`.
+
+**Model.**
+
+```
+Cohort (whose results a time is placed against)
+  singles: biologicalSex → single-sex division pick → the format's pooled S8-S9 table
+  doubles: division (resolveHyroxDivision: else sex) → pooled; Mixed under Pro → the athlete's sex;
+           pro_doubles 'mixed' (25 rows S8-S9, 39 rows S7-S9) suppressed, never selected
+  singles cohort of a doubles athlete: own sex, the target's weight family (Open or Pro Singles)
+
+Percentiles: tables [sec, % at or faster], linear between breakpoints, clamped at the end breakpoints
+  fasterThan(x) = round(100 − cum(x))
+  finish:  forecast total (pair's total for doubles, no conversion) in the cohort's S8-S9 total table
+  station: forecast line baseSec (venue-neutral; pair's time for doubles) in the cohort's station table
+  rank:    known sex and an age inside a published cell → that age group's table (pooled S7-S9),
+           else the S8-S9 sex cell; past the table's slow end:
+           headline "Slower than {last p}% of …", figure "<{100 − last p}%"
+
+Doubles mapping, per metric m (each station, Roxzone, run total, 8-station total)
+  tables  = hyroxDoublesTables(format, sex, division): pair's division (target family) vs own-sex singles
+  x_f     = hyroxProToOpenSec(m, x, female) for a woman in Mixed Doubles (M-Open solo loads, W-Open field),
+            x otherwise
+  p       = cum_singles_m(x_f);  ratio_m = doubles_m(p) / singles_m(p);  pair_m = x_f × ratio_m
+  solo_m(pair) = pair ÷ ratio read at the pair's percentile in the doubles table, back to solo loads
+
+Open-to-Pro, per loaded station m and sex s (difference in differences, S8-S9 singles tables)
+  r_m(p)   = pro_singles_s,m(p) / open_singles_s,m(p)
+  r_ref(p) = geomean over {SkiErg, row, burpee broad jumps, run total} of r(p)
+  M_m(p)   = r_m(p) / r_ref(p);   M < 1 or a missing table → HYROX_PRO_STATION_MULTIPLIER[m] (fallback)
+  p        = the Open-weight time's percentile in the Open singles field (p50 with no time)
+  openToPro(x) = x × M_m(p(x));  proToOpen = fixed point of the inverse (start + 6 iterations)
+  women: W-Open → M-Open loads (Women Pro races M-Open); men: M-Open → M-Pro; unknown sex: pooled
+  SkiErg, row, burpee broad jumps: × 1
+
+Load family of a stored time (entryIsPro)
+  race split or session best with proWeights → that;  toggle benchmarksAtProWeights on → Pro;
+  race split with no weight record, or a slot value with no entry → Open;
+  station test → hyroxSoloLoadsArePro(entry.format) (a test logged under a Pro format stays Open)
+convertToTarget: solo time → the target's solo loads; doubles race split → solo time in its own family
+  (doublesStationSoloSec) → target loads; a split from the other family maps back to the target's
+  pair time (teamCrossFamily)
+
+Band seeds (one athlete's times at the target's loads)
+  seed(band, m) = median split m of the field's finishers whose total is in the band (HYROX_S89_BAND_SEEDS)
+  field at this merge = the band field's singles family at the athlete's sex, Open with no race
+                        (lane H3c: Open Singles at the athlete's sex for every format, §DL)
+  → Open-to-Pro per station when the target's solo loads are the Pro tier (Pro → Open when the
+    field was Pro and the target Open, at this merge)
+  run pace = median run total ÷ 8;  Roxzone = median Roxzone;  total_beginner → the beginner cell
+
+Field-relative bands
+  P_k = cum percentile of 3600, 4800, 6000, 7200 s in the S4-S6 pooled open singles total table,
+        clamped: 1.0, 25.3211, 73.5085, 92.916                         (HYROX_S89_BAND_FIELD_PERCENTILES)
+  threshold_k(format, sex) = type-7 quantile of that S8-S9 field's totals at P_k
+  band = first k with total < threshold_k, else beginner
+
+Improvement ceiling (tracking; applied last as one more uniform factor)
+  gap  = clamp(round(months / 6), 1, 4), months = weeks × 7 / (365.25 / 12)
+  band = HYROX_S79_IMPROVEMENT_BAND_THRESHOLDS (3600/4800/6000/7200 s) on the singles-terms current total
+         (doubles: doublesTotalInSinglesTermsSec on the athlete's tables)
+  cell = mean_of_races (singles format × sex × band × gap) → all gaps → all singles × band × gap
+         → all singles × band → first_race band 'all' (format × sex × gap) → all singles band 'all' × gap
+  ceilingPct = −relPct p25 of the cell
+  if projected < current × (1 − ceilingPct/100): a 'Results ceiling' factor lifts it to that floor
+
+Session-best floor: round in the field's loads ≥ HYROX_S79_STATION_LOWER_FENCES_SEC[field][m]
+  (the split's log-scale Tukey far-out lower fence, ingest rule 6; pooled → the lowest published cell)
+
+Confidence (option A)
+  doubles target: converted = every calibrated value except the target family's own doubles race splits
+  singles target: converted = a doubles race split
+  any converted station: high → medium (the §DH rule)
+```
+
+**Data (computed from the committed tables with the code's formula, at p50).**
+
+Open-to-Pro multiplier:
+
+| Sex (loads) | Sled push | Sled pull | Farmers | Sandbag | Wall balls | r_ref |
+|---|---|---|---|---|---|---|
+| Women (W-Open → M-Open) | 1.573 | 1.149 | 1.295 | 1.133 | 1.066 | 0.866 |
+| Men (M-Open → M-Pro) | 1.405 | 1.298 | 1.131 | 1.066 | 1.082 | 0.878 |
+| Pooled | 1.473 | 1.248 | 1.188 | 1.096 | 1.089 | |
+| Before (both sexes) | 1.15 | 1.15 | 1.08 | 1.08 | 1.08 | |
+
+The multiplier rises with percentile (women's sled push 1.526 at p10, 1.700 at p90). Its lowest value on any loaded station, sex and percentile from p1 to p99 is 1.006 (men's sandbag lunges near p2), so the fallback never fires.
+
+Doubles ratio, pair ÷ singles at the same percentile:
+
+| Division vs singles field | SkiErg | Sled push | Sled pull | BBJ | Row | Farmers | Sandbag | Wall balls | Run total | Roxzone | 8 stations |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Open Doubles women vs women | 0.912 | 0.638 | 0.734 | 0.638 | 0.943 | 0.807 | 0.726 | 0.645 | 1.054 | 0.974 | 0.747 |
+| Open Doubles men vs men | 0.891 | 0.598 | 0.678 | 0.575 | 0.929 | 0.759 | 0.673 | 0.616 | 1.015 | 0.908 | 0.703 |
+| Open Doubles mixed vs women | 0.821 | 0.763 | 0.693 | 0.531 | 0.868 | 0.793 | 0.773 | 0.676 | 0.977 | 0.901 | 0.723 |
+| Open Doubles mixed vs men | 0.949 | 0.714 | 0.804 | 0.640 | 0.980 | 0.835 | 0.756 | 0.641 | 1.093 | 0.969 | 0.773 |
+| Pro Doubles women vs Pro women | 0.919 | 0.627 | 0.764 | 0.674 | 0.951 | 0.739 | 0.772 | 0.662 | 1.062 | 0.990 | 0.763 |
+| Pro Doubles men vs Pro men | 0.899 | 0.579 | 0.720 | 0.620 | 0.931 | 0.758 | 0.713 | 0.612 | 1.006 | 0.892 | 0.717 |
+
+H1 read one aggregate station ratio for every station (pooled open_doubles ÷ pooled open_singles 8-station total, S4 to S6; 0.714 at P50). A Mixed woman's row applies to her W-Open-equivalent time.
+
+Band thresholds, S8 to S9 (s; band = first threshold the total is under):
+
+| Field | competitive | advanced | intermediate | novice |
+|---|---|---|---|---|
+| Open Singles women | 4135 (68:55) | 5188 (86:28) | 6617 (110:17) | 8184 (136:24) |
+| Open Singles men | 3701 | 4708 | 6115 | 7627 |
+| Pro Singles women / men | 3747 / 3462 | 4651 / 4322 | 5922 / 5560 | 7323 / 6886 |
+| Open Doubles women / men / mixed | 3967 / 3396 / 3544 | 4848 / 4167 / 4516 | 5894 / 5167 / 5611 | 6936 / 6188 / 6739 |
+| Pro Doubles women / men | 3555 / 3154 | 4344 / 3811 | 5324 / 4673 | 6395 / 5548 |
+| Global scale (before, every field) | 3600 | 4800 | 6000 | 7200 |
+
+Intermediate seeds (s): Open Singles women (n 57,583) SkiErg 319, sled push 176, sled pull 349, burpee broad jumps 409, row 332, farmers 140, sandbag 316, wall balls 413, Roxzone 485, run 352 s/km. Open Singles men (n 101,268) 276, 188, 301, 340, 295, 133, 325, 437, Roxzone 450, run 315 s/km. Hand-set before (Open, sexes averaged): 267, 221, 306, 319, 284, 130, 296, 421, Roxzone 390, run 305 s/km.
+
+Improvement cells (mean of races, gap 1, relPct p25 / median): Open Singles women intermediate (n 6,065) −7.9% / −3.6%; Open Singles men novice (n 3,520) −11.3% / −4.5%; Pro Singles men advanced (n 1,836) −5.9% / −1.4%; Open Singles women beginner (n 1,199) −11.3% / −4.1%.
+
+**Constants.**
+- None new is hand-set. Every ratio, multiplier, threshold, seed and fence is read from the committed tables.
+- `HYROX_S89_BAND_FIELD_PERCENTILES` (1.0, 25.3211, 73.5085, 92.916): the global thresholds' positions in the S4 to S6 pooled open singles total table, chosen as the calibration because it was the app's only real-results field when the thresholds were last used. The only recorded anchor list (HYROX Population Percentiles, 2026-05-06: 60 to 120 min at p5, p15, p35, p60, gender-mixed HyroxDataLab Open) was rejected: hand-set, and 60 min sits below p1 (3829 s) of the real S4 to S6 field; reading the thresholds at it would push most athletes down a band. 3600 s clamps to p1, the finest percentile that table resolves.
+- Reference segments for the difference in differences (SkiErg, row, burpee broad jumps, run total): the unloaded segments, a pragmatic choice set in the lane brief. Sensitivity (implementer's probe, confirmed by the statistics reviewer): SkiErg and row alone give multipliers about 6% lower, and women's wall balls drop to 0.998, below the sanity check.
+- Sanity check M ≥ 1: a product rule. A heavier load cannot make a station faster, so a ratio below 1 means the cohort gap swamped the load effect and the fallback stands in.
+- `HYROX_PRO_STATION_MULTIPLIER` (`hyrox-constants.ts:40`): unsourced, kept as the fallback only.
+- Gap mapping round(months / 6), clamped 1 to 4: the data's own definition (gap g means about 6g months, anywhere from 6(g−1) to 6(g+1)).
+- Session floor: the ingest's rule-6 fence, the bound the ingest already uses to drop slipped splits.
+
+**Decisions.** The lane brief's decisions (orchestrator, 2026-10-13; no report records them as Tristan's own): (1) S8 to S9 tables for percentiles, seeds, bands and conversions, pooled S7 to S9 for age groups; (2) real station percentiles with provenance captions; (3) the cohort rule above; (4) per-station, per-division doubles mapping; (5) the difference in differences for Open-to-Pro; (6) seeds at the target's weights; (7) field-relative bands; (8) the improvement ceiling; (9) the age and sex rank line; (10) H1 minors: option A, the race-age caption, one-frame history. Review round (2026-10-13): the woman in Mixed Doubles is read at the Women Pro tier (statistics reviewer's fix); option A covers doubles race splits from the other weight family (product reviewer's option); the HyroxDataLab anchors are cited and rejected.
+
+**Why defensible.**
+- *Real data over hand-set anchors.* The station percentiles, seeds and conversions now come from about 850,000 current-era results with per-station splits; the previous anchors were hand-picked percentiles of hand-set seeds and an unsourced one-set-for-both-sexes Pro factor.
+- *The right comparison group.* Women and men race different loads and targets (§DG), so a pooled table misplaces both; the sex cell (or the pair's division) places a time among people who did the same work. Age groups use the pooled S7 to S9 tables because their cells are small; the sex cells use S8 to S9 because the S8 judging step moved wall balls and sled push at the same venues.
+- *Percentile matching, per station.* Pairs gain most where the work splits cleanly (sleds, burpee broad jumps, wall balls: about 0.53 to 0.80) and little on one shared erg (0.82 to 0.98); one aggregate ratio mis-scaled every station. Matching at the athlete's percentile keeps a fast athlete against fast pairs.
+- *Difference in differences.* The Pro field is fitter (r_ref 0.866 women, 0.878 men: 12 to 13% faster on unloaded work at the same percentile), so a raw Pro/Open ratio understates the load effect; dividing by the unloaded ratio removes the cohort gap and leaves the load. The women's larger relative load jump (sled push 102 to 152 kg against 152 to 202 kg) shows in the data (1.573 against 1.405).
+- *A band is a position in a field.* Keeping each threshold at its field percentile stops women and doubles athletes being banded against a male-dominated singles scale (40.4% of Open Singles women move up a band; probe below).
+- *The improvement ceiling is outcome data.* It bounds the projection's gain by what the top quarter of repeat athletes achieved, with regression to the mean removed by mean-of-races grouping. Field drift and survivorship both flatter relPct, which keeps the ceiling at the optimistic end, the end Tristan's calibration rule asks for (memory: prediction optimistic-end-of-defensible).
+- *One number per surface.* Every station percentile surface calls `hyroxStationPercentile` with the same cohort; seeds come from `hyroxStationSeedsAtTarget` everywhere, plan included; every history view converts through `convertToTarget`, the forecast's own conversion.
+
+**Effect.** Tested: the median of each of Open Singles women, Open Singles men, Pro Doubles men and Open Doubles mixed bands intermediate, and a women's Open time just under 86:28 bands advanced (intermediate on the old scale) (`hyrox-results.test.ts`); the multiplier is at least 1 for every loaded station and sex at p10, p25, p50, p75 and p90, and women's sled push converts more than men's at p50; the women 30 to 34 table's p40 reads "Faster than 60% of women aged 30 to 34"; a Mixed woman's planning targets equal a Women Pro athlete's, a test at her seed-at-target value leaves every line unchanged, and an M-Open round at the converted women's median reads within 1 of 50% of "Open Singles women" (`hyrox-mixed-woman-loads.test.ts`); an Open Doubles row of 2:00 with splits of 105 and 120 s shows "PR 1:45" and one frame caption, and a slow women's 65 to 69 forecast shows "<25%" (`results-wiring.test.ts`); option A caps a doubles target reading solo tests in the doubles slot and one reading other-family splits (`race-prediction.hyrox.test.ts`); a pinned week-2 plan moved from 220 to 223 planned minutes (`hyrox-mtl-completion.test.ts`; lane H2 re-pins it at 282, easy erg work filling the budget).
+
+Implementer's probe, `3e4b08d` against `f4b7bf7` (the review round changed none of these forecasts); P1 at London, the rest venue-neutral:
+
+| Persona | Forecast | Rank line | Wall-ball percentile | Gain to race day |
+|---|---|---|---|---|
+| P1 Open Singles woman 32, 8 tests, 16 wk | 1:24:15 → 1:25:50 (Roxzone seed 390 → 485 s) | "63% of finishers" → "Faster than 72% of women aged 30 to 34" | est. p67 → 51 | −53 s → −53 s |
+| P2 Open Singles man 41, 4 tests, 12 wk | 1:07:18 → 1:08:44 | 96% → 95% of men aged 40 to 44 | 84 → 84 | −40 s → −40 s |
+| P3 Open Doubles mixed woman 29, singles tests | 1:13:23 → 1:13:26 | 68% → 77% of mixed pairs aged 16 to 29 | 65 → 48 | −78 s → −77 s |
+| P4 Pro Singles man, Open race, Open-weight tests | 1:17:15 → 1:19:26 (stations 2221 → 2292 s) | 67% → 57% of men aged 35 to 39 | 67 → 51 | −52 s → −50 s |
+| P5 Pro Doubles women, 8 Pro doubles splits | 1:08:18 → 1:10:49 (run 2136 → 2232 s) | 67% → 79% of women's pairs aged 30 to 39 | 81 → 62 | −40 s → −42 s |
+| P6 first-HYROX woman, total_beginner | 1:57:52 → 2:08:42 | 8% → 8% of women aged 25 to 29 | 3 → 5 | −176 s → −190 s |
+| P7 novice man 45, no tests, 30 wk | 1:33:21 → 1:42:08 | 41% → 29% of men aged 45 to 49 | 40 → 20 | −168 s → −169 s |
+
+Band moves when the global scale gave way to field-relative thresholds, all S8 to S9 total rows (implementer's recomputation from the ingest's cleaned rows, reproduced exactly by the statistics reviewer at `9dc35bc`; doubles "before" uses H1's S4 to S6 singles-terms conversion): Open Singles women 40.4% up; men 6.3% up, 3.7% down; Pro Singles women 1.5% up, 8.2% down; Pro Singles men 34.4% down; Open Doubles women 57.8% up, men 0.8% up and 9.3% down, mixed 28.8% up; Pro Doubles women 7.7% up, men 49.3% down. The planning side of this was replaced by lane H3c (§DL).
+
+Statistics reviewer's probe at `9dc35bc`: forecast station lines for Open Doubles women, a Mixed man, a Mixed woman and Pro Doubles men match an independent ECDF-then-quantile computation on the rows within about 1 s; with no tests the Mixed woman's pair forecast (4966 s) sits beside a Mixed man's at the same band (4971 s). Implementer's probe: the improvement ceiling binds for no persona (modelled gains 1.0 to 2.8%, ceilings 5.9 to 11.3%).
+
+**Limitations.**
+1. Cohort comparisons. The doubles mapping and the Pro conversion compare fields, not the same athletes; the mapping assumes assortative pairing (a pair at p is two athletes near p), and the difference in differences assumes the unloaded ability gap carries to the loaded stations.
+2. Station percentiles place the forecast's station time, which treats a fresh test as the race-day time (no within-station fade, ISSUE-395 (f)), against fatigued race splits.
+3. Seeds are race splits (in-race fatigue) used as targets for fresh station sessions.
+4. Venue variation is in every table (sled stations vary most, `HYROX_S79_VENUE_SPREAD`), and the pooled S7 to S9 age tables read slightly fast on wall balls and sled push (pre-S8 judging), so the Stats rank line and the all-ages "Where you sit" total row use different table sets.
+5. Coarse age cells (women 65 to 69, n 289, p25 to p75) give only a bound past their ends.
+6. The improvement ceiling never binds for typical plans, so projections sit below the repeat athletes' median gain (3.6% for Open Singles women intermediate at gap 1); any horizon up to about 9 months reads the 6-month cell; doubles read their singles family; the band lookup uses the cells' global thresholds on a singles-terms total (ISSUE-397 (b)).
+7. Mixed Doubles assumptions: a previous doubles race is taken to be in the current division; a Mixed pair with no biological sex stays Open; a test's load family follows the format it was logged under, and at this merge the test entry modal named no loads (lane H3c adds them, `hyroxStationTestLoadTier`, §DL) (ISSUE-397 (c)).
+8. Field-relative planning bands lowered Pro athletes' plans for choosing heavier weights (34.4% of Pro Singles men and 49.3% of Pro Doubles men moved down); replaced by lane H3c's planning band (§DL).
+9. At this merge the onboarding initializer (H2-owned) still banded on the global scale through `hyroxBandingTimeSec` and seeded its run-pace observation from pooled tables; lane H2 (`d8432d2`) moved it to `hyroxPlanningBandFor` with the athlete's doubles tables (`initialization.hyrox.ts:144`, `:287`, `:290`) and removed `hyroxBandingTimeSec`.
+10. At this merge the generator fallbacks (run pace, the week-1 assessment, the gym session generator's HYROX brick) read the Open Singles pooled seeds and `HYROX_GENERATOR_VERSION` was not bumped; lane H2 (`d8432d2`) passes the athlete as `seed` to the run, station, brick and assessment generators (they read `hyroxStationSeedsAtTarget` and `hyroxSeedRunPaceSecKm`) and bumps the version to 18. The goal back-calculation floors still read the pooled seeds (ISSUE-397 (d)). Since `63c5942` (2026-10-20) the race plan and the goal modal pass cohort floors, one per component at the field's fast end (§DO).
+11. The session floor catches timing slips, not merely implausible rounds (ISSUE-397 (e)).
+12. `bandFromVdot` (`hyrox-staleness.ts:58`) still mirrors the global scale; lane H2 (`d8432d2`) also uses it to band first-timers (ISSUE-397 (a)).
+13. Unread tables: `HYROX_S79_RUN_LEG_MEDIANS_SEC` (the run-leg fatigue model keeps its hand-set rates, §M), the pooled S7 to S9 format x sex tables, the venue spread and the season medians have no app reader.
+
+**Guards.** `hyrox-results.test.ts` (31 at `ee19331`: cohort rules incl. no Pro Mixed, real percentiles, captions, age placement and headline, field-relative bands, the Pro conversion's sanity check and inverse, ceiling lookups, the fence, seeds), `hyrox-mixed-woman-loads.test.ts` (12), `ui/hyrox/results-wiring.test.ts` (16 at `ee19331`, jsdom), `data/hyrox-results-s79.test.ts` (36: pooled tables add up, labels, thresholds at their field percentile in every cell and pinned to the S4 to S6 table, seeds ordered and inside their band, fences below each cell's fastest split, size under 400 KB), `hyrox-doubles.test.ts` (32), `race-prediction.hyrox.test.ts` (37), `ui/hyrox/doubles-stations-caption.test.ts` (26), `hyrox-population-captions.test.ts` (9: no hardcoded count, incl. the S8 to S9 pooled counts), `hyrox-station-potential.test.ts` (9), `workouts/hyrox-planning-benchmarks.test.ts` (13). Not device-verified.
+
+> **Superseded in part 2026-10-13 by §DL (lane H3c, `d7bc44b`).**
+> 1. *Planning band.* The field-relative band (`hyroxBandForPreviousTime(prevTimeSec, prevFormat, biologicalSex, division)`: the previous finish banded on `HYROX_S89_BAND_THRESHOLDS_SEC` of the field it was raced in, the previous race's format at the athlete's sex for singles and the doubles division for doubles, with no conversion) is no longer read by planning. `setupBand`, `applyHyroxPrevTimeUpdate` and `applyHyroxPrevFormatChange` call `hyroxPlanningBandFor` (`hyrox-planning-band.ts:141`): the finish in Open Singles terms, banded on the Open Singles field of the athlete's own sex. Lane H3b's merge note for the initializer (`hyroxBandForPreviousTime`) was applied with `hyroxPlanningBandFor` instead (lane H2, `d8432d2`, `initialization.hyrox.ts:144`). This answers lane H3b's open question (34.4% of Pro Singles men and 49.3% of Pro Doubles men a band lower): no Pro finish now bands lower than under the field-relative rule (tested). `hyroxBandForPreviousTime` (`hyrox-results.ts:534`) stays as a descriptive helper with no app caller. `setupBand` read the time on the global 60/80/100/120-minute scale until the previous format was picked; it now reads it as an Open Singles finish.
+> 2. *Seed field.* `hyroxBandField` returned the previous race's field (Open Singles with no race) and `hyroxSeedField` its singles family at the athlete's sex, so a Pro-raced band read the Pro Singles band medians (converted Pro to Open for an Open target). Both now return Open Singles at the athlete's sex for every format; a target whose solo loads are the Pro tier converts the medians Open to Pro per loaded station. No seed reads the Pro band cells of `HYROX_S89_BAND_SEEDS`, and `HyroxSeedStateInput` no longer reads `hyroxPreviousTimeFormat`.
+> 3. *Back-computed race.* `seedRoxzoneSecForFormat` and `estimateStationsAndRoxzoneFromBand` read the band medians of `tables.singles.format` (Pro Singles for a Pro race); they now read Open Singles at `tables.singles.sex`, the station seeds converted to Pro loads for a Pro-family race.
+> 4. *Chip detail.* The Band thresholds list showed the previous race's field, captioned "<cohort>. Each band holds the same place in every format and sex field."; it now lists the own-sex Open Singles field, captioned "<cohort>. Your <time> <format> time is <time> in Open Singles terms." for a Pro or Doubles previous time, else "<cohort>. Pro and Doubles times convert to Open Singles terms before banding."
+> 5. *Where you sit.* The total row's tier names its cohort ("top 22% of women"), the option lane H3b left open; the other rows keep the short label.
+> 6. *Field rank bar.* Past a coarse age table's end the bar drew a solid dot at the bound beside the "<25%" circle; it now draws the range and a hollow marker at the bound.
+> Display ranks (the Stats rank line, the review's Field position, station percentiles) are unchanged.
+
+---
+
+## §DL — HYROX planning band from the own-sex Open Singles field; per-entry staleness; cohort-named ranks (2026-10-13, lane H3c)
+
+**Side.** Planning: the planning band prescribes. It sets: the MTL cap (`HYROX_MTL_CAP`) on a re-band, and at onboarding since lane H2 (`d8432d2`); the weekly session structure, whose row the band's tier picks since lane H2 (`hyroxTier`, `HYROX_WEEKLY_STRUCTURE`); the setup step's hours range (`HYROX_HOURS_RANGE`), sessions default (`HYROX_WEEKLY_SESSIONS`) and default plan length (`HYROX_DEFAULT_PLAN_WEEKS`, used only without a race date, and setup requires a race or a date); and the seeds behind untested-station targets (`hyroxPlanningStationBenchmarks`, `race-prediction.hyrox.ts:769`). Tracking: the display ranks (Stats rank line, Where you sit, the review's Field position, station percentiles) describe and stay in the athlete's own cohort (format × sex or division × age); the per-entry decay is a forecast blend; the copy changes label tracking numbers. The forecast's band seeds read the planning field too, so the band a plan is built on and the seeds the forecast uses describe one field.
+
+**Sources.** The S8-S9 HYROX results tables wired in lane H3b (§DK): `HYROX_S89_PERCENTILES` (per format × sex or division: the 8 stations, run total, Roxzone and total; `src/data/hyrox-results-s79.ts:420`), `HYROX_S89_BAND_THRESHOLDS_SEC` (`:1420`) and `HYROX_S89_BAND_SEEDS` (`:1427`). The conversions are lane H3b's: the doubles quantile mapping (`doublesStationSoloSec`, `doublesRatioAtTeamTime`; §DH, §DK) and the Open/Pro difference in differences (`hyroxProToOpenSec`; §DK). The decay curve and the physiology mitigation are §V's (Mujika & Padilla 2000, Coyle et al. 1984; the splits-slower-than-band split is coach-derived). Merged in `d7bc44b` (`3b4203a`, `f8269f4`, `3162847`, `a8e1d29`, `83fc9bc`, `7298eb2`).
+
+**Supersedes.** In §DK (lane H3b): the field-relative band as the planning band (`hyroxBandForPreviousTime` in setup, Log a previous time and the previous-format fix); the seed field (the previous race's singles family); the band medians behind the seed Roxzone and the back-computed race stations (`tables.singles.format`); the chip detail thresholds field and caption; the forecast total row's unnamed tier; the Field rank bar's point marker past a table bound. In §V: the race-age splits weight for every calibrated station (kept by lane H3b). Notes appended to §DK, §V, §DH and §AA below.
+
+**Where.** `src/calculations/hyrox-planning-band.ts` (new: `composition` `:80`, `hyroxOpenSinglesTermsSec` `:101`, `hyroxPlanningBandFor` `:141`); `hyrox-results.ts` (`hyroxPlanningField` `:521`, `hyroxBandFor` `:506`, `hyroxBandForPreviousTime` `:534`, `HyroxSeedStateInput` `:702`, `hyroxBandField` `:716`, `hyroxSeedField` `:728`, `hyroxStationSeedsAtTarget` `:745`); `hyrox-doubles.ts` (`seedRoxzoneSecForFormat` `:255`); `hyrox-personal-pace.ts` (`estimateStationsAndRoxzoneFromBand` `:85`); band writers `setupBand` (`hyrox-setup.ts:56`), `applyHyroxPrevTimeUpdate` (`hyrox-prev-time-update.ts:99`), `applyHyroxPrevFormatChange` (`hyrox-prev-format-fix.ts:115`) and, since lane H2 (`d8432d2`), `initializeHyroxSimulator` (`initialization.hyrox.ts:144`). Staleness: `hyrox-staleness.ts` (`computePhysiologyMitigation` `:72`, `applyMitigation` `:124`, `baseDecayAt` `:136`, `monthsSince` `:153`, `hyroxEntrySplitsWeight` `:168`, `computeHyroxStaleness` `:174`); `race-prediction.hyrox.ts` (`StationInput.ownDateISO` `:285`, set at `:480`; `SeedBasis.mitigation` `:614`; `stationBase` weight `:646`; race-age confidence cap `:1038-1039`). Copy: `hyroxTierLabelIn` (`hyrox-population.ts:146`), `calibrationBannerCtaLabel` (`forecast-view.ts:466`), `fieldRankMarkerHtml` (`stats-view.ts:448`), `HYROX_LEDGER_LOAD_NOTE` (`stats-view.ts:504`), `hyroxStationTestLoadTier` (`race-prediction.hyrox.ts:429`), `stationTestLoadNote` (`benchmark-card.ts:164`), the chip detail thresholds caption (`forecast-chip-detail-view.ts:214-220`).
+
+**Model.**
+
+```
+Planning field   F = Open Singles at resolveHyroxAthleteSex(biologicalSex, division)
+                     (biological sex; else a 'women' or 'men' division pick); else Open Singles pooled   hyroxPlanningField
+Planning band    band = first threshold of HYROX_S89_BAND_THRESHOLDS_SEC.open_singles[F.sex] with T_open < maxSec;
+                 beginner above the last                                                                 hyroxPlanningBandFor
+
+T_open = hyroxOpenSinglesTermsSec(T, format, sex, division)
+  Open Singles finish, T ≤ 0 or not finite:  T_open = T
+  1. Composition. R = hyroxResultsCohort(format, sex, division)   (singles: the athlete's sex; doubles: the pair's division)
+     p   = cumulative percentile of T in R's total table
+     c_m = R_m(p) for m ∈ {8 stations, run_total, roxzone};  c_m ← c_m × T / Σ c_m          (parts sum to the finish)
+  2. Doubles. S = hyroxSinglesCohort(format, sex, division)       (own sex, the race's weight family)
+     station m:      solo_m = doublesStationSoloSec(m, c_m, {singles: S, doubles: R})
+                     (no Mixed-woman flag, so solo_m is in S's own terms: a woman in Mixed maps to Open Singles women)
+     run, Roxzone:   solo_m = c_m ÷ ratioD_m(c_m)                   doublesRatioAtTeamTime
+     Singles: S = R, solo_m = c_m
+  3. Pro. If S is Pro Singles (Pro Singles, or Pro Doubles after step 2):
+     solo_m ← hyroxProToOpenSec(m, solo_m, S.sex) for sled push, sled pull, farmers carry, sandbag lunges, wall balls;
+     SkiErg, row, burpee broad jumps, run and Roxzone unchanged
+  4. T_open = Σ solo_m                                (a missing results table returns T)
+
+Seeds (forecast, plan targets for untested stations, Stats seed rows, station detail, benchmark card)
+  seed field  = Open Singles at F.sex, every format, with or without a race on file       hyroxSeedField
+  station     = HYROX_S89_BAND_SEEDS.open_singles[F.sex][band] median, converted Open → Pro per loaded station
+                (hyroxOpenToProSec) when hyroxSoloLoadsArePro(target): every Pro target, a woman in Mixed Doubles
+  run pace, Roxzone = the same cell (no load step)
+Back-computed race (personal run-pace offset; the initializer, with the race's tables since lane H2)
+  stations = the Open Singles band medians at tables.singles.sex, converted Open → Pro when the race's singles field
+             is Pro Singles; doubles → the pair's time per station (doublesStationTeamSec)
+  Roxzone  = the Open Singles band median (doubles × the Roxzone ratio)
+```
+
+Per-entry staleness:
+
+```
+age(d)        = (now − d) / 30.44 days;  d missing, unparseable or in the future → weight 1
+baseSplits(a) = 1.0                        a < 6
+                1.0 − 0.2 × (a − 6) / 6     6 ≤ a < 12
+                0.8 − 0.2 × (a − 12) / 12   12 ≤ a < 24
+                0.6                        a ≥ 24                                       baseDecayAt (§V)
+w(b, m)       = b + (1 − b) × (m − 0.5) × 2,  m ∈ [0.5, 1]                              applyMitigation (§V)
+m             = the race's physiologyMitigation when a race date is on file, else computePhysiologyMitigation(state)
+
+weight of a station value (the history entry that describes the slot value, benchmarkEntryForSlotValue):
+  half test, full test, guided-session best     → w(baseSplits(age(entry.dateISO)), m)          hyroxEntrySplitsWeight
+  race split, 'manual', no matching entry       → the race's splitsWeight (unchanged)
+singles line = w × value + (1 − w) × seed
+doubles line = w × pair's split + (1 − w) × seed mapped to the pair      (a doubles race split)
+             = the blended solo value mapped per station                (anything else)
+Unchanged: bandWeight (the seed blend toward the VDOT band) and the confidence cap (medium from 6 months,
+low from 12) read the race's age.
+```
+
+Formula values of the entry weight with no physiology evidence (m = 0.5): 1.00 up to 6 months, 0.90 at 9, 0.80 at 12, 0.75 at 15, 0.70 at 18, 0.60 from 24. At m = 1 the weight is 1 at every age.
+
+Copy rules:
+
+```
+Total row (Where you sit)   hyroxTierLabelIn(f, cohort) = tier == 'median' ? 'median among ' + noun : tier + ' of ' + noun
+                            tier = hyroxTierLabel(f); noun = hyroxCohortNoun(cohort): women, men, mixed pairs,
+                            women's pairs, men's pairs, or "<Format> finishers" for a pooled cohort
+Other rows                  hyroxTierLabel(f)
+Field rank bar              beyond 'slow': bound = 100 − tableRange[1], range 0 → bound, hollow marker at bound
+                            beyond 'fast': bound = 100 − tableRange[0], range bound → 100, hollow marker at bound
+                            inside the table: solid dot at fasterThanPct
+Test load tier              entryIsPro(target format, a half test): woman → M-Open, man → M-Pro; else W-Open / M-Open;
+                            null without a HYROX config or a known sex                           hyroxStationTestLoadTier
+Test modal line             doubles target, loaded station, known sex:
+                            "Test at <tier name> loads<', the weights your pair races' for a Mixed woman>: <load>."
+                            + " Testing at Pro loads? Turn on Calibrated at Pro weights in Stats first." (Pro, toggle off)
+Ledger load note            soloIsPro ≠ target soloPro at a loaded station → "Converted to race weights"
+Calibration CTA             confidence low, or every station converted → "Test your stations"; else "Calibrate the rest"
+```
+
+**Planning cut-offs as raw finish times in each race field** (s; competitive / advanced / intermediate / novice). Planning: inverted from `hyroxOpenSinglesTermsSec` at `5068d8b` (docs-pass probe; the implementer's report gives the same values to within 1 s; lane H2 did not touch the conversion or the tables, so they hold at `d8432d2`). Lane H3b field-relative: `HYROX_S89_BAND_THRESHOLDS_SEC`.
+
+| Race field | Planning (H3c) | Field-relative (H3b) |
+|---|---|---|
+| Open Singles women | 4135 / 5188 / 6617 / 8184 (1:08:55, 1:26:28, 1:50:17, 2:16:24) | same |
+| Open Singles men | 3701 / 4708 / 6115 / 7627 (1:01:41, 1:18:28, 1:41:55, 2:07:07) | same |
+| Open Singles, sex unknown | 3774 / 4869 / 6318 / 7853 | same |
+| Pro Singles women | 4272 / 5422 / 6986 / 8730 | 3747 / 4651 / 5922 / 7323 |
+| Pro Singles men | 3816 / 4912 / 6467 / 8177 | 3462 / 4322 / 5560 / 6886 |
+| Open Doubles women | 3944 / 4840 / 5912 / 7002 | 3967 / 4848 / 5894 / 6936 |
+| Open Doubles men | 3368 / 4171 / 5193 / 6222 | 3396 / 4167 / 5167 / 6188 |
+| Open Doubles mixed, woman | 3596 / 4508 / 5619 / 6781 | 3544 / 4516 / 5611 / 6739 |
+| Open Doubles mixed, man | 3589 / 4514 / 5629 / 6778 | 3544 / 4516 / 5611 / 6739 |
+| Open Doubles mixed, sex unknown | 3582 / 4519 / 5620 / 6761 | 3544 / 4516 / 5611 / 6739 |
+| Pro Doubles women | 4019 / 4958 / 6150 / 7438 | 3555 / 4344 / 5324 / 6395 |
+| Pro Doubles men | 3427 / 4238 / 5296 / 6386 | 3154 / 3811 / 4673 / 5548 |
+
+Field sizes (S8-S9, `HYROX_S89_PERCENTILES` counts): Open Singles women 119,468 and men 210,236; Pro Singles women 18,932 and men 40,403; Open Doubles women's pairs 137,988, men's 130,717, mixed 146,936; Pro Doubles women's 16,614, men's 28,149.
+
+**Constants.** None new.
+- Band cut-offs: `HYROX_S89_BAND_THRESHOLDS_SEC.open_singles` (data, lane H3b): the finish times at `HYROX_S89_BAND_FIELD_PERCENTILES` (1.0, 25.3211, 73.5085, 92.916; `hyrox-results-s79.ts:1417`), the positions the old 60/80/100/120-minute scale held in the S4 to S6 pooled Open Singles table. A calibration choice inherited from lane H3b (§DK), not a physiological boundary.
+- Seeds: `HYROX_S89_BAND_SEEDS` (data, lane H3b): the median split of the finishers in each band of each field.
+- Conversions: computed from the tables. `hyroxProConversionAt` falls back to `HYROX_PRO_STATION_MULTIPLIER` (unsourced, §DG limitation 3) only when the difference-in-differences ratio falls below 1; lane H3b's test pins source 'data' for every loaded station and sex from p10 to p90 (`hyrox-results.test.ts:180`), and the docs-pass probe at `5068d8b` found no fallback from p1 to p99 (`hyrox-results.ts` is unchanged at `d8432d2`). `hyroxProToOpenSec` inverts by 6 fixed-point steps (a numerical choice, lane H3b).
+- Staleness: `FRESH_MO` 6, `STALE_MO` 12, `VERY_STALE_MO` 24 (`hyrox-staleness.ts:51-53`), the splits weights 1.0 / 0.8 / 0.6 and the mitigation clamp [0.5, 1]: §V's (directional thresholds; coach-derived splits curve; the clamp a design choice). Applying the same curve to station tests and session bests is a product choice from the lane brief; it was never calibrated for tests.
+- `MS_PER_MONTH` = 30.44 days (`:54`): the mean Gregorian month (365.25 ÷ 12 = 30.4375), rounded.
+- `setupBand(...) ?? 'novice'` in the time-entry handler (`hyrox-setup.ts:552`) is an unreachable fallback (setupBand is null only without a time, and the handler has just stored one), the same fallback the step already used at `:162`, `:1048` and `:1059`.
+
+**Decisions (lane H3c brief, 2026-10-13).** Orchestrator decisions, recorded as such in code (`hyrox-planning-band.ts:10`), not yet confirmed by Tristan; lane H3b had raised (1), the seed field, (3) and the cohort naming as open questions. (1) One planning field for every format, Open Singles at the athlete's own sex, a Pro or Doubles finish converted first; display ranks stay cohort-specific. (2) The forecast total row names its cohort. (3) Station tests and session bests decay by their own date; race splits by the race's. (4) Copy: the CTA rule, the rank bound, the test load line, the ledger note and the seed provenance. (5) The doubles ratio comments quote the S8-S9 data per division.
+
+**Why defensible.**
+- *One field.* The band sets planning inputs meant to track training capacity. Lane H3b read a finish in the field it was raced in, and the Pro fields are fitter (faster on unloaded segments at the same percentile, the difference-in-differences reference r_ref < 1, §DK), so the same athlete planned a band lower for choosing heavier weights (lane H3b's probe: 34.4% of Pro Singles men and 49.3% of Pro Doubles men a band lower than on the global scale). A doubles finish also holds a partner's share of every station. Converting to one athlete at Open loads and banding in one field per sex takes both format effects out, so the plan follows ability and a format change never moves the plan by itself.
+- *Open Singles.* It is the largest field per sex (119,468 women and 210,236 men against 18,932 and 40,403 in Pro Singles), one athlete at the Open tier of their own sex with no partner or load step, and the field the seeds are read in, so a band and its seed medians describe one field.
+- *Own sex.* The S8-S9 tables differ by sex; reading women against a pooled or male-dominated field misplaced them (lane H3b's finding on the global scale).
+- *No new numbers.* The conversion chains mappings already derived from the results data; it is monotonic in the finish and the identity on Open Singles (tested), and it moves in the expected directions: a Pro finish converts faster, a same-sex doubles finish slower, Pro Doubles faster than Open Doubles on the same clock, and in a Mixed pair the man faster than the woman (tested).
+- *Per-entry decay.* §V decays evidence for the fitness and skill lost since it was produced; a station test's evidence date is its own date. Reading the race's age pulled a week-old test toward the band median and left an old test at full weight beside a recent race.
+- *Cohort-named ranks.* Two surfaces gave percentiles of the same finish in different cohorts (the forecast row: all Open Singles women, S8-S9; Stats: women aged 30 to 34, S7 to S9) with no cohort on the row. Naming the cohort removes the apparent contradiction without changing either number.
+- *Bound as a bound.* Past a coarse age table's end the share is known only as a bound; a point marker overstated what the data supports.
+- *Load notes and provenance.* The forecast converts times across load families, so the athlete needs the loads a test is read at and a mark on converted rows; a band median from real results is not a "population average".
+
+**Effect.** Tested: the planning band equals `hyroxBandFor` of the converted time for 14 format, sex and division cases from 2700 to 12600 s in 45 s steps; no Pro finish bands lower than under lane H3b; the pooled Open Doubles median bands like the pooled Open Singles median; a Pro-raced band seeds like an Open-raced one; the back-computed Pro Singles race stations are the Open medians converted to Pro (`hyrox-planning-band.test.ts`, `hyrox-results.test.ts`). A station test from last week is used as is with a 9- or 18-month-old race; a race split still decays; a 15-month-old test decays with a 3-month-old race or none; a test and the race on the same date blend exactly as a race split does (`hyrox-staleness.test.ts`). Every new copy string is pinned (`results-wiring.test.ts`, `benchmark-card-slot.test.ts`, `doubles-stations-caption.test.ts`, `pb-age-surfaces.test.ts`).
+- Band moves against lane H3b's field-relative bands (implementer's probe on the cleaned S8-S9 rows, up / down): Pro Singles women 64.4 / 0%, men 52.6 / 0%; Pro Doubles women 65.0 / 0%, men 53.4 / 0%; Open Doubles women 1.2 / 0.5%, men 1.4 / 0.2%, mixed 0.9 to 1.2 / 0 to 0.4%; Open Singles unchanged. The reviewer's recomputation from the percentile tables lands within about 1 point (Pro Singles men 53.6% up, women 65.3%; Pro Doubles men 54.1%, women 66.0%; Open Doubles 1.0 to 1.5% up, 0 to 0.5% down). Band shares under the planning band (implementer's probe): about 1 / 24 / 48 / 19 / 7% competitive to beginner in Open Singles and every Open Doubles cell; Pro Singles women 11.1 / 46.6 / 32.6 / 7.7 / 2.0%, men 6.8 / 44.7 / 37.7 / 8.5 / 2.2%.
+- Converted finishes (docs-pass probes at `5068d8b` and `d8432d2`): Pro Singles man 1:30:00 is 1:25:49 in Open Singles terms (intermediate either way) and 1:20:00 is 1:16:47 (advanced; intermediate under lane H3b); Pro Singles woman 1:30:00 is 1:26:08 (advanced; was intermediate); Pro Doubles women's pair 1:15:00, 1:17:42 (advanced; was intermediate); Open Doubles Mixed 1:15:00, 1:26:19 for the woman and 1:18:12 for the man (advanced either way); Open Doubles women's pair 1:20:00, 1:25:39 (advanced either way). Through the real initializer at `d8432d2` (docs-pass probe) the five women's cases and the Pro Singles man at 1:20:00 initialise advanced, the band setup shows once the previous format is picked: MTL cap 1600 for singles and 1040 for doubles, build week 3 runs, 2 station sessions and 1 brick.
+- Personas (implementer's probe at the lane tip, before lane H2; band set directly, no station tests): the four Pro cases above move intermediate to advanced, so the MTL cap goes 1300 to 1600 (`HYROX_MTL_CAP`), the hours range's maximum 14 to 16 h and the default plan 18 to 20 weeks. At the lane tip sessions stayed 3 runs, 2 station sessions and 1 brick; since lane H2 (`d8432d2`) the move also changes the tier (`hyroxTier`), so the build week goes from 3 runs, 1 station session and 1 brick to 3, 2 and 1 (`HYROX_WEEKLY_STRUCTURE`, `hyrox-constants.ts:330`). No-test forecasts: Pro Singles man 1:20:05 to 1:14:21 (1:19:01 to 1:16:21 with VDOT 48 and the race-anchored run offset), Pro Singles woman 1:26:05 to 1:22:41, Pro Doubles men 1:09:22 to 1:05:24, Pro Doubles women 1:19:20 to 1:16:55.
+- Per-entry decay (implementer's probe, Open Singles woman, intermediate, VDOT 45, test values well away from the seeds): race 9 months old and 8 tests a week old 1:17:46 to 1:17:10; race 18 months old 1:18:56 to 1:17:10; race 18 months old with 4 race splits and 4 fresh tests 1:18:56 to 1:18:13 (the splits still decay); no race date and tests 10 months old 1:17:10 to 1:17:57; race 3 months old and tests 15 months old 1:17:10 to 1:18:39. Confidence unchanged in every case.
+
+**Limitations.**
+1. The composition is the race field's average split pattern at the athlete's percentile, not the athlete's own splits. Logged splits are not used, so the band stays a function of the finish alone and every band writer agrees (ISSUE-398 (i)).
+2. Each conversion is a cohort comparison: a pair is read as two athletes near the same place in their own singles fields, and the Pro and Open fields are assumed to differ on loaded work by the load alone (§DK).
+3. The band is coarse. An athlete near a cut-off takes the band median's seeds: the Pro Singles man at 1:20:00 plans advanced and his no-test forecast reads 1:14:21, faster than the race he ran (implementer's probe, confirmed by the reviewer; the reviewer measured an Open man at 1:18 forecasting 1:11:40 under lane H3b too; ISSUE-398 (e)).
+4. At the lane tip the onboarding initializer still banded on the global scale, so setup and the first plan could disagree (docs-pass probe at `5068d8b`: an Open Singles woman at 1:25:00 read advanced in setup and initialised intermediate). Resolved by lane H2 (`d8432d2`): the initializer reads `hyroxPlanningBandFor` (`initialization.hyrox.ts:144`) and both read advanced. Stored bands from before are kept (limitation 11).
+5. `bandFromVdot` (`hyrox-staleness.ts:58`) is one VDOT scale for both sexes, mirroring the global finish scale; it picks the band the stale-race seed blend leans toward (`race-prediction.hyrox.ts:599`), the initializer's staleness re-band (`initialization.hyrox.ts:194-196`) and, since lane H2 (`d8432d2`), a first-timer's band (`firstTimerBand`, `initialization.hyrox.ts:77`) (ISSUE-397 (a)).
+6. Per-entry decay reuses the race splits' curve, never calibrated for station tests or session bests. The confidence cap and the staleness note still read the race's age, so 8 fresh tests beside an 18-month-old race read low, and tests 15 months old can read high (ISSUE-398 (b)).
+7. A race split from a race with no date never decays; its history entry carries the log date, which the rule does not use (ISSUE-398 (h)).
+8. Two doubles-to-singles total conversions coexist: the planning band's per-component conversion to Open Singles terms, and the improvement ceiling's total-percentile `doublesTotalInSinglesTermsSec` to the race family's singles terms (`race-projection.hyrox.ts:400`). Docs-pass probe: 3 to 10 s apart for Open Doubles pairs at 1:10 to 1:20.
+9. A Mixed pair with no biological sex on file plans on the pooled Open Singles field.
+10. This merge did not bump `HYROX_GENERATOR_VERSION` (17), so stored plans kept the old station targets; lane H2 bumped it to 18 (`d8432d2`, `plan_engine.hyrox.ts:284`), and every stored plan regenerates once.
+11. Existing athletes keep their stored band until they log a previous time or correct its format. The v18 regeneration (lane H2) migrates session counts (`migratePreV18HyroxSessionCounts`, `hyrox-plan-regen.ts:64`) and does not re-derive the band (ISSUE-398 (a)).
+
+**Guards.** `hyrox-planning-band.test.ts` (13), `hyrox-staleness.test.ts` (17; 6 new), `hyrox-results.test.ts` (32; seed-field cases changed), `ui/hyrox/results-wiring.test.ts` (21; 5 new, jsdom), `ui/hyrox/benchmark-card-slot.test.ts` (10; 6 new), `ui/hyrox/doubles-stations-caption.test.ts` (30; 4 new), `ui/pb-age-surfaces.test.ts` (5; one assertion added), `state/hyrox-doubles-onboarding.test.ts` (16; one description changed). All pass at `d8432d2` (144 tests). Not device-verified.
 
 ---
 
@@ -8471,5 +9015,346 @@ Pair forecast (only with a pairTier and every loaded station of both partners at
 9. The 'tier' reason and the 'loads' withhold are reachable only by a row written outside the app's builder: every in-app snapshot at a matching setup is at the pair's tier.
 
 **Guards.** `hyrox-partner-compare.test.ts` (21), `hyrox-partner-snapshot.test.ts` (16: whitelist keys, no health or identity data from a state full of it, station seconds equal the Stats ledger, forecast lines equal the forecast, singles run pace, solo tiers per division), `ui/hyrox/partner-view.test.ts` (34, copy per case). Not device-verified.
+
+---
+
+## §DN — Triathlon and cycling taper: length by race distance, 0.55 then 0.30 of the reference week, quality kept, day-before rule (2026-10-13/14, lane tri-taper)
+
+Code comments cite this entry as "Triathlon and cycling taper rebuild".
+
+**Side.** Planning: taper length, volume, quality, frequency and race-week structure (`plan_engine.triathlon.ts`, `tri-taper.ts`), and the weekly load target that follows them (`planned-week-target.ts`, as §CH). Tracking: the forecast's taper weeks (`race-prediction.triathlon.ts`), which read the plan's taper. The literature cuts training volume and holds intensity; the plan applies those findings to prescribed minutes, and the forecast only reads how long the taper is.
+
+**Sources.** Meta-analyses: Bosquet, Montpetit, Arvisais & Mujika 2007 (Med Sci Sports Exerc; Table I read in Pyne et al. 2009), https://pubmed.ncbi.nlm.nih.gov/17762369/; Wang et al. 2023, https://pmc.ncbi.nlm.nih.gov/articles/PMC10171681/. Reviews: Mujika 2011 (tapering for triathlon, single-sport evidence); Pyne, Mujika & Reilly 2009, https://umh1617.umh.es/files/2016/05/Pyne-et-al.-2009.-Peaking-for-optimal-performance-invited-commentary.pdf. Trials and models: Neary, Bhambhani & McKenzie 2003 (Can J Appl Physiol 28(4):576-587); Thomas & Busso 2005 (simulation); Shepley et al. 1992 (via Friel); Coyle 1984; Billat 2001. Coaching (all opinion, medium confidence): Goeringer (TrainingPeaks coach blog 2021, updated 2026), Dave Scott (TrainingPeaks 2017, updated 2024; ACTIVE 2013), Friel (race week, from Shepley), Allen (triathlete.com, 70.3 and Ironman race week), Byrn (race week for 70.3 and Ironman), Alexander (TrainingPeaks 2022), Laidlow (220 Triathlon 2017), the Triathlete guide, Barth, Eriksson, Ricci, Dixon, Kropelnicki, Fitzgerald, Sutton. The research lanes (science, coaching, app audit at `d8bdff7`, synthesis, fact-check) are recovered in `docs/audits/agent-outputs/triathlon-taper-research__wf_d55ae5f5-f68.json`; the fact-check's corrections win over the synthesis except where Tristan or the orchestrator decided otherwise (one-week race week 0.55 against its lean of 0.50; long course capped at race intensity against its sub-threshold gate). Merged in `5068d8b`.
+
+**Supersedes.** For triathlon and cycling: taper length from plan length (`taperRatio`, cap 2; §Z, §CH taper position); race week as the weekly template at 0.30 of the hours with the week before's counts, one 30-min primer ride and aerobic swims (§CZ, §CE update 5); taper week 1 at 0.55 of the hours with `TRI_QUALITY_SLOTS` taper rows (run quality 0 at every distance, Ironman 0/0/0) under the sub-threshold gate (§CE model); the forecast's per-discipline `TRI_TAPER_WEEKS` (Taper Invariant entry of 2026-05-08, §BU); `TAPER_DAYS` (§BU); the weekly load target's 0.70 then 0.55 for these modes (§CH). The 0.55 and 0.30 numbers predate this lane as hours multipliers with no source (app audit: first engine commit `e925e88`); they now apply to the reference week per discipline, with sources.
+
+**Where.** `src/constants/triathlon-constants.ts` (`TRI_TAPER_WEEKS_BY_DISTANCE` `:133`, `CYCLING_TAPER_WEEKS` `:142`, `TRI_LOW_HOURS_THRESHOLD_H` `:155`, `TRI_LOW_HOURS_TAPER_DISTANCES` `:166`, fractions `:176-178`, `triTaperFraction` `:190`, `TRI_TAPER_MIN_SESSION_SHARE` `:199`, `triRaceTaperWeeks` `:206`, `computeTriPlanPhases` `:407`); `src/workouts/tri-taper.ts` (constants `:45-142`, session builders `:156-540`, `composeTriRaceWeek` `:671`, `composeTriRaceWeekWithClosing` `:688`, `slotFlow` `:1081`); `src/workouts/plan_engine.triathlon.ts` (`triTaperOpts` `:717`, `triRaceTaper` `:752`, `triReference` `:769`, `triStateAtWeek` `:796`, `triAsTrained` `:805`, `triTrainedReference` `:827`, `generateWeekForTriathlon` `:890`, `spreadTaperDoubles` `:965`, `fitTaperSlots` `:1049`, `triTaperWeekOne` `:1096`, `triRaceWeek` `:1238`, `triEffortScalesWeek` `:320`, `taperWeekKeepsDisciplines` `:522`, `reseatEasedQualityRuns` `:471`); `src/workouts/tri-intensity-profile.ts` (`TRI_QUALITY_SLOTS` `:63`, `TRI_TAPER_INTENSITY_CEILING` `:160`, `CYCLING_TAPER_INTENSITY_CEILING` `:178`, `triTaperCeiling` `:189`); `src/workouts/race-week-layout.ts` (`triPlanTaperWeeks` `:248`); `src/calculations/race-prediction.triathlon.ts:170`; `src/calculations/planned-week-target.ts:192`; `src/calculations/fitness-model.ts` (`taperFractionOf` on `computePlannedWeekTSS` `:1198` and `computePlannedSignalB` `:1253`); `Workout.taperRole` (`src/types/state.ts:146`).
+
+**Model.**
+
+```
+taper weeks T     = triRaceTaperWeeks(distance, { cyclingOnly, lowHours })
+                    sprint 1; olympic, t100, 70.3, ironman 2; cycling 2
+                    lowHours (sprint, olympic only): ref training < 8 h → 1
+                    plan shorter than T + 2 weeks → plan-length rule (1 week)
+reference week    = last base/build/peak week before the taper, not a 4-week-cycle deload,
+                    generated before any race-window cut, deload and holiday ignored
+ref_d (minutes)   = reference week's discipline-d minutes as trained:
+                    generated minutes × m_d (effort multiplier, 0.85 to 1.15, no CTL-gap stamp),
+                    brick legs in their discipline (scaled with the brick's bike multiplier),
+                    commutes and gym excluded;
+                    m_d read at state.w for current and later weeks, at state.w = that week for a past one
+f(week)           = triTaperFraction(weekInTaper, T):
+                    T = 2: 0.55 (taper week 1), 0.30 (race week); T = 1: 0.55
+budget_d          = f × ref_d                       (race excluded, as the studies end the taper at the test)
+mean cut          = 1 − (0.55 + 0.30)/2 = 57.5% (two weeks); 45% (one week)
+                    running's 0.70/0.55 would give 37.5%
+
+taper week 1      = every reference session at f × its minutes, then fitTaperSlots per discipline:
+                    session starts at its share; quality rises to its need (no longer than its
+                    reference session, except up to its 4-min-floor minutes); excess comes off the
+                    longest aerobic sessions to the 20-min floor, then quality to need, then quality
+                    to its minimal set; when nothing more can come off, the week stays above budget
+  short course    need = 75% of the reference structure's reps inside the shortest warm-up/cool-down
+  long course     need = minimal = 3 × 90 s race pace (31 min for a run or ride); reps held =
+                    min(targetReps, what the minutes hold), targetReps = round(min(12, 0.75 × refWork)/1.5) ∈ [3, 8]
+  cycling         need = minutes whose library reps hold 0.75 × the reference ride's work (≤ ref)
+race week         = composeTriRaceWeek: brick → day-before lower bounds → openers → aerobic counts
+                    (max flow, cuts, 80% top-up) → placement → week-before cap → day-before sizing
+weekly target     = Signal A: baseline × f;  Signal B: runningOnly × f + crossTrainingBudget (unscaled)
+forecast taper    = triPlanTaperWeeks (the plan's trailing taper; swim, bike, run alike)
+```
+
+| Distance | Taper weeks | Taper week 1 | Race week | Intensity ceiling | Race-week brick |
+|---|---|---|---|---|---|
+| Sprint | 1 | (none) | 0.55 | short efforts (30:30 rides, speed swims; runs at threshold) | no |
+| Olympic | 2 (1 under 8 h) | 0.55 | 0.30 (0.55 when 1 week) | short efforts | no |
+| T100 | 2 | 0.55 | 0.30 | race pace (implementer's extension) | yes (implementer's extension) |
+| 70.3 | 2 | 0.55 | 0.30 | race pace | yes, when the budget holds it |
+| Ironman | 2 | 0.55 | 0.30 | race pace | yes, when the budget holds it |
+| Cycling | 2 | 0.55 | 0.30 | sweet spot or tempo | no |
+
+**Race week, step by step** (`composeTriRaceWeekWithClosing`; one session per discipline a day, at most two training sessions a day):
+1. *Brick* (long course): Byrn's 60 min (45-min ride, 15-min run, 2 × 90 s builds per leg) on the opener-window day nearest the race (3 days out for a Sunday race), when the bike budget holds 45 min and the run budget 15. Thin weeks (70.3 at 4 h) have none.
+2. *Day-before lower bounds* (a 20-min ride when the bike budget after the brick holds 20; a 5-min run) come off the budgets, in race week or the closing week alike. Two days out stays empty.
+3. *Openers* on the days 5 to 3 out (`PRIMER_MAX_DAYS_OUT`, `PRIMER_MIN_DAYS_OUT`), one per day, as many 90 s repeats as days to go, fewer when the budget is thin, never below 3; with fewer openers than window days they take the days nearest the race. Order: run, bike, swim; long course with a brick: run, swim; cycling: a ride on every window day. An opener never takes the only training slot of a discipline with no in-week activation and no brick (a Thursday race has one training day, two slots). When no budget holds an opener, race week still gets one at 3 × 90 s, in the discipline whose minimal opener overshoots its remaining budget least. Each opener grows to the equal share of its discipline's budget, within the race-week cap. Openers are typed by their steady content (an endurance ride, an easy run, an endurance swim) and priced at that rate.
+4. *Aerobic counts*: the reference count less the brick and openers, each session no longer than the reference week's average session in its discipline and the race-week cap, at most the whole number of 20-min sessions the budget holds. A max flow from disciplines to days decides what fits; sessions that cannot fit come off one at a time, the cut that moves its discipline least from its fraction first, never a discipline's last. While race week holds fewer than 80% of the reference sessions (the race counts as one, each day-before activation as one, a closing-week activation included), one more session in the discipline it overshoots least: frequency wins over the floor.
+5. *Placement*: nearest 6 days out first (the Monday of a Sunday race), the discipline with the fewest free days first. The athlete's day caps (their normal week's weekday and weekend hours, with the scheduler's 15-min tolerance) choose the day: the first with room, else the one with the most room, at full length.
+6. *Week-before cap* (one-week taper): race week holds no more than the week before as generated (injury gates and scheduler applied, before the race window), read as trained. Aerobic sessions come down toward the floor, then the shortest go, while frequency and every discipline hold; openers and the activations' lower bounds win over the cap.
+7. *Day before*: ride and run at their lower bounds, else the ride alone, else the run alone, else neither, the week rebuilt for each choice. The first choice that keeps the day the lightest (minutes and load) and keeps every discipline wins; with none keeping every discipline, the first that fits. Both then grow toward 30 and 10 min with budget left, while the day stays the lightest, no activation outruns the week's longest training session and the week stays under the week before. A Tuesday or Wednesday race's activation goes to the closing week (Monday or Tuesday), sized the same way, after the closing week's injury gates (`triGates` at the closing week).
+8. *Commitments* (`triRaceWeek`): commutes on weekdays 3 or more days out without a run, the days holding the fewest sessions first; gym on days 4 or more out holding fewer than 2 sessions, commutes counted; either is left out when no day qualifies.
+
+**Constants.**
+- `TRI_TAPER_WEEKS_BY_DISTANCE` sprint 1, Olympic 2, 70.3 2, Ironman 2 (Tristan, 2026-10-13); T100 2 (implementer's default, no source: the value of both neighbours); `CYCLING_TAPER_WEEKS` 2 (Tristan's cycling scope, 2026-10-13). Evidence: 8 to 14 days had the largest effect (Bosquet ES 0.59, p = 0.0005; Wang SMD −1.47 on 18 athletes); 7 days or less also helped, modestly (Bosquet ES 0.17, ns; Wang SMD −0.36, p = 0.01, 105 athletes). Coaching: sprint 3 to 8 days (Dixon, Eriksson; Kropelnicki avoids exactly 7); Olympic about 3 to 14 days, most often about 10 (the Triathlete guide, Eriksson, Ricci, Dixon); 70.3 about 2 weeks (Barth, Eriksson; Allen effectively 3); Ironman mostly 2 to 3 weeks (Fitzgerald and Goeringer 2; Barth 3; Dave Scott 22 days). No study keys taper length to race distance; distance is a proxy, and the moderator with some support is pre-taper load (Thomas & Busso 2005).
+- `TRI_LOW_HOURS_THRESHOLD_H` 8: Goeringer (under 8 h a week, 2 to 3 light days stand in for a taper of 2 to 3 weeks), read as total weekly training. Race week's last two days are light (rest 2 days out, activation the day before), the low end of his 2 to 3; the rest day itself comes from Friel and Allen (Goeringer avoids full rest days). No source gives low-hours fractions, so race week takes the one-week 0.55. `TRI_LOW_HOURS_TAPER_DISTANCES` sprint, Olympic: orchestrator decision of 2026-10-14, because Goeringer puts the longest Ironman run about 3 weeks out and the longest ride about 2, and Dave Scott the last long run 18 to 22 days out and the last long ride 14 to 21. Dave Scott's hour tiers (from 11 h a week) are not used: they start above 8 h and his ACTIVE 2013 article gives different numbers.
+- `TRI_TAPER_FIRST_WEEK_FRACTION` 0.55, `TRI_RACE_WEEK_FRACTION` 0.30, `TRI_ONE_WEEK_TAPER_RACE_WEEK_FRACTION` 0.55 (Tristan, 2026-10-13): the 41 to 60% band had the largest effect in both meta-analyses (Bosquet ES 0.72; Wang SMD −0.77). Between-band differences are not established (Wang p = 0.32), and 21 to 40% was also positive (Bosquet ES 0.27, p = 0.02). The band is read as a total cut across the taper against pre-taper training (Mujika 2011). The one-week 0.55 matches running's one-week `taperFraction` (`phases.ts:165`); the fact-check leaned to 0.50 (Neary 2003 tested exactly 50%; Fitzgerald and Byrn ask for at least a 50% cut).
+- `TRI_TAPER_MIN_SESSION_SHARE` 0.8: Mujika 2011 (frequency above 80%, a review for triathletes on single-sport evidence) and Pyne 2009 (cut frequency about 20% at most). Narrative reviews, medium confidence; the meta-analyses found no significant between-group difference (Wang p = 0.42).
+- `TRI_TAPER_SESSION_FLOOR_MIN` 20 (`tri-taper.ts:45`): the generators' own floor; inside Goeringer's very short taper sessions of 10 to 20 min and equal to Allen's 20-min race-week run. Below the 30-min training-week floor so a 0.55 or 0.30 week keeps its sessions.
+- `TRI_TAPER_QUALITY_WORK_SHARE` 0.75 (`:85`): Goeringer's 8 × 800 m becoming 6 × 800 m two weeks out (and 4 in race week); 6/8 = 0.75. Applied to cycling's sweet spot and tempo rides as for short course (`5b2aeb4`, the implementer's application).
+- `TRI_TAPER_MAIN_SET_MIN_MIN` 4 and `TRI_TAPER_RACE_PACE_SET_MAX_MIN` 12 (`:91-92`): Dave Scott's taper sets 9 to 3 days out, 4 to 12 min of work in 30 to 90 s segments. They give `TRI_RACE_PACE_MIN_REPS` 3 (`:220`, 3 × 90 s = 4.5 min) and `TRI_RACE_PACE_MAX_REPS` 8 (`:222`), and `TRI_TAPER_MICROS_MIN_REPS` 4.
+- `TRI_RACE_PACE_REP_SEC` 90 and `TRI_RACE_PACE_RECOVERY_MIN` 3 (`:79-80`): Friel's race week (5, 4 and 3 × 90 s on the days 5, 4 and 3 out, at least 3 min recovery), adapted from Shepley 1992's runners; 90 s is also the short end of Dave Scott's taper repeats (90 s to 3.5 min, 22 to 10 days out).
+- Day before: `TRI_DAY_BEFORE_RIDE_MIN_MIN` 20 / `MAX` 30 (the Triathlete guide's 20 to 30 min spin; Allen 30; Byrn under 30); `TRI_DAY_BEFORE_RUN_MIN_MIN` 5 / `MAX` 10 (Byrn 5 to 15; Allen 10); 5 × 10 s pickups (Allen) (`:51-60`). The 10-min run cap is Tristan's decision of 2026-10-13 (the conservative sourced values, Allen's 30 and 10 min) over the fact-check's corrected 10 to 15 min.
+- `TRI_RACE_WEEK_REST_DAYS_OUT` 2 (`:65`): Friel; Allen (Friday off for a Sunday race); Byrn makes it the lightest day; Goeringer dissents.
+- `TRI_RACE_WEEK_BRICK_TOTAL_MIN` 60, `_RUN_MIN` 15, `_BUILD_REPS` 2 (`:70-72`): Byrn's Thursday brick before a Sunday race (60 to 120 min, run capped at 30, 15 fine, 2 × 90 s builds per leg), at the conservative end. Byrn wrote it for 70.3 and Ironman; T100 gets it as the implementer's extension.
+- `TRI_RACE_WEEK_SESSION_CAP_MIN` run 45, bike 90, swim 45 (`:105`): Byrn's Tuesday run of 30 to 45 min (Allen's longest race-week run 40); Allen's longest race-week rides (Ironman, 90 min on Monday and Thursday); Byrn's Monday swim at its novice tier (45 of 45, 60, 75 min).
+- `TRI_RACE_WEEK_MAX_SESSIONS_PER_DAY` 2 (`:111`): every day of Allen's race week except his swim, bike and run 3 days out, whose slot the plan gives Byrn's brick, and his short swim, ride and run the day before, which are activations and not counted.
+- Warm-up and cool-down minima (`:129-133`): bike 15 + 5 min (the library's tempo and sweet spot variant 0; its VO2 micro-intervals use 20 + 10); run 15 + 5 (the tri run library uses a 10-min cool-down; the 5 min comes from the bike variant 0 and the HYROX run sessions); swim 200 + 200 m (every library swim).
+- Library reference structures (`:139-142`): VO2 micro-intervals variant 1, 15 × 30:30 at 118% / 50% FTP (`TRI_TAPER_MICROS_REPS` 11, `:362`); threshold run variant 1, 4 × 6 min with 90 s jog (`TRI_TAPER_THRESHOLD_REPS` 3, `:404`; need 45 min after rounding to the run library's 5-min step); CSS (100 m, 6 to 16 reps) and speed (50 m, 6 to 12 reps) swims at the reference length (`triTaperSwimPlan`, `:429`); sweet spot and tempo variant 0's 6-min rep floor (`:393`, one-rep ride 26 min).
+- `BIKE_STEADY_PCT_FTP` 0.65 (`:118`): the bike library's endurance target. Race-pace targets: `RACE_INTENSITY_BY_DISTANCE` (`bike-physics.ts:99`): sprint 0.88 and Olympic 0.83 (Coyle 1984 fractional utilisation), 70.3 0.78 and Ironman 0.70 (Allen & Coggan guidance), T100 0.76 placed just below 70.3 with no source (`04b6ae1`); cycling openers at `CYCLING_EVENT_INTENSITY_FACTOR` (`triathlon-constants.ts:691`). Ride type follows the zone (`bikeKindForIntensity`, `tri-taper.ts:165`: endurance below 0.76, tempo to 0.88, sweet spot above).
+- Intensity ceilings (`tri-intensity-profile.ts:160`, `:178`): 'short_efforts' for sprint and Olympic (Laidlow keeps 30:30 sessions in the taper; VO2 micro-intervals, Billat 2001; speed swims; runs stay at threshold, the run library has no short-effort session); 'race_pace' for T100, 70.3 and Ironman (Alexander: taper sessions at target race intensity; his race-pace cap quote is from a search snippet, medium confidence); 'sub_threshold' for cycling (the fact-check's corrected ceiling, kept by the orchestrator on 2026-10-14).
+- Existing, reused: `PRIMER_MIN_DAYS_OUT` 3, `PRIMER_MAX_DAYS_OUT` 5, `RACE_DAY_CLEAR_DAYS` 6, `RACE_DAY_HARD_SPACING_DAYS` 13, the scheduler's 15-min day-cap tolerance, `TRI_EFFORT_MULT_BOUNDS` 0.85 to 1.15 (`triathlon-constants.ts:556`; m = 1 − 0.05 × score).
+- Product rules and app inferences (no literature): one session per discipline a day (a product rule, §CZ; taper frequency counts separate days); race week adds no session in a discipline the reference week never trains; no race-week aerobic session longer than the reference week's average session in its discipline (`2630783`; an opener at its 3-repeat minimum can exceed it); opener order run, bike, swim (from the order coaches taper volume); the fallback opener; the 31-min race-pace floor past a 30-min reference session (`444ebd6`); the closing-week activation counts toward race week's frequency and does not stand in for a race-week discipline.
+
+**Long-course race-pace dose (taper week 1).** Each reference quality session of T100, 70.3 and Ironman becomes a race-pace session: steady work (0.65 FTP, easy run pace, steady swimming) with 90 s repeats at race intensity and 3 min easy between. The session is sized at its share (0.55 × its reference minutes), raised to the 3-repeat minimum when the share is shorter, and holds as many repeats as fit, up to `triRacePaceTargetReps` (`racePaceSlot`, `plan_engine.triathlon.ts:1111-1118`, need = minimal). Steady sessions give minutes only to reach the 3-repeat minimum; they never shrink to reach the 75% target, which short course and cycling do reach. Delivered race-pace work, 4.5 to 12 min, stays inside Dave Scott's 4 to 12 min. The long run's 0.55 share has support: Dave Scott's run 9 days out is 35 to 50% shorter than the last long run, 0.50 to 0.65 of it. The long ride's 0.55 share and the rule against cutting steady minutes to fund repeats are app inferences. For Ironman, race intensity (0.70 FTP) sits near the steady target (0.65), so the repeats change the stimulus little (an app reading); for 70.3 (0.78) and T100 (0.76) the repeats are tempo work inside an endurance ride, and that reading does not apply.
+
+**Decisions.**
+- Tristan, 2026-10-13: (1) taper length by race distance, not plan length: sprint 1 week; Olympic, 70.3 and Ironman 2 weeks; cycling stays 2. (2) Keep 0.55 then 0.30 of the reference week for two-week tapers (a 57.5% mean cut, inside Bosquet's 41 to 60% band; mirroring running's 0.70/0.55 would give 37.5%), and 0.55 for a one-week race week. (3) Low-hours athletes get the coaches' shorter taper. (4) Keep quality work in the taper ("do what the best coaches do"), with 70.3 and Ironman capped at race intensity. The build brief's further decisions of the same date, as the code comments and reviews quote them: frequency at least 80% and no discipline at zero in any taper week; race week with bigger sessions early to mid-week, the last two days lightest and a moderate brick per Byrn; conservative sourced day-before values; the forecast reads the plan's taper.
+- Orchestrator, 2026-10-14: (1) the low-hours taper applies to sprint and Olympic only (`9617c7f`); (2) the effort multiplier and CTL-gap re-anchor leave the taper weeks alone (`6bc04a3`, `90cbb25`); its review showed this delivered 0.55/m and 0.30/m of the week trained, and the fixer chose to size the taper from the reference week as trained (`26183cf`; the science reviewer asked for the orchestrator's confirmation, ISSUE-400 (a)); (3) a Tuesday or Wednesday race's closing week holds the day-before activation and nothing else (`6fe94ce`); (4) the weekly load target reads `triTaperFraction`, one source for one quantity (`e56775e`); (5) no em dash in copy the lane touches; (6) keep the implementer's defaults and document them: race-week caps as sourced, cycling's sub-threshold ceiling, the frequency count, and the T100 race intensity logged, not changed.
+- Implementer's extensions, not Tristan's decisions: T100's 2-week length, race-pace ceiling and race-week brick (decision 4 named only 70.3 and Ironman; Byrn wrote his brick for 70.3 and Ironman; no source covers T100), kept under orchestrator decision 6; the items listed under product rules above.
+
+**Why defensible.** Keeping intensity has the strongest taper evidence: cutting it gave ES −0.02 against 0.33 for keeping it (Bosquet), and in Wang (negative SMD favours the taper) −0.55 kept against +0.25 cut. The volume fractions sit in the band with the largest pooled effect, and each discipline's delivered minutes land on them. One table sets the taper's length for the plan, the forecast and the weekly target, so the three cannot disagree on which weeks are taper weeks (they disagreed before: the forecast gave the Ironman run 3 weeks while the plan capped at 2, and the coach target used 0.70/0.55 while the plan built 0.55/0.30). Sizing from the reference week as trained follows Mujika 2011's definition (the cut is against pre-taper training) and matches running, whose taper weeks take the effort lever directly. Race-week structure, the day before and the brick have no controlled study; they follow the cited coaches at their conservative ends.
+
+**Mirror rule (running and HYROX).** Running keeps `taperFraction`, 0.70 then 0.55 over two taper weeks (0.75, 0.65, 0.55 over three; 0.55 for one), as its weekly load target and the sharpening block's taper (`phases.ts:165-169`); its full-plan generator scales each taper session instead (easy × 0.70, threshold × 0.60, VO2 × 0.50, long run 0.65 × the longest of the last 4 weeks; `plan_engine.ts:429`, `:497`, `:513`, `:534`, `:547`). The research app audit's probe at `d8bdff7` put running's delivered taper at 0.66 then 0.26 to 0.38 of the peak week (a 48 to 54% mean cut, derived), inside the band, so the fact-check proposed no running change. The triathlon and running tapers therefore differ in mechanism (reference-week fractions against per-session scalars) with similar delivered depth. The effort lever now matches: `d5a7f39` named running's taper, which takes its effort multiplier, as the mirror-rule difference while the tri taper skipped it, and `26183cf` closed that gap through the reference week (and replaced the comment). The CTL-gap lever still differs: running's taper weeks take it (`adaptiveVolumeMultiplier`, `plan_engine.ts:646`), the triathlon taper does not (ISSUE-400 (b)). HYROX (lane H2, merged in `d8432d2`) tapers 2 weeks at every plan length that holds them (`HYROX_TAPER_WEEKS_MIN`, `hyrox-constants.ts:123`) at `taperFraction`, 0.70 then 0.55 of its reference week's planned minutes (the last week before the taper that is neither taper nor deload; `plan_engine.hyrox.ts:2519`, `:2587`): a nominal 37.5% mean cut. Delivered, about 38% (taper week 1 median 0.70 and race week median 0.55 of the reference week's minutes; docs-pass probe at `d8432d2`, 629 Open Singles plans over every band, 8 to 24 weeks and the hours grid of `plan_engine.hyrox.rules.test.ts`), in the weaker 21 to 40% band, against triathlon's 57.5%. Its levers reach the taper as triathlon's do, through the reference week's planned minutes (effort applied to weeks from `s.w` on, `:2559`), with the MTL-gap re-anchor suppressed in taper weeks (`:2564`). Mirror evaluated in the docs pass: no change was made, and the decision is open (ISSUE-383, ISSUE-400 (t)).
+
+**Effect.** Test-pinned (`tri-taper-effort.test.ts`, 80 rated plans: sprint, Olympic, 70.3 and Ironman at two hour levels, cycling at 10 and 14 h, 12 and 16 weeks, Sunday and Wednesday races, multipliers 0.85 and 1.15): the stored reference week scales by the multiplier (within 0.03); taper week 1, or a one-week race week, sits within 0.03 of 0.55 of it; a two-week race week at 0.27 to 0.37; the two-week mean at 0.40 to 0.59. `tri-taper-rules.test.ts`: per-discipline minutes on the fraction within one 20-min session for Sunday and Monday races (with stated exceptions), mean fraction at least 0.40, 80% of sessions as counted, quality count kept, race-pace 3 to 8 × 90 s, long course never above race intensity, cycling never above sweet spot, day before 20 to 30 and 5 to 10 min and lighter than every earlier race-week day, caps, two a day, no discipline at zero for every race weekday. Known gaps pinned in the same file: a Thursday 70.3 (16 weeks, 10 h) and a Friday 70.3 average below 0.40 over the two taper weeks, and the Thursday race week trains on Monday only; a Saturday cycling plan (16 weeks, 10 h) averages 0.37 to 0.40 and an Ironman at 25 h below 0.35; a one-week Ironman race week at 25 h cannot hold 0.55 under the 45-min run cap; a one-week Olympic race week of openers sits above a deload week before it. `planned-week-target.test.ts`: Signal A from a 400 baseline reads 220 then 120 (one-week 220); Signal B 594 base, 510 then 460; the AI Coach race-week figure 116 (385 × 0.30) against HYROX's 212 (385 × 0.55).
+Attributed probes: before, at `d8bdff7` (research app audit, Sunday race, no gym or commute, 70.3 split): sprint 12 weeks race week 120 min (0.33); sprint 16 weeks 107 (0.295) then 60 (0.165, no run); Olympic 16 weeks 8 h one taper week of 211 (0.44); 70.3 10 h 330 (0.549) then 134 (0.223); Ironman 16 h 533 (0.555) then 250 (0.26); cycling 10 h 332 (0.551) then 177 (0.294). After, default split, Sunday to Wednesday, plans of 6 weeks or more (correctness reviewer's sweep at `ba5e09b`): taper week 1 median 0.550, race week 0.304, two-week mean 0.427 (0.400 to 0.592). At multipliers 0.85 and 1.15 (verification fixer's 552-plan probe at `dfe3b76`, 128 two-week plans each): taper week 1 0.546 to 0.565 and 0.544 to 0.555, race week 0.296 to 0.368 and 0.270 to 0.340, mean 0.423 to 0.462 and 0.410 to 0.443. Spot checks (science reviewer at `ba5e09b`): Olympic 16 weeks 8 h taper week 1 delivers 264 min against a 266-min target with 2 × 11 × 30:30 rides, a 3 × 6 min threshold run and CSS and speed swims; a low-hours Olympic one-week race week 168 min against 167; an Ironman 7 h race week holds run and swim openers, the brick 3 days out and a 5-min jog the day before. Forecast (tracking; science reviewer at `ba5e09b` against `d8bdff7`, 16 weeks, Sunday race): Ironman 7 h 27 s faster, 70.3 7 h 8 s slower, T100 6 h 5 s slower, plans that already tapered 2 weeks; no forecast figure is test-pinned beyond the Monday to Wednesday parity bound (0.5%).
+
+**Limitations.**
+1. *Evidence base.* Neither meta-analysis includes triathletes, their events last minutes to under about an hour, and event length was never tested, so the 8 to 14 day optimum is untested for 70.3 and Ironman (4 to 17 h). Triathlete trials are small (11 to 33 trained men).
+2. *Per-discipline depth* is uniform; coaching cuts the run deepest. No study tapers disciplines differently in one athlete (the fact-check left the ordering to Tristan).
+3. *Race week as a full week.* Averaging the two taper weeks treats race week as a full training week; it has at most 6 training days.
+4. *Sessions counted.* Race-week frequency counts the race and each day-before activation (the closing-week one included), while the volume rule leaves the race out because the studies end the taper at the test. Mujika's 80% concerns training sessions. On training sessions alone, 113 of 380 Sunday triathlon race weeks of 6 weeks or more fall below 80% (minimum share 0.71; fixer's sweep at `ba5e09b`, default split). Kept by the orchestrator, 2026-10-14.
+5. *Floors push thin weeks up.* A reference week of 90 to 110 min of swim, bike and run holds taper week 1 at about 0.67 (three 20-min sessions) and the two-week mean at 0.61 to 0.69, above the band: two-week plans above 0.60 numbered 328 of 3,737 with gym, 514 with commutes, 436 with both, 0 at the default split (fixer's sweep at `ba5e09b`). One-week race weeks at the default split: 290 of 1,221 above 0.60 of the reference week, up to 0.73 (a 27% cut), on references of 93 to 182 min (sprint and Olympic at 3 to 4 h; same sweep). At multiplier 0.85, T100 and 70.3 at 4 h, Tuesday or Wednesday race, 7 weeks: mean 0.665; sprint 4 h one-week race weeks: Sunday 0.507 at m 1.0 and 0.597 at m 1.15, Wednesday 0.645 at m 1.0, 0.718 at m 0.85 and 0.597 at m 1.15 (verification fixer's probe at `dfe3b76`). The 21 to 40% band still showed a positive effect (Bosquet ES 0.27, p = 0.02).
+6. *High hours.* Caps bind: a one-week Ironman taper at 25 h cannot hold 0.55 (test-pinned); two-week race weeks too, Ironman 25 h at m 1.15 race week 0.270 and mean 0.410 (verification fixer at `dfe3b76`), Ironman 30 h at m 1.15 19 of 1,900 Sunday to Wednesday plans below the band, mean 0.393 to 0.398 (correctness reviewer at `ba5e09b`).
+7. *Week-before cap* (one-week taper): a deload right before race week holds race week to its minutes, and the trim drops whole floor sessions; an openers-only race week can still sit above a thin week before (test-pinned case). The cap is read as trained, so it moves with the effort multiplier.
+8. *Thursday to Saturday races* (ISSUE-364): the race window cuts taper week 1 and race week has 1 to 3 training days. Default split, two-week plans of 6 weeks or more, out of 417 triathlon and 95 cycling plans per weekday (fixer's sweep at `ba5e09b`): below the band Thursday 360 and 95, Friday 360 and 95, Saturday 38 and 94; taper week 1 loses the quality count Thursday 360 and 95, Friday 265 and 19, Saturday 0 and 19.
+9. *Tuesday and Wednesday thin weeks*: race week keeps its own session per discipline, so with the closing-week activation it can sit a few minutes above taper week 1 (2 plans per weekday at the default split, 41 with gym, 100 with commutes; fixer's sweep at `ba5e09b`).
+10. *Weekend onboarding*: a Friday to Sunday onboarding with a Monday to Wednesday race 2 weeks out makes race week the partial first week. Sunday onboarding, default split: 135 plans with a discipline at zero (Monday race 31, Tuesday 91, Wednesday 13) and 84 below 80% as counted; with 2 gym sessions 138 and 77; Friday onboarding 32 below 80% (correctness reviewer at `ba5e09b`). No fix is possible inside that week.
+11. *Few weekday hours*: spilled sessions land on days marked 0 h; taper week 1 holds a 3-session day in 646 of 1,024 two-week Sunday and Monday plans at 0 h weekdays (fixer's sweep at `ba5e09b`); the reference week has the same pattern (§CZ limitation 9, ISSUE-379). Race-week commutes are not counted toward the two-a-day limit.
+12. *Long-course race-pace dose* (above): repeats below the 75% target while a same-discipline steady session sits above 20 min, default split, Sunday to Wednesday two-week plans of 6 weeks or more (science reviewer at `d5a7f39`): bike T100 275 of 456, 70.3 280 of 456, Ironman 228 of 532; run T100 304, 70.3 304, Ironman 228. Example: 70.3 16 weeks 10 h holds bike 5 × 90 s and run 4 × 90 s against 8 each, beside a 65-min steady ride and a 60-min long run.
+13. *Ironman taper quality sits in Z2*: race intensity 0.70 FTP is in the endurance zone, so the race-pace ride is typed bike_endurance (taper RPE 3), its repeats 5% FTP above the steady target. Cycling's race-week openers at 160 to 300 km (IF 0.62 to 0.74) are endurance rides too.
+14. *Cycling evidence*: Neary, Bhambhani & McKenzie 2003 randomised 11 male cyclists to a 7-day step taper cutting volume 30, 50 or 80% with intensity held at 85% VO2max; only the 50% group improved (+5.4% on a 20 km time trial). A short near-threshold event bears less directly on 160 to 300 km events.
+15. *Effort multiplier*: for the current and later taper weeks the athlete's current multiplier stands in for the one the reference week was baked with (it is not stored). A past taper week is read at the multiplier in force when it was current (`triStateAtWeek`), which assumes race week was last built at the rollover rebuild (`next()`, `events.ts`). A rating or late-synced actual for a week before race week, changed after race week's last build, moves that read, and a single-week rebuild of the closing week then (the injury modal, `src/ui/injury/modal.ts:510`) can differ from the stored race week. `advanceWeekToToday` moves `s.w` without rebuilding, so a jump from taper week 1 straight into the closing week leaves race week last built while taper week 1 was current, which breaks the same assumption. Full regenerations rewrite race week and the closing week together. A stamped per-week multiplier (`wk.triEffortMultAtBuild`, not built) would remove the assumption.
+16. *Mirror rule*: running's taper weeks take both volume levers (effort and CTL gap, `adaptiveVolumeMultiplier`, `plan_engine.ts:646`); the triathlon taper takes the effort multiplier through its reference week and skips the CTL-gap stamp (ISSUE-400 (b)).
+17. *Weekly target*: Signal A and B apply the fraction to the athlete's baseline TSS (a history median), the generator to the reference week's minutes. Signal B applies it to its running term only (`computePlannedSignalB`, `fitness-model.ts:1253`; the `sportBaselineByType` budget is added whole): a triathlete with synced rides and swims reads race week at 0.77 of a base week (460 against 594, test-pinned) while Signal A reads 0.30. In cycling mode almost all of Signal B is the cycling budget and its running term is near zero, so the race-week settle target stays near a base week (science reviewer's reading, not test-pinned). Signal B shows no number in these modes; it judges the week-end and launch settle of `unspentLoadItems` (`events.ts:1248`, `persistence.ts:461`). Open (ISSUE-317 (c), ISSUE-400 (j)).
+18. *Matcher*: the triathlon matcher falls back to any unmatched same-discipline slot in the week (`activity-matcher.triathlon.ts:81-82`), so a Tuesday or Wednesday race's bike or run leg can match a skipped 20-min spin or 5-min jog in the closing week (ISSUE-400 (i)).
+19. *Pricing*: openers are priced at their steady type's rate, taper-week-1 race-pace rides at the race-intensity zone's rate over the whole session; the day-before jog's load is stored to a tenth. Race-pace runs and swims carry no pace number.
+20. *Commutes in a thin long-course week*: T100 and 70.3 at 4 h with 2 gym sessions and three bidirectional commutes leave the reference week no swim, bike or run, so the taper is gym and commutes alone (a generator issue outside the taper; ISSUE-400 (m)).
+21. *No study* covers the day before, the race-week brick or race-week structure.
+22. Not device-verified.
+
+**Guards.** `state/tri-taper-rules.test.ts` (43), `state/tri-taper-effort.test.ts` (7: discrimination checked by the verification fixer: the 5 matrix tests fail at `d5a7f39`, the 2 walk tests at `ba5e09b`, all pass at `dfe3b76`; the reviewer's mutations of the multiplier mapping and of `triAsTrained` fail all 5 matrix tests), `workouts/tri-taper.test.ts` (32), `state/tri-race-week.test.ts` (16), `state/race-plan-race-week.test.ts` (93), `state/race-closing-week-forecast.test.ts` (15), `state/race-window-forecast.test.ts` (21), `calculations/planned-week-target.test.ts` (28), `ui/race-day-card.test.ts` (8), `workouts/plan_engine.triathlon.test.ts` (34), `state/tri-plan-regen.test.ts` (6), `constants/tri-distance-completeness.test.ts` (3). Not device-verified.
+
+---
+
+## §DO: HYROX race plan and where you lost time: peers from the real band medians, one fast-end floor per component, feasibility on the forecast's likely range, the Roxzone at the goal (2026-10-20, lane rp)
+
+**Side.** Tracking: the peer reference, "Where you lost time" and the race plan's forecast column describe the field and a race already run. Planning: the race plan's goal splits prescribe race-day pacing. Goal feasibility grades a prescription against a tracking band (the forecast's likely range). Nothing here changes the training plan or the forecast; `predictHyroxRace` is unchanged.
+
+**Sources.** The HYROX results tables (`src/data/hyrox-results-s79.ts`, §DJ, §DK): `HYROX_S89_BAND_SEEDS` (`:1427`), the median split of every segment (run total, 8 stations, Roxzone) among the finishers of each of 5 bands per cohort, band edges at the field's p1, p25.3, p73.5 and p92.9 (`HYROX_S89_BAND_FIELD_PERCENTILES`, `:1417`); `HYROX_S89_PERCENTILES` (`:420`), each segment's distribution, whose first row is p1 in every published cell; `HYROX_S79_RUN_LEG_MEDIANS_SEC` (`:653`), the median of each 1 km leg over seasons 7 to 9, the only per-leg data. Bowley's quartile skewness (its numerator (p75 − p50) − (p50 − p25)). The largest-remainder (Hamilton) rounding rule. The forecast band `hyroxForecastBandPct` (§BY). The headroom-weighted back-calculation (ISSUE-196). One new constant, `HYROX_LOSE_TIME_MATERIAL_SEC` = 15, from the method's own measured disagreement (below; pending Tristan's sign-off, ISSUE-402 (d)).
+
+**Supersedes.** The back-calculation's floors (the pooled Open Singles competitive seed × the line's team ratio, and `HYROX_RUN_PACE_MIN_SEC_KM` × 8; ISSUE-397 (d)), its stretch rule (gain above 70% of total headroom, with "Most athletes would need 6+ months of focused training", no source) and its constant Roxzone. These stay only as the legacy path when no cohort floors are passed (`floorSource: 'legacy'`). Inside the lane, before the merge: per-segment quantile mapping (the brief's peer method), the additivity gap spread by segment size (`bd77c8a` moved it to skew), a tiered floor (the top-1% median while the forecast is slower than it, p1 at or past it; `1977c7f` removed it) and a flat 15 s level band (`ec5ed04` widened it by each segment's gap share).
+
+**Where.** `hyroxPeerResidualWeights` (`hyrox-results.ts:848`), `hyroxPeerSplitsAt` (`:893`), `hyroxRunLegShares` (`:825`), `hyroxCompetitiveFloors` (`:956`, the fast end through `fastestPublishedSec`, `:951`); `computeGoalBackCalc` (`hyrox-goal-back-calc.ts:123`: venue seconds `:137`, `:167`; Roxzone floor `:139`; gain from the lines `:177-180`; the Roxzone gives to its floor `:283`; grading `:301-307`); `hyroxGoalBackCalcOptions` (`hyrox-race-plan.ts:130`), `hyroxGoalFeasibilityLine` (`:161`), `hyroxRoxzoneAtGoalSec` (`:184`), `roundToTotal` (`:197`), `hyroxRaceClock` (`:220`), `hyroxForecastRaceClock` (`:253`), `easedComponents` (`:297`), `clockForComponents` (`:310`), `buildHyroxRacePlan` (`:335`); `hyroxLikelyRangeSec` (`race-projection.hyrox.ts:104`); `compareWithPeers` (`hyrox-lose-time.ts:215`), `classifyHyroxLoseTime` (`:295`), `analyzeHyroxLoseTime` (`:305`). Merged in `63c5942`.
+
+**Model.**
+
+```
+Peers at finish T in cohort c (hyroxPeerSplitsAt)
+  anchors      = c's band cells, sorted by median finish (Pro Mixed reads the pooled Pro Doubles cell)
+  raw_s(T)     = band medians of segment s, linear in finish time between the two anchors around T;
+                 past the fastest or slowest anchor: that band's medians x T / its median finish
+  gap(T)       = T - sum_s raw_s(T)                       medians do not add up
+  w_s          = max(0, (p75 - p50) - (p50 - p25)) of s in c's S8-S9 table, normalised to sum to 1
+                 (size weights raw_s / sum raw only when no table is right-skewed)
+  residual_s   = gap(T) x w_s
+  peer_s(T)    = raw_s(T) + residual_s                    sum_s peer_s(T) = T
+  peer legs    = peer_run_total x c's median leg shares (seasons 7 to 9; pooled: mean of the sex cells' shares)
+
+Where you lost time (analyzeHyroxLoseTime)
+  c            = the previous result's format; singles by sex; doubles by hyroxPreviousTimeDivision,
+                 else the current division (flagged in the caption)
+  lost_s       = athlete_s - peer_s(T)                    positive = slower than the peers
+  band_s       = 15 + |residual_s|                        Running and Roxzone: 15 + |residual_run + residual_rox|;
+                                                          Running over k pasted legs: 15 + |residual_run x those legs' shares|
+  lost if round(lost_s) >= round(band_s); gained if round(lost_s) <= -round(band_s); else level
+  implied      = T minus the timed segments: the Roxzone; Running when the Roxzone is pasted without run data;
+                 Running and Roxzone when only the 8 stations are known
+
+Race plan, goal G, forecast F (buildHyroxRacePlan)
+  no goal, round(G) = round(F), or G unrealistic: the forecast's own lines (hyroxForecastRaceClock)
+  G < F: computeGoalBackCalc(F, G, opts)
+     floor_station = min(top-1% band median, p1)_station + (adjustedSec - baseSec)    the line's venue seconds
+     floor_run     = min(top-1% band median, p1)_run_total + (runSec - pre-venue run)  only with a venue
+     floor_rox     = min(min(top-1% band median, p1)_roxzone, F_rox)
+     rox(G)        = max(F_rox x peer_rox(G) / peer_rox(F), F_rox - (F - G), floor_rox)
+     gain          = (runSec + sum of station lines + F_rox) - G - (F_rox - rox(G))
+     allocate gain by headroom (line - floor), capped at the floors; still short: the Roxzone gives to floor_rox
+     unrealistic if still short; else stretch if G < likely_fast; else achievable
+  G > F: component_s = F_s x peer_s(G) / peer_s(F) for run total, each station, Roxzone; scaled to sum to G
+  run leg k   = run total x fatigueMultiplier_k / sum of the 8 multipliers  (predictHyroxRace's own shape)
+  splits      = the 17 values rounded by largest remainder to sum to round(G)
+  clock       = Roxzone split in 8 shares (largest remainder); share k half before station k, half after
+
+Likely range (hyroxLikelyRangeSec, the Forecast hero's "Likely X-Y")
+  likely      = F -/+ F x hyroxForecastBandPct(confidence, weeks to race)
+                (§BY: 4% base, +1% beyond 4 weeks, +1% beyond 12, +1% medium or +2% low calibration)
+```
+
+**Measured.**
+- *Medians do not add up.* Docs-pass computation over all 65 `HYROX_S89_BAND_SEEDS` cells: the gap between a band's median finish and the sum of its 10 segment medians reaches 67 s and 1.53% of the finish in the published sex and division cells (Open Singles men, advanced) and 76 s and 1.69% in the pooled Open Singles cell; 9 of the 65 cells sum above their median finish (Open Singles women beginner −11 s, Open Doubles mixed beginner −29 s). Open Singles women, band by band: 3989 against 4027, 4775 against 4839, 5756 against 5800, 7110 against 7151, 8999 against 8988. The `hyroxPeerSplitsAt` comment's "within 1.3%" undercounts.
+- *Skew weights.* Open Singles women's Bowley numerators: run total 94 s, wall balls 40 s, Roxzone 36 s, SkiErg 4 s (code comment; the run total checks out against the table, (3219 − 2817) − (2817 − 2509) = 94). The run's share of the gap at each band's median finish stays under 26 s in every cohort and never above its size-proportional share (test-pinned); spreading by size put 19 to 33 s on the run (code comment), so a typical runner read 20 to 30 s gained on Running.
+- *Why not per-segment quantile mapping* (the split at the athlete's finish percentile in each segment table). It assumes an athlete sits at the same percentile in every segment, which no finisher does, so segment quantiles are more extreme than what finishers at a given time actually do. Implementer's probe over the 14 published cells, at each band's median finish, raw quantile minus band median: top band run total 22 to 95 s fast, Roxzone 35 to 51 s fast, stations 2 to 24 s fast; slowest band Roxzone 100 to 177 s slow, wall balls 52 to 109 s slow, run total 14 to 53 s slow; the intermediate band within 8 s. Segment quantiles do not add up either: for Open Singles women at p10 they sum to 4514 s against a 4730 s finish, at p90 to 8045 s against 7774 s, and rescaling them uniformly moves the run total by up to 240 s at the slow end. Interpolated band medians agree with a quantile-plus-residual hybrid within 0 to 15 s, mostly 5 s or less (implementer's probe). At the median finish the peer profile is within 2.5% of each table's median (test-pinned).
+- *The level band.* 15 s is that 0 to 15 s disagreement between two defensible peer methods: a smaller difference is below what the comparison resolves. With a flat 15 s band (before `ec5ed04`), an athlete at the p50 of every timed table who finished at the p50 finish read "Time gained: Running" of −15 to −26 s in 10 of 11 cohorts, against bands that now run 23 to 33 s on Running (final and polish statistics reviewers' probes). With it, that athlete reads all 10 segments level in all 13 cohorts with band seeds (test-pinned; the closest segment sits 6.4 to 10.5 s inside its band, polish statistics reviewer), and Running at the median run with the Roxzone implied reads level at the p50 finish and at every band median in every cohort (test-pinned).
+- *Floors.* For unrealistic goals the fastest time the floors allow is one constant per athlete, the floor sum, whatever the goal: 3781 s for an Open Singles woman, 3385 s for an Open Singles man, 3306 s for an Open Doubles mixed pair (final statistics reviewer's probe, 210 plans over 14 fixtures). Doubles floors read the division's own tables (Open Doubles run total: mixed 1838 s, women 2053 s, men 1736 s; Pro Doubles men 1587 s; reviewer's probe). The tiered floor that `1977c7f` removed made a competitive Open Singles man's floor sum (run and stations) jump from 3164 to 3257 s when each station went 1 s slower, so a goal read achievable for one athlete and out of reach for a man 16 s slower; with one floor it stays 3164 s for stations at the median −1 to +30 s, and headroom reads 153, 161, 177 and 233 s at +0, +1, +3 and +10 s (fixer's probe; the monotonicity and the 1 s step are test-pinned).
+- *Feasibility.* Real `predictHyroxRace` on the lane's fixtures, race about 12 weeks out (band 7%): an intermediate Open Singles man forecast 1:29:45, likely 1:23:28 to 1:36:02, reads achievable for goals 1 to 5 min faster and stretch from 10 min; a competitive man at 1:16:45 reads unrealistic 25 min faster. Before, the intermediate man read achievable up to 20 min faster and a first-timer up to 28 min (fixer's probe).
+- *Roxzone scales with finish time.* Open Singles women's Roxzone p10 335 s, p50 494 s, p90 785 s (`HYROX_S89_PERCENTILES`), so holding it constant made a faster goal take all its gain from the run and the stations.
+- *Run leg shape.* The median legs (`HYROX_S79_RUN_LEG_MEDIANS_SEC`) put Run 1 10.5% under the mean leg and Run 8 11.3% over it for Open Singles women, 11.8% under and 13.0% over for men, legs 4 to 7 near flat (docs-pass computation). The forecast's linear fade (`PER_STATION_FATIGUE_RATE_BY_BAND`, 0.006 per station at intermediate) gives about ±2% (implementer's probe ±2.1%).
+- *Forecast clock.* The Roxzone row shows round(prediction.roxzoneSec); the clock's Roxzone is the remainder after the 16 rounded lines. Over 192 forecasts the two differ by 0 s in 95, 1 s in 73, 2 s in 19 and 3 s in 5 (fixer's probe).
+
+**Why it is defensible.**
+- *Peers.* The band medians are the field's own answer to "what do finishers at this time do in each segment", a conditional median estimated from the data; linear interpolation between band anchors is the simplest estimate between them. Quantile mapping answers a different question (an athlete at percentile p everywhere), which the data refute.
+- *Gap by skew.* For a right-skewed split the mean sits above the median, and means add up (the mean finish is the sum of the segment means), so the shortfall of summed medians belongs mostly to the most right-skewed segments. The Bowley numerator is a quartile-only proxy for that mean-minus-median distance, which is all the published tables allow. A pragmatic allocation, so the level band absorbs each segment's share rather than counting it as time lost or gained.
+- *One fast-end floor per component.* A goal back-calculation needs a lower bound per component. The top-1% band median is what the field's fastest 1% typically do; p1 is the fastest 1% at that one segment; the smaller of the two is never slower than a real result in the field. A floor belongs to the field, never to the athlete's forecast, so the fastest time the floors allow cannot jump as a forecast crosses a band median.
+- *Feasibility.* Grading against the hero's likely range adds no constant and says what the athlete already sees: a goal outside the range the forecast calls likely is a stretch.
+- *Roxzone at the goal.* A ratio of peer Roxzones keeps the forecast's own Roxzone when the goal equals the forecast and follows the real relation between finish time and Roxzone time elsewhere.
+- *Rounding.* Largest remainder gives whole seconds that sum exactly to the goal, each within 1 s of its value.
+
+**Limitations.**
+1. Peers are cohort medians, not the same athletes; "finished in the same time" is a typical mix, not a prescription.
+2. The skew weights are the whole field's, not the skew among finishers at one finish time (the tables have no per-band quartiles), so a segment's share is an estimate; the run's may run a few seconds high.
+3. *Implied segments carry the rest of the gap.* An athlete at every timed median with the Roxzone implied reads a Roxzone loss of +28 to +65 s at the p50 finish and up to +64 s at band medians, except the beginner bands (−23 to +17 s), a few doubles bands and the Pro Singles men's and pooled competitive cells, which read level (polish fixer's and statistics reviewer's probes). With the Roxzone pasted and no run data, implied Running reads a loss in 5 of 13 cohorts at the p50 finish (Open Singles men +33 s against a band of 33.1, Open Singles pooled +36 against 32.8, Pro Singles women +29 against 29.0, Pro Singles men +41 against 31.4, Pro Singles pooled +43 against 33.3) and in 18 band cells at band medians, up to +50 s (polish statistics reviewer's probe). The arithmetic is right (the implied time is time the athlete spent there); whether an implied segment's band should absorb the whole gap is ISSUE-402 (c).
+4. `classifyHyroxLoseTime` rounds both the time lost and the band before comparing, so a segment up to about 1 s inside its band can read lost or gained (Open Doubles pooled advanced, implied Running 34.6 against 35.4; reviewer's probe). It matches the whole seconds on screen.
+5. Venues differ (sled surface and lanes, run course length, Roxzone layout) and the band medians mix every venue; no venue adjustment is applied to the past result. The drill-down caption says so.
+6. One leg shape for every finish time; 5 anchors 800 to 1800 s of finish time apart (Open Singles women 4027, 4839, 5800, 7151, 8988 s).
+7. The race plan's goal legs follow the forecast's near-even fade while the field's legs run about ±11% (above). "Where you lost time" names no leg until the shape is decided (ISSUE-402 (e)).
+8. The likely range is centred on today's forecast, as the hero shows it, not on the race-day projection (`buildHyroxProjection` `confidenceRangeSec` is centred there). Feasibility centre: ISSUE-402 (a).
+9. For competitive-band athletes the likely range can reach below the floor sum, and "unrealistic" is tested first, so a goal inside the hero's own range reads out of reach (an Open Singles woman on competitive seeds: forecast 3988 s, likely 3749 to 4227 s, floor sum 3781 s; goals 3749 to 3780 s; final statistics reviewer's probe). ISSUE-402 (j).
+10. The fast end is the p1 row for most segments, so goals near the top are graded against the fastest 1% at each segment.
+11. Pro Singles women's p1 run total (1724 s) and their top band's run total (1784 s) and Roxzone (256 s) medians equal the Open Singles men's exactly, a suspected cross-label in the ingest (ISSUE-403). Until a re-ingest, Pro women's run and Roxzone floors and the fast end of their peer reference read men's values.
+12. The S8 and S9 tables carry the current wall-ball and sled-push judging (§DJ), so older results read slow on those two stations.
+13. The clock spreads the Roxzone evenly around the stations; real layouts vary.
+14. The results paste's run-leg and Roxzone patterns have not been checked against a real hyresult.com page (ISSUE-402 (h)). Not device-verified.
+
+**Guards.** `calculations/hyrox-peer-splits.test.ts` (14: segments sum to the finish; band medians plus the gap by skew at a band's own finish; within 2.5% of each table's median at the median finish; monotone in finish time; the run's gap share under 26 s and below the size share in every cohort; leg shares; floors per sex and division, Pro Mixed pooled), `calculations/hyrox-lose-time.test.ts` (34: a result at the peer profile loses 0; level bands; every-cohort median checks; ranking; segment assembly; headline copy; empty states; cohorts), `calculations/hyrox-race-plan.test.ts` (32: race order, sums and clock, the forecast's own numbers, run fade, floors per sex, Pro and division, the floor-sum monotonicity and 1 s step, Roxzone at the goal, slower goals, unrealistic and stretch goals, the likely-range grading, doubles, `roundToTotal`), `calculations/hyrox-goal-back-calc.test.ts` (18), `ui/hyrox/race-plan-lose-time-render.test.ts` (39, jsdom).
+
+---
+
+## §DP: Cross-training overload detector: the budget curve has slope 1, planned sessions are plan, every outside activity is valued (2026-10-21, lane ctd)
+
+**Side.** Planning. The triathlon overload detector (`detectCrossTrainingOverload`, `src/calculations/tri-cross-training-overload.ts`) reads tracked load (cross-training TSS this week) and prescribes plan cuts. It writes nothing; only an accepted Reduce or Push changes state. The same detector feeds triathlon and cycling (cycling reuses `eventType: 'triathlon'`). HYROX does not use it yet (it returns null outside triathlon); the HYROX cross-training design (`docs/research/hyrox-cross-training-design-2026-10.md` §2) reuses it after lane `fix/hyrox-h2b` merges.
+
+**1. Budget curve (Load Currency Law).** The budget of planned TSS a proposal may cut is
+
+```
+budget(U) = TAU x (1 - e^(-U / TAU)),   TAU = 491 TSS   (overloadReductionBudget -> saturateCredit)
+U         = this week's cross-training TSS + decayed carry - load already answered
+```
+
+`saturateCredit` (`src/cross-training/universalLoad.ts`) is running's replacement-credit curve, now exported; TAU is `universal-load-constants.ts` `TAU`, derived in ISSUE-263 from the old 800 time constant re-denominated to TSS (800 / 1.63, the easy-anchor Garmin-to-TSS ratio). Slope at 0 is TAU / TAU = 1 and the slope falls below 1 for any U > 0, so budget(U) < U: a credit never exceeds the load that unlocked it. No new constant.
+
+Before: `1500 x (1 - e^(-U / 800))`, the pre-ISSUE-263 two-parameter form running dropped on 2026-06-04 (its last copy, `applySaturation` in `load-matching.ts` with its only caller `applyCrossTrainingToWorkouts` in `matcher.ts`, unreachable from the app, was deleted on 2026-10-21, D10). Slope 1500 / 800 = 1.875 at 0. 50 TSS of tennis unlocked about 91 TSS of cuts; 62 TSS unlocked 112, so a single swap-to-easy priced at 100 TSS (50% of a 200 TSS threshold run) went through whole. Now 50 TSS unlocks 47.5 and 62 unlocks 58. The change limits (2 cuts heavy, 3 extreme) and the per-session cuts usually bind first, so most proposals are unchanged. The budget alone did not keep the law on the plan itself: item 4.
+
+**2. Planned sessions in `adhocWorkouts` are plan.** Ids for which `isPlannedAdhocId` is true (`adhoc-` user-added sessions and injury capability offers, `holiday-`, `benchmark-`; `src/workouts/planned-adhoc.ts`) are skipped in both passes, and so is a done record stored under the same id in `garminActuals`. Signal B (`computeWeekRawTSS`) skips the planned adhoc entries too, but its `garminActuals` loop counts a done record at any key, these included, as load. The two differ on purpose: the detector asks how much load fell outside the plan, and a completed planned session is the plan; Signal B asks how much load the athlete carried. So for a completed user-added or capability session the detector books 0 and Signal B books its full load. Before, a holiday or benchmark session with a stamped load counted as overload. A capability offer counted 0 only by accident (it carries no load, and its Mark as Done record was skipped because pass 1 had marked the id counted); once activities without a stored load are valued (item 3) it would have been valued by its minutes.
+
+**3. Every outside activity is valued (Signal B per-activity rule).** An activity with no iTRIMP and no stamped load (a GPS-recorded extra run: its adhoc entry has no load and its activity record `iTrimp: null`; a manual entry with no load) was counted 0: pass 1 marked its id counted before the zero check, and pass 2 then skipped the activity record under the same id. It is now valued by Signal B's own per-activity rule, extracted from `computeWeekRawTSS` into `signalBActualTSS` and `signalBAdhocTSS` (`src/calculations/fitness-model.ts`), which both call:
+
+```
+activity record (GarminActual), rated RPE r from wk.rated:
+  strength override (rated strength session): minutes x TL_PER_MIN[r]
+  else iTRIMP > 0:                            normalizeiTrimp(iTRIMP)
+  else:                                       minutes x TL_PER_MIN[r or 5]   (minutes = duration, else km x 6)
+adhoc entry with no activity record:
+  iTRIMP > 0: normalizeiTrimp(iTRIMP), else description minutes x TL_PER_MIN[rpe or 5]
+```
+
+Precedence in the detector is unchanged for activities that carry load: the adhoc entry's iTRIMP, then its stamped canonical TSS (`addAdhocWorkoutFromPending`). The Signal B rule applies only when both are absent, reading the activity record under the same id when it exists (it carries the measured duration and the rating), else the adhoc entry. An activity record with no iTRIMP and no adhoc twin (an HR-less synced session) was skipped outright in pass 2; it now takes `signalBActualTSS` too. The detector's figure is the activity's own load: it never adds Signal B's double-day bonus.
+
+*Where the detector and Signal B agree, after the second round (D9).* An activity record with no adhoc entry under its id (pass 2) is valued by `signalBActualTSS` in full, the call `computeWeekRawTSS` makes, rated strength override included: the two agree on it. An adhoc entry with no activity record and no stored load takes `signalBAdhocTSS`, Signal B's adhoc rule: they agree. Three places differ, on purpose or by precedence: (1) an adhoc entry's own iTRIMP or stamped canonical TSS wins in the detector, while Signal B values the activity record under the same id when one exists (`addAdhocWorkoutFromPending` writes both), so a synced rated strength session with heart rate counts its iTRIMP in the detector and the strength override in Signal B; (2) a completed planned adhoc session (`isPlannedAdhocId`) is plan in the detector (0) and load in Signal B (item 2); (3) the detector never adds the double-day bonus. The day's strain (`computeTodaySignalBTSS`) uses the same two per-activity rules as the week since D9, so the day, the week and pass 2 price an activity record one way.
+
+**4. What a proposal shows is what Apply takes (second pass, same day).** The slope-1 budget (item 1) bounded the modal's label, not the plan. The builders clipped the last change of a set to the budget left (`min(estimate, budget)`) and priced a swap at a flat 50% and a trim at 15% of the stored load, while `applyTriSuggestions` ignores the label and re-prices the whole change. So accepting a set could take more planned TSS than the unanswered load while the modal showed less. A probe over generated sprint, olympic, 70.3, Ironman and bike-only plans (every week; cross-training at 16, 20, 30 and 45% of the week's plan; tennis and cycling; Monday, Wednesday and Friday; 14,400 option sets) on the first-pass code: 114 sets took more than the unanswered load on Apply, and 5,716 showed a cut different from the applied one (largest gap 40 TSS). A reviewer's similar grid found the same class (118 sets) before the lane too.
+
+Every change is now priced by the apply step's own re-pricing (`triSuggestionTssReduction`, `src/calculations/tri-suggestion-apply.ts`):
+
+```
+downgrade: stored - load of the landing rung or type at the planned minutes          (triDowngradeTssReduction, unchanged)
+swap:      stored - load of the easy rung or type at round(0.75 x minutes)           (triSwapEasyTssReduction)
+trim:      stored - sum over shares of round(share x round(0.85 x minutes) / minutes) (triTrimTssReduction)
+```
+
+with the apply step's existing factors (`SWAP_EASY_DURATION_FACTOR` 0.75, `TRIM_DURATION_FACTOR` 0.85) and rate tables (`loadForTriRun`, `loadForRung`); the apply functions read the same landing helpers, so the two cannot drift. The detector's `TRIM_FRACTION` 0.15 and `REPLACE_WITH_EASY_TSS_REDUCTION` 0.50 are deleted. No new constant. A change whose full cut exceeds the budget left is not proposed, never clipped (`fittingReduction`): the builder moves on to a later session. In Replace & Reduce a quality session whose swap does not fit takes its downgrade when that fits, and the swap stays open for a later quality session. Hence, per option set, applied cut = shown cut <= budget(U) < U.
+
+Same probe after: 0 sets over the load; shown and applied agree in every set (to within the rounding of a fractional stored load). Proposal shape: 140 of 14,400 sets (1%) change. 118 Replace & Reduce sets lose their swap because the swap alone is larger than the budget (these were the sets that broke the law; Replace & Reduce then holds no swap); 20 sets have one change fewer and 16 one more; no set in this grid becomes empty (a wider review grid found 4, see Limitations). Summed over the grid, the shown cut rises from 339,472 to 351,932 TSS (the flat fractions understated swaps) and the applied cut falls from 359,465 to 351,929. Example: a 60-min threshold run (107 TSS, `TL_PER_MIN[7]` 1.78/min) swapped to easy lands on 45 min easy (41 TSS): it showed -54 and Apply took 66; it now shows -66.
+
+**Limitations.** A week whose only open sessions in a discipline each carry a cut larger than the budget gets no proposal for that discipline. It happens rarely, at the 15% threshold on low-hour plans: the science review's grid (13,500 detector fires: sprint to Ironman and bike-only at 6, 10 and 16 h, with and without stale durations, loads 15.1 to 80%) found 4 recommended Reduce sets empty for this reason, each a sprint or olympic plan at 6 h/week in week 3 with a swim-affinity load at 15.1% (budget 19.6 TSS, the only candidate a swim threshold session whose downgrade takes 20). The old clipping would have shown -19.6. Also in a hand-built week (anchor 4b's week: the run option is empty and the trim goes to the ride). The other 560 empty recommended sets in that grid had no changeable candidate at all, older than this lane. Since the second round (item 5, D1) the pop-up then opens on the next discipline in affinity order that has a change, or does not open. Quality sessions are never trimmed (unchanged rule), so they have no smaller fallback than a downgrade. The curve is running's single-session saturation applied to a week's sum of sessions; TAU was derived for one session. It is a cap, not a dose-response model. Valuing an unmeasured activity at minutes x TL_PER_MIN[RPE] inherits Signal B's estimate (an unrated session reads as RPE 5, 1.15 TSS/min).
+
+**5. Second round (orchestrator decisions, same day).**
+
+- *No pop-up with nothing to act on (D1).* The recommendation is the first discipline in affinity order (cross-training TSS by the discipline it resembles, ties run, bike, swim) whose option holds a change; a discipline with planned work but no fitting change is passed over, and with no change anywhere the detector returns null. Nothing is recorded as answered then, so the load still counts and is judged again with later cross-training that week. Before, the recommendation needed only remaining planned TSS. On generated sprint, olympic, 70.3, Ironman and bike-only plans (6, 10, 16 h; with and without stale durations; every second week; loads at 15.1, 20, 26, 45 and 80% from tennis, cycling and swimming; Monday, Wednesday, Friday, Saturday; 18,000 fires), 751 fires opened on an empty recommended option; all 751 now open on another discipline (run 6,840 to 7,591, bike 8,400 to 7,653, swim 2,760 to 2,756) and none is suppressed. The modal hides a set with no change and its button; "No upcoming workouts to adjust." remains only for a discipline chip the user flips to that has none (15,573 of 36,000 non-recommended options in the grid).
+- *Quality sessions stay untrimmed (D3).* No trim fallback for a quality session whose downgrade and swap exceed the budget; it gets no proposal and D1 moves the pop-up on. Pinned on generated olympic and Ironman plans: every proposed trim targets a non-quality session (`isTriQualitySession`).
+- *One per-activity rule for the day, the week and the detector (D9).* `computeTodaySignalBTSS` (the day's strain, `fitness-model.ts`) now calls `signalBActualTSS` and `signalBAdhocTSS`, the rules `computeWeekRawTSS` sums. It valued an activity record with no iTRIMP that is not a rated strength session at minutes x TL_PER_MIN[5] whatever its rating; it now reads the rating (`wk.rated`, RPE 5 when unrated or 'skip'). Per 60 minutes the day's figure moves by 60 x (TL_PER_MIN[r] - 1.15): r 3 -30, r 4 -14, r 6 +18, r 7 +38, r 8 +64, r 9 +96 TSS. Records affected: HR-less sessions with a rating, chiefly in-app HYROX and guided completions (rated at completion) and strap-less GPS runs; a station density session rated 8 reads 133 on the day instead of 69, as it already did in the week. Everything that reads the day's figure follows: the Strain ring and page, capacity strain (the readiness strain input) and the daily series behind the live TSB. The sleep-debt series (`buildDailySignalBTSS`) had its own rule (an activity record counted only its iTRIMP) and did not follow until the third round (2026-10-22), when it took the same two helpers; the Load drill-down's activity rows (`getDailyLoadHistory`) took them then too, so its zone segments sum to the day's bar. The detector's pass 2 calls `signalBActualTSS` directly, so a rated strength session with heart rate counts the override there (60 min rated 7 with a 20 TSS iTRIMP: 107).
+- *Replace & Reduce only with a swap (D2).* A replace set without a swap is left empty and its button hidden; 11,302 of the 18,000 recommended options had one.
+
+**6. Third round (review fixes, 2026-10-22).**
+
+- *Floor warning per set.* The floor flag read the Reduce set's cut alone; since D1 and D2 the option can offer Replace & Reduce alone or with the larger cut. Each option now carries `belowFloor` (Reduce, unchanged) and `replaceBelowFloor` (Replace & Reduce), and the modal names the set that breaches the floor. On generated sprint to Ironman plans at 6, 10 and 14 h (11,520 fires), 1,695 recommended options had a Replace & Reduce set that breached the floor while Reduce did not, and showed no warning. The floor itself is unchanged and still only warns.
+- *Rated HR-less easy work reads below its plan target (limitation, no change).* Since D9 the day values an HR-less session at minutes x TL_PER_MIN[rated RPE], the rule the week already used. A strap-less easy run rated 3 reads 0.65 TSS/min (39 TSS/h), while its planned target is valued at the RPE-4 row (`plannedTssPerMin`, 0.92 TSS/min, 55 TSS/h; `src/constants/sports.ts`), whose own rationale says easy-run RPE understates the load. A well-executed easy run therefore shows about 71% of target on the Strain ring and in the week. Consistent with the decision; valuing rated HR-less easy work by session type is left to Tristan as a follow-up.
+- *Detector and Signal B on a synced rated strength session (open).* Difference (1) in item 3 stands: pass 1 values an adhoc entry by its own iTRIMP or stamped load before its twin record, so a synced strength session with heart rate rated in activity detail counts its iTRIMP in the detector (about 20 TSS for 60 min) and the strength override in Signal B (107). Valuing the twin with `signalBActualTSS` first in pass 1 would close it; that is an orchestrator decision.
+
+**7. Final round (orchestrator decisions, 2026-10-22).**
+
+- *Pass 1 values the activity record first (E3); difference (1) in item 3 is closed.* `tssOfAdhoc` now values an adhoc entry by `signalBActualTSS(twin, ratedRpeOf(wk.rated[id]))` when an activity record exists under its id, else by `signalBAdhocTSS(entry)`: exactly the choice `computeWeekRawTSS` makes (it skips the adhoc half when the record exists). The entry's own iTRIMP and its stamped aerobic + anaerobic no longer come first. Measured before the change over 1,103 detector fires (olympic, 10 h, week 1, one outside activity each): 12 of 153 rated strength twins with heart rate, 174 of 201 HR-less twins re-rated after ingest (largest gap 220 TSS), 140 of 160 Strava-upgraded twins (`activity-matcher.ts` refreshes the record's iTRIMP, not the entry's load, so the modal's "Cross-training added N TSS" read the old Garmin load against the Strava-is-canonical rule) and 23 of 199 legacy entries with a stamped load disagreed with Signal B. The detector and Signal B now value every counted activity alike; what remains different is on purpose: a completed planned adhoc session is plan in the detector (item 2) and the detector never adds the double-day bonus (it measures the activities' own load). A stamped canonical TSS on a legacy entry with no record is no longer read; its minutes at its RPE are (Signal B's figure).
+- *The weekly breakdown follows the same rule (E4).* `computeLoadBreakdown` (Plan load sheet, Load & Taper, Just-Track week detail) values each segment with the two helpers and shows the week's double-day bonus as its own segment, so the segments sum to `computeWeekRawTSS`.
+- *Floor warning and chips (E7).* The chip dims when any offered set breaches the floor; a chip whose option holds no change is disabled, so the empty line D1 left reachable (24% of chip options in the review grid held no change) can no longer be reached. When the discipline already sits below its floor before any change (`alreadyBelowFloor`), every offered set keeps it there, and the warning says "keeps this discipline below your weekly floor" rather than "would push". The floor still only warns.
+
+**Guards.** `load-currency-anchors.test.ts` anchor 4b (budget <= load from 10 to 900 TSS; every proposed set is applied with `applyTriSuggestions` to a copy of the plan, in a hand-built week and in generated sprint, olympic, 70.3 and Ironman plans, and the drop in planned TSS is at most the unanswered load and equal to the modal's figure); `tri-suggestion-applicable.test.ts` (every proposed downgrade, swap and trim shows the cut Apply makes); `tri-suggestion-apply.test.ts` (swap and trim pricing equals the applied change on every generated session); `tri-cross-training-overload.test.ts` (planned adhoc ids add 0, with a stamped load or a done record; a GPS extra run counts its rated minutes; the detector and Signal B agree on every activity kind: an unmeasured activity, a rated strength twin, a re-rated HR-less twin, a Strava-upgraded twin, a legacy stamped entry, a manual entry, a record with no twin; the record's value wins over a stamped load).
+
+---
+
+## §DQ: One post-session tier from one percent; the HYROX race offset and run horizon on the run base in use; the sleep series by the day (2026-10-22, lane ctd final round)
+
+**1. The post-session tier (E1). Side: tracking.** One helper, `postSessionNote(cs)` (`src/calculations/capacity-strain.ts`), writes the post-session sentence on every surface: Home (the coach line in running, HYROX and Just-Track; `capacityStrainNote` in triathlon and cycling), the coach page, the Readiness Today's Strain card, and the Readiness hero in triathlon and cycling (the running and HYROX hero shows `readiness.sentence`).
+
+```
+sessionTSS = computeTodaySignalBTSS(week, local day)                    (the day's activities, no passive input)
+gate:  trainedToday = sessionTSS > 0                                     (a logged session; steps never count; D8)
+first: injury active and sessionTSS > plannedDayTSS x 1.3                (the existing "Load exceeded" margin) -> injury-cap sentence
+tier:  pct = sessionPctCapacity = sessionTSS / max(plannedDayTSS, weeklyCTL / 7)  (rounded)
+       pct >= 130 -> Big;  pct >= 100 -> Solid;  pct >= 80 and CTL/7 >= planned -> Good training
+quote: todayTSS, the Strain ring's number (sessions plus passive load)
+order: the coach line asks postSessionNote before the injury and illness blocker sentences
+```
+
+Why this percent: "Big session ... prioritise recovery for the next 24 hours" prescribes recovery, which is defensible only when the session exceeds both the planned dose and the sustainable daily load (§BJ, Banister CTL as the sustainable-load proxy). The denominator is the capacity anchor that `computeReadiness.strainPct` uses. The numerator is the session alone, because passive step and active-minute load is strain, not a session: with the strain numerator (the first E1 build), a session at half the plan plus 20,000 steps read "Solid session today ... Rest up and recover." on every surface before the planned session was done (running 40 TSS plan; HYROX at 0.7x), and an injured runner who logged exactly the capped session and walked 14,000 steps read the rehab-cap breach. `pctCapacity` (strain over the anchor) stays the readiness input; only the verdict reads the session. The coach line asks `postSessionNote` before the injury and illness blocker sentences, because the Readiness card and triathlon Home print it with no blocker check; an injured runner at 1.1x the capped plan read "Solid session today" on the card and "Injury is active. Training is paused until cleared." on Home. Before, three percents chose the word: the coach line used session TSS over plan, the Readiness card strain TSS over plan, triathlon pctCapacity. A planned day with a synced session at 1.1x plan and 14,000 steps read "Solid" on Home and "Big ... Daily target well exceeded" on Readiness (running ring 58, HYROX 77), and an Ironman day read Big on Home and Solid on the coach page. The thresholds (130, 100, 80) and the 1.3 margin are the existing ones; no new constant. The Readiness card keeps its plan-relative percent and its Exceeded / Complete / In Progress label (its semantic: % of the daily target), and its plan-relative lines now say "session" only when one was logged.
+
+Limitations: the sentence quotes the ring's number (steps included) while the tier reads the session, so "Solid session today. 54 TSS logged." can follow a 40 TSS session on a 40 TSS plan. The Readiness card's label is not the tier's percent: on planned days it is strain over plan (Exceeded / Complete / In Progress), on adhoc days strain over the plan's per-session average, and in Just-Track from week 2 always "Light" (its per-session average is 0), so "Light" or "Optimal" can sit beside "Big session today". The card's "Session complete" line reads the session alone over the plan. In Just-Track the tiers print once live CTL reaches 10 (from plan week 2), consistently on every surface. The in-progress copy ("Nearly at today's target") still reads session TSS over plan.
+
+**2. The HYROX personal race offset on the base in use (E5b). Side: tracking (forecast).** The offset (§AA: a Bayesian residual of the last race's run pace on the population model, weight 0.35, or 0.6 with station splits, capped at ±60 s/km, decaying to 0 over 12 months; `hyrox-personal-pace.ts`) is now a residual on the run-pace base the forecast actually uses:
+
+```
+base = CP model at the athlete's VDOT   if hasRealRunningFitnessSignal   ('vdot')
+     = band seed pace (race format)     otherwise (D5)                   ('seed')
+offset = blend(observed race run pace - base at the race's format)
+pace   = base + offset   (only when the stored base equals the base in use)
+```
+
+D5 gave an unmeasured runner the band seed and dropped the offset (it was a residual on the VDOT model), so a beginner who had raced lost the race's anchor; and an offset fitted against the bare-baseline VDOT 50 was applied unchanged once a real signal arrived, at a different VDOT. The base is stamped on the offset (`personalRunPaceOffsetBase`) and the offset is refitted from the stored race when the base changes; it is a pure function of the race and the base, dated by the race, so a refit leaves its decay alone. An unmeasured runner's seed-plus-offset pace is captioned as the band median adjusted to the last race and is never written to the athlete's pace slot; the plan keeps the seed (planning reads the stored pace or the seed; the h2b-owned generators are untouched).
+
+Effect on the D5 consequence (forecast today, race a month old, Open Singles): a beginner who raced 2:10 read 116.1 min before D5 (VDOT 50 plus its offset, 14 min faster than the race), 144.2 after D5 and 139.7 now (138.5 with splits), about 10 min slower than the race; the 35% / 60% weight and the 60 s/km cap keep most of the forecast on the base. Novice 1:50: 113.3 to 112.2; intermediate 1:30: 90.8 to 90.5; advanced 1:10: 73.8 to 72.6; competitive 0:57: 60.5 to 59.4. A beginner race slower than about 2:45 gives a run pace above 600 s/km, which `backComputeRunPaceFromRace` discards as implausible, so no offset.
+
+Limitations: the shrinkage weights and cap were set for a residual on the VDOT model; on the seed base the residual can be larger (a 2:10 beginner is about 106 s/km faster than the beginner seed), so the cap binds more often. Whether the race should anchor more strongly for an unmeasured runner is a modelling question for Tristan, not changed here.
+
+**3. The HYROX run horizon from the run base (E5a). Side: tracking (race-day projection).** `buildHyroxProjection` projects the run-leg gain with the running training-horizon model from `baseline_vdot`. It read `state.v` ungated; it now reads `hyroxRunBaseVdot(state)`:
+
+```
+measured:   state.v
+unmeasured: the v in [25, 85] with gp(v).t x cpRatioForVdot(v) = singles band seed pace   (bisection)
+```
+
+the VDOT at which the forecast's own CP model (the singles pace `derivePopulationRunPace` gives without LT) reproduces the seed the run leg is built from. No new constant: the model and the seed are the forecast's own. In the default field the seed maps to VDOT 28.8 (total beginner and beginner), 34.2 (novice), 40.1 (intermediate), 47 (advanced) and 55 (competitive); note these sit below the band anchors in `CP_RATIO_ANCHORS` for the upper bands, because the band seed paces are slower than those anchors imply. Over 16 weeks a beginner's run gain moves from about -47 s (at VDOT 50) to about -220 s; a competitive athlete's from -37 s to -15 s. The offset is not part of the base (mirror of the measured path, which projects from `state.v`, not from the offset-adjusted pace).
+
+**4. The sleep-debt series by the day (E6). Side: tracking.** With the plan start, `buildDailySignalBTSS` takes each day of each plan week from `computeTodaySignalBTSS(week, day)`, the figure the Strain ring and the Load drill-down's bar read, so manual adhoc entries filed by weekday and the double-day bonus (§AJ) now raise the load-adjusted sleep target (15 s per TSS up to the tier cap, ISSUE-324). An activity a week holds whose local day lies outside the week's seven days still counts once on its own day by the per-activity rule. This closes limitation (4) of the Signal A runSpec entry for the app's callers.
+
+**Guards.** `src/ui/post-session-one-tier.test.ts` (one tier word and number on every surface in running, HYROX and triathlon, healthy, injured and ill; half the plan plus steps in the Big strain tier prints no tier and no injury-cap line), `capacity-strain.test.ts` (postSessionNote: one gate, one percent, steps never lift a partial session); `hyrox-run-pace.test.ts` (offset fitted against the seed, refitted on the first real signal, legacy offset refitted, entered pace still wins; base VDOT reproduces the seed for every band); `race-projection.hyrox.test.ts` (an unmeasured runner's run gain equals a measured runner's at the base VDOT); `run-pace-provenance.test.ts` (the race provenance on the Forecast and Stats); `day-week-signal-b-agreement.test.ts` (the sleep series equals the day's Signal B).
 
 ---

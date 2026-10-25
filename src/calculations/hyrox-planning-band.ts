@@ -52,7 +52,7 @@
 import type { AbilityBand, HyroxConfig, HyroxDivision, HyroxStation } from '@/types/triathlon';
 import type { HyroxResultsMetric } from '@/data/hyrox-results-s79';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
-import { isHyroxDoublesFormat } from './hyrox-division';
+import { isHyroxDoublesFormat, resolveHyroxAthleteSex } from './hyrox-division';
 import { doublesRatioAtTeamTime, doublesStationSoloSec, type HyroxDoublesTables } from './hyrox-doubles';
 import {
   cumulativePercentileIn,
@@ -103,12 +103,15 @@ export function hyroxOpenSinglesTermsSec(
   format: HyroxFormat,
   biologicalSex: BiologicalSex,
   division?: HyroxDivision,
+  /** The division that resolves the athlete's own sex when biological sex is
+   *  unset (default: `division`, which then names the race field only). */
+  athleteDivision: HyroxDivision | undefined = division,
 ): number {
   if (!Number.isFinite(totalSec) || totalSec <= 0 || format === 'open_singles') return totalSec;
   const race = hyroxResultsCohort(format, biologicalSex, division);
   const parts = composition(totalSec, race);
   if (!parts) return totalSec;
-  let singles = hyroxSinglesCohort(format, biologicalSex, division);
+  let singles = hyroxSinglesCohort(format, biologicalSex, athleteDivision);
   let solo = parts;
   if (isHyroxDoublesFormat(format)) {
     // The field's own terms on the singles side (no Mixed-woman Pro tier
@@ -137,13 +140,29 @@ export function hyroxOpenSinglesTermsSec(
  * athlete's own sex (hyroxPlanningField; the division pick, then the pooled
  * Open Singles table, when sex is unknown). The one helper every planning
  * band reads: setup, initialisation, log-a-race and the previous-format fix.
+ *
+ * `raceDivision`: the division a past doubles result was raced in
+ * (hyroxPreviousTimeDivision), when it differs from the athlete's current
+ * `division`. It names the race field the finish is decomposed in; the
+ * athlete's own sex still reads the current division first (a sex-unset
+ * singles athlete's Women pick stays her field when the past race was
+ * Mixed), then the race's (a women's or men's pair says the athlete's sex).
+ * Omitted, `division` plays both parts as before.
  */
 export function hyroxPlanningBandFor(
   totalSec: number,
   format: HyroxFormat,
   biologicalSex: BiologicalSex,
   division?: HyroxDivision,
+  raceDivision?: HyroxDivision,
 ): AbilityBand {
-  const field = hyroxPlanningField(biologicalSex, division);
-  return hyroxBandFor(hyroxOpenSinglesTermsSec(totalSec, format, biologicalSex, division), field.format, field.sex);
+  const athleteDivision = raceDivision == null || resolveHyroxAthleteSex(biologicalSex, division) != null
+    ? division
+    : raceDivision;
+  const field = hyroxPlanningField(biologicalSex, athleteDivision);
+  return hyroxBandFor(
+    hyroxOpenSinglesTermsSec(totalSec, format, biologicalSex, raceDivision ?? division, athleteDivision),
+    field.format,
+    field.sex,
+  );
 }

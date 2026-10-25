@@ -22,7 +22,7 @@ const isoDaysAgo = (daysAgo: number) =>
 function stateWith(weeks: Array<{ swim: number; bike: number; run: number }>): SimulatorState {
   return {
     eventType: 'triathlon',
-    w: 0,
+    w: 1, // store convention: current week = wks[0]
     wks: weeks.map(c => ({
       triWorkouts: [
         ...Array.from({ length: c.swim }, (_, i) => ({ id: `s${i}`, discipline: 'swim' })),
@@ -76,7 +76,7 @@ describe('plannedBuildDoseByDiscipline — build-average vs next-4 window', () =
   ): SimulatorState {
     return {
       eventType: 'triathlon',
-      w: 0,
+      w: 1, // store convention: current week = wks[0]
       wks: weeks.map(c => ({
         ph: c.ph,
         triWorkouts: [
@@ -262,7 +262,7 @@ describe('plannedBuildDoseByDiscipline — build-average vs next-4 window', () =
 describe('recentDisciplineActivity fallback — sign-in resilience', () => {
   const signedInState = (): SimulatorState => ({
     eventType: 'triathlon',
-    w: 0,
+    w: 1, // store convention: current week = wks[0]
     wks: [{ garminActuals: {} }], // empty — mirrors a fresh sign-in
     recentDisciplineActivity: [
       { activityType: 'SWIMMING', startTime: isoDaysAgo(3), durationSec: 2400, distanceKm: 1.5 }, // 0.67 h
@@ -301,7 +301,7 @@ describe('recentDisciplineActivity fallback — sign-in resilience', () => {
     const sharedTime = isoDaysAgo(4);
     const s = {
       eventType: 'triathlon',
-      w: 0,
+      w: 1, // store convention: current week = wks[0]
       wks: [{ garminActuals: { b1: { activityType: 'CYCLING', startTime: sharedTime, durationSec: 5400, distanceKm: 45 } } }],
       recentDisciplineActivity: [
         // Same ride (within ±10 min) as the garminActuals entry — must dedupe.
@@ -310,5 +310,89 @@ describe('recentDisciplineActivity fallback — sign-in resilience', () => {
     } as any;
     const v = recentHoursByDiscipline(s, 8);
     expect(v.bike).toBeCloseTo(5400 / 3600 / 8, 5); // counted once, not twice
+  });
+});
+
+/**
+ * s.w is 1-based (store default w: 1; tri and cycling init set s.w = 1): the
+ * current week is wks[s.w - 1]. The planned-dose helpers started at wks[s.w]
+ * (next week), and the recent-actuals iterator started its walk there.
+ */
+describe('current week is wks[s.w - 1], not next week', () => {
+  const plannedWeeks = (w: number, weeks: Array<{ ph: string; bike: number }>): SimulatorState => ({
+    eventType: 'triathlon',
+    w,
+    wks: weeks.map(c => ({
+      ph: c.ph,
+      triWorkouts: Array.from({ length: c.bike }, (_, i) => ({ id: `b${i}`, discipline: 'bike', estimatedDurationMin: 60 })),
+    })),
+  } as any);
+
+  it('the 4-week planned look-ahead includes the week in progress', () => {
+    const s = plannedWeeks(1, [
+      { ph: 'base', bike: 6 }, { ph: 'base', bike: 2 }, { ph: 'base', bike: 2 }, { ph: 'base', bike: 2 }, { ph: 'base', bike: 2 },
+    ]);
+    expect(plannedSessionsPerWeekByDiscipline(s, 4, 0).bike).toBeCloseTo((6 + 2 + 2 + 2) / 4, 5);
+  });
+
+  it('race week: planned build and peak dose read the race week, never 0', () => {
+    // Week 2 of 2: current = wks[1], the taper week. No build week remains, so
+    // both helpers fall back to the look-ahead, which covers the race week.
+    const s = plannedWeeks(2, [{ ph: 'build', bike: 6 }, { ph: 'taper', bike: 2 }]);
+    expect(plannedBuildDoseByDiscipline(s).sessions.bike).toBeCloseTo(2, 5);
+    expect(plannedPeakDoseByDiscipline(s).sessions.bike).toBeCloseTo(2, 5);
+  });
+
+  it('recent hours and longest session ignore an activity stored in next week', () => {
+    const ride = (id: string, durationSec: number) => ({ garminId: id, activityType: 'CYCLING', durationSec });
+    const s = {
+      eventType: 'triathlon',
+      w: 1,
+      wks: [
+        { garminActuals: { b0: ride('b0', 3600) } },   // current week
+        { garminActuals: { b1: ride('b1', 10800) } },  // next week
+      ],
+    } as any;
+    expect(recentHoursByDiscipline(s, 4).bike).toBeCloseTo(1 / 4, 5);
+    expect(longestSessionByDiscipline(s, 12).bike).toBe(3600);
+  });
+
+  it('the recent window is `weeks` plan weeks ending at the current week', () => {
+    const ride = (id: string) => ({ garminId: id, activityType: 'CYCLING', durationSec: 3600 });
+    const wks: any[] = Array.from({ length: 5 }, (_, i) => ({ garminActuals: { [`b${i}`]: ride(`b${i}`) } }));
+    // w: 5 → current wks[4]; a 4-week window is wks[1..4], so wks[0] is out.
+    const s = { eventType: 'triathlon', w: 5, wks } as any;
+    expect(recentHoursByDiscipline(s, 4).bike).toBeCloseTo(4 / 4, 5);
+  });
+});
+
+describe('planned dose at the plan edges (week 1, mid-plan, the last week)', () => {
+  const plan = (w: number): SimulatorState => ({
+    eventType: 'triathlon',
+    w,
+    wks: [
+      { ph: 'base', bike: 3 }, { ph: 'build', bike: 4 }, { ph: 'build', bike: 5 },
+      { ph: 'peak', bike: 6 }, { ph: 'taper', bike: 2 },
+    ].map(c => ({
+      ph: c.ph,
+      triWorkouts: Array.from({ length: c.bike }, (_, i) => ({ id: `b${i}`, discipline: 'bike', estimatedDurationMin: 60 })),
+    })),
+  } as any);
+
+  it('week 1: the build mean starts at the week in progress (wks[0])', () => {
+    expect(plannedBuildDoseByDiscipline(plan(1)).sessions.bike).toBeCloseTo((3 + 4 + 5 + 6) / 4, 5);
+    expect(plannedSessionsPerWeekByDiscipline(plan(1), 4).bike).toBeCloseTo((3 + 4 + 5 + 6) / 4, 5);
+  });
+
+  it('mid-plan (w: 3): the build mean and the peak start at wks[2]', () => {
+    expect(plannedBuildDoseByDiscipline(plan(3)).sessions.bike).toBeCloseTo((5 + 6) / 2, 5);
+    expect(plannedPeakDoseByDiscipline(plan(3)).sessions.bike).toBeCloseTo(6, 5);
+  });
+
+  it('last week (w: 5): every helper reads the last week, never past it', () => {
+    expect(plannedBuildDoseByDiscipline(plan(5)).sessions.bike).toBeCloseTo(2, 5);
+    expect(plannedPeakDoseByDiscipline(plan(5)).sessions.bike).toBeCloseTo(2, 5);
+    expect(plannedSessionsPerWeekByDiscipline(plan(5), 4).bike).toBeCloseTo(2, 5);
+    expect(plannedHoursPerWeekByDiscipline(plan(5), 4).bike).toBeCloseTo(2, 5);
   });
 });

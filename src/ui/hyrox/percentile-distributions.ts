@@ -244,9 +244,9 @@ export function renderPercentileDistributions(prediction: HyroxPrediction): stri
   // Run = teal mirrors the canonical Run LT colour.
   const rows: Array<{ label: string; metric: HyroxResultsMetric; sec: number; accent: string; fill: string }> = [
     { label: 'Total finish time', metric: 'total', sec: prediction.totalSec, accent: '#F472B6', fill: 'rgba(244,114,182,0.10)' },
-    { label: 'Run total (8 × 1km)', metric: 'run_total', sec: prediction.runSec, accent: '#14B8A6', fill: 'rgba(20,184,166,0.10)' },
+    { label: 'Running', metric: 'run_total', sec: prediction.runSec, accent: '#14B8A6', fill: 'rgba(20,184,166,0.10)' },
     { label: `Stations total (8 stations${isDoubles ? ', pair' : ''})`, metric: 'work_total', sec: prediction.stationsSec, accent: '#FB923C', fill: 'rgba(251,146,60,0.10)' },
-    { label: 'RoxZone transitions', metric: 'roxzone', sec: prediction.roxzoneSec, accent: '#8B5CF6', fill: 'rgba(139,92,246,0.10)' },
+    { label: 'Roxzone', metric: 'roxzone', sec: prediction.roxzoneSec, accent: '#8B5CF6', fill: 'rgba(139,92,246,0.10)' },
   ];
   const metrics: MetricChart[] = [];
   for (const r of rows) {
@@ -284,7 +284,7 @@ export function renderPercentileDistributions(prediction: HyroxPrediction): stri
       .hx-pd-pill     { animation: hxPdFade 250ms ease forwards; }
     </style>
     <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;padding:18px 20px 14px;margin-bottom:14px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
-      <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Where you sit</div>
+      <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Where you sit</div>
       <div style="font-size:12px;color:var(--c-muted);margin-bottom:6px;line-height:1.4">${subtitle}</div>
       ${metrics.map((m, i) => renderDistributionRow(m, i)).join('')}
     </div>

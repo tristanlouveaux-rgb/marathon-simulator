@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createDefaultInjuryState } from '@/types/injury';
 import type { InjuryState } from '@/types/injury';
 import type { SimulatorState } from '@/types/state';
+import { addCalendarDays, localDateKey } from '@/utils/local-date';
 import { HYROX_STATION_REGION, stationInjuryBuildWeeks, runInjuryBuildWeeks, injuryWithResumeFallback } from './hyrox-injury';
 import { buildHyroxProjection } from './race-projection.hyrox';
 import { predictHyroxRace } from './race-prediction.hyrox';
@@ -40,9 +41,10 @@ function buildState(
 
 /** Race 8 weeks out with planned sessions so every horizon fires. */
 function eightWeekState(extraHx: Partial<SimulatorState['hyroxConfig']> = {}, injuryState?: InjuryState): SimulatorState {
-  const d = new Date();
-  d.setDate(d.getDate() + 8 * 7);
-  const raceDate = d.toISOString().slice(0, 10);
+  // The local calendar day eight weeks out (the projection counts weeks from
+  // the local day). The UTC day read one day short between 00:00 and 01:00 BST
+  // (E9, 2026-10-22).
+  const raceDate = addCalendarDays(localDateKey(new Date()), 8 * 7);
   const triWorkouts = Array(6).fill(null).map((_, i) => ({ d: i, t: 'run', m: 'Easy 5km', km: 5 }));
   const wks = [{ triWorkouts }, { triWorkouts }, { triWorkouts }, { triWorkouts }];
   return buildState(

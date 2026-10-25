@@ -26,6 +26,7 @@ import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
 import { raceEffortHrFloorForState } from './heart-rate';
 import { cv, tv, rdKm } from './vdot';
 import { syncTrainingPaces } from './paces';
+import { refreshHyroxPersonalRunPaceOffset } from './hyrox-run-pace';
 import { recomputeLT, ltPaceForDanielsInput } from '@/data/ltSync';
 import { computeRunCalibration, applyRunCalibrationBias } from './run-calibration';
 import { getLongestRunSec, applyLongRunCap, getRunDurationsSec, countQualifyingLongRuns, getQualifyingLongRunCount, DURABILITY_WINDOW_WEEKS, type RunDurabilityResult } from './run-durability';
@@ -544,6 +545,11 @@ export function runningForecastForSessions(
 export function refreshBlendedFitness(s: SimulatorState): boolean {
   const refreshed = refreshBlendedFitnessCore(s);
   syncTrainingPaces(s);
+  // HYROX: the personal race offset is a residual on the run base the forecast
+  // reads (the CP model once the runner is measured, the band seed before;
+  // hyrox-run-pace.ts). A refresh can turn an unmeasured runner into a measured
+  // one, so the offset refits here, on every refresh path, not only at launch.
+  if (s.eventType === 'hyrox' && s.hyroxConfig) refreshHyroxPersonalRunPaceOffset(s);
   return refreshed;
 }
 

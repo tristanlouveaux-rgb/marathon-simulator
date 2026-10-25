@@ -7,7 +7,8 @@ import { isActivityCompatibleWithSlot } from './matching';
 import { plannedTssPerMin } from '@/constants';
 import { describeBikeSession, loadForBike, rpeForBike } from '@/workouts/bike';
 import { loadForSwim, rpeForSwim } from '@/workouts/swim';
-import { canApplyTriSuggestion, triDowngradeTssReduction } from './tri-suggestion-apply';
+import { canApplyTriSuggestion, triDowngradeTssReduction, triSwapEasyTssReduction, triTrimTssReduction, triSuggestionTssReduction } from './tri-suggestion-apply';
+import { loadForTriRun } from '@/workouts/rung-load';
 import { loadForRung } from '@/workouts/rung-load';
 import { triEffortMultiplier } from './effort-multiplier.triathlon';
 import { getPlannedDayTSSContext } from '@/ui/planned-day-tss';
@@ -74,6 +75,22 @@ describe('applyTriSuggestions', () => {
     const w = s.wks![0].triWorkouts![0];
     expect(w.status).toBe('reduced');
     expect(w.estimatedDurationMin).toBe(170);  // 200 × 0.85
+    expect(w.modReason).toBe('Volume ramp trim');
+  });
+
+  it('an overload trim reads "Manage load", not "Volume ramp trim"', () => {
+    const s = state([workout('w1', 'bike_endurance', 'bike', 200)]);
+    const mod: TriSuggestionMod = {
+      id: 'xt_0', source: 'cross_training_overload', discipline: 'bike',
+      headline: 'Test', body: 'Test',
+      severity: 'caution',
+      targetWorkoutId: 'w1',
+      action: 'trim_volume',
+    };
+    applyTriSuggestions(s, [mod]);
+    const w = s.wks![0].triWorkouts![0];
+    expect(w.estimatedDurationMin).toBe(170);
+    expect(w.modReason).toBe('Manage load');
   });
 
   it('skips mods without a targetWorkoutId', () => {
@@ -584,5 +601,48 @@ describe('triDowngradeTssReduction', () => {
     const micro = { ...workout('m1', 'bike_vo2_micros', 'bike', 63), ...loadForBike('vo2_micros', 60) };
     expect(canApplyTriSuggestion(micro, 'downgrade_today')).toBe(true);
     expect(triDowngradeTssReduction(micro)).toBe(0);
+  });
+});
+
+describe('triSwapEasyTssReduction and triTrimTssReduction (the overload modal prices what Apply does)', () => {
+  it('each equals the change in the stored load on every generated swap and trim', () => {
+    let n = 0;
+    for (const dist of ['ironman', '70.3', 'sprint'] as const) {
+      const base = realTriState(dist);
+      base.wks.forEach((wk, wi) => (wk.triWorkouts ?? []).forEach((w, si) => {
+        for (const action of ['swap_easy', 'trim_volume'] as const) {
+          if (!canApplyTriSuggestion(w, action)) continue;
+          const s = structuredClone(base);
+          const t = s.wks[wi].triWorkouts![si];
+          const before = load(t);
+          const est = triSuggestionTssReduction(t, action);
+          expect(applyTriSuggestions(s, [modFor(t, action)]).applied).toBe(1);
+          expect(est, `${dist} wk${wi + 1} ${w.t} ${action}`).toBe(Math.max(0, before - load(t)));
+          n += 1;
+        }
+      }));
+    }
+    expect(n).toBeGreaterThan(400);
+  });
+
+  it('a 60-min threshold run swapped to easy: -66 TSS (107 -> 45 min easy, 41), not a flat half', () => {
+    const run = { ...workout('r1', 'threshold', 'run', 60), ...loadForTriRun('threshold', 60)! };
+    expect(load(run)).toBe(107);
+    const easy45 = loadForTriRun('easy', 45)!;
+    expect(triSwapEasyTssReduction(run)).toBe(107 - (easy45.aerobic + easy45.anaerobic));
+    expect(triSwapEasyTssReduction(run)).toBe(66);
+  });
+
+  it('a 45-min trim keeps 38 minutes, so it takes 15.6% of the load, not 15%', () => {
+    const ride = { ...workout('b1', 'bike_endurance', 'bike', 45), aerobic: 90, anaerobic: 10 };
+    // 38 / 45 of each share, rounded: 76 + 8.
+    expect(triTrimTssReduction(ride)).toBe(100 - (76 + 8));
+  });
+
+  it('0 when the action does not apply', () => {
+    const s = realTriState('sprint');
+    expect(triSwapEasyTssReduction(sessionOf(s, 'brick').w)).toBe(0);
+    expect(triSwapEasyTssReduction(sessionOf(s, 'bike_vo2_micros').w)).toBe(0);
+    expect(triTrimTssReduction({ ...workout('x', 'bike_endurance', 'bike', 60), estimatedDurationMin: undefined, aerobic: 50 })).toBe(0);
   });
 });

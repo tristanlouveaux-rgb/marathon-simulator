@@ -389,7 +389,7 @@ what the athlete's body is adapted to. The plan should prescribe load relative t
 | Build    | 1.05–1.10 | Progressive overload — 5–10% above chronic |
 | Peak     | 1.10–1.15 | Maximum sustainable overreach |
 | Deload   | 0.70–0.75 | Recovery week — 25–30% reduction |
-| Taper    | Linear ramp from 0.85 → 0.55 over taper weeks |
+| Taper    | Linear ramp from 0.85 → 0.55 over taper weeks (running and HYROX); triathlon and cycling 0.55 then 0.30, 0.55 for a one-week taper (`triTaperFraction`, 2026-10-14) |
 
 ### Weekly reset
 

@@ -14,7 +14,7 @@ import type { SimulatorState } from '@/types/state';
 function emptyState(): SimulatorState {
   return {
     eventType: 'triathlon',
-    w: 0,
+    w: 1,
     wks: [],
     triConfig: { distance: 'ironman' },
   } as unknown as SimulatorState;
@@ -366,5 +366,148 @@ describe('clamp to [0.70, 1.30]', () => {
     const r = computeTriAdaptationRatios(s);
     expect(r.bike).toBeLessThanOrEqual(ADAPT_RATIO_MAX);
     expect(r.bike).toBeGreaterThanOrEqual(ADAPT_RATIO_MIN);
+  });
+});
+
+describe('current week is wks[s.w - 1], not next week', () => {
+  // s.w is 1-based (store default w: 1; tri and cycling init set s.w = 1).
+  // Every signal used to start its walk at wks[s.w], next week. Each test
+  // plants contradicting data in next week's slot: it must not move the signal.
+
+  function tempoRide(id: string, avgHR: number) {
+    return {
+      garminId: id, distanceKm: 40, durationSec: 3600, avgPaceSecKm: null,
+      avgHR, maxHR: null, calories: null, activityType: 'CYCLING', averageWatts: 220,
+    };
+  }
+
+  function longRun(id: string, hrDrift: number) {
+    return {
+      garminId: id, distanceKm: 15, durationSec: 3600, avgPaceSecKm: 240,
+      avgHR: 150, maxHR: null, calories: null, activityType: 'RUNNING', hrDrift,
+    };
+  }
+
+  it('HR-at-power ignores a ride stored in next week', () => {
+    const build = (withNextWeek: boolean) => {
+      const s = emptyState();
+      s.w = 3; // current week = wks[2]
+      s.triConfig!.bike = { ftp: 250 };
+      const wks: any[] = [158, 156, 154].map((hr, i) => ({ garminActuals: { [`b${i}`]: tempoRide(`b${i}`, hr) } }));
+      if (withNextWeek) wks.push({ garminActuals: { b3: tempoRide('b3', 190) } });
+      s.wks = wks;
+      return computeTriAdaptationRatios(s).signals.hrAtPower;
+    };
+    const clean = build(false);
+    expect(clean).not.toBeNull();
+    expect(clean!).toBeGreaterThan(0);
+    expect(build(true)).toBe(clean);
+  });
+
+  it('Pa:Hr decoupling ignores a run stored in next week', () => {
+    const build = (withNextWeek: boolean) => {
+      const s = emptyState();
+      s.w = 3;
+      const wks: any[] = [10, 9, 8].map((drift, i) => ({ garminActuals: { [`r${i}`]: longRun(`r${i}`, drift) } }));
+      if (withNextWeek) wks.push({ garminActuals: { r3: longRun('r3', 20) } });
+      s.wks = wks;
+      return computeTriAdaptationRatios(s).signals.pahrRun;
+    };
+    const clean = build(false);
+    expect(clean).not.toBeNull();
+    expect(clean!).toBeGreaterThan(0);
+    expect(build(true)).toBe(clean);
+  });
+
+  it('CSS pace SD ignores a threshold swim stored in next week', () => {
+    const swimWeek = (id: string, kmSplits: number[]) => ({
+      triWorkouts: [{ id, t: 'swim_threshold', n: 'Threshold swim', d: '45min', r: 7, discipline: 'swim' }],
+      garminActuals: { [id]: { garminId: id, durationSec: 2700, activityType: 'SWIMMING', kmSplits } },
+    });
+    const build = (withNextWeek: boolean) => {
+      const s = emptyState();
+      s.w = 3;
+      const wks: any[] = [
+        swimWeek('s0', [90, 100, 110]),
+        swimWeek('s1', [95, 100, 105]),
+        swimWeek('s2', [98, 100, 102]),
+      ];
+      if (withNextWeek) wks.push(swimWeek('s3', [70, 100, 130]));
+      s.wks = wks;
+      return computeTriAdaptationRatios(s).signals.cssSd;
+    };
+    const clean = build(false);
+    expect(clean).not.toBeNull();
+    expect(clean!).toBeGreaterThan(0);
+    expect(build(true)).toBe(clean);
+  });
+
+  it('RPE-vs-expected ignores ratings stored in next week', () => {
+    const ratedWeek = (prefix: string, actual: number) => ({
+      triWorkouts: [
+        { id: `${prefix}a`, t: 'easy', r: 7, rpe: 7, discipline: 'run' },
+        { id: `${prefix}b`, t: 'threshold', r: 7, rpe: 7, discipline: 'run' },
+      ],
+      rated: { [`${prefix}a`]: actual, [`${prefix}b`]: actual },
+    });
+    const build = (withNextWeek: boolean) => {
+      const s = emptyState();
+      s.w = 1; // current week = wks[0]
+      const wks: any[] = [ratedWeek('r0', 5)];
+      if (withNextWeek) wks.push(ratedWeek('r1', 9));
+      s.wks = wks;
+      return computeTriAdaptationRatios(s).signals.rpeRun;
+    };
+    const clean = build(false);
+    expect(clean).not.toBeNull();
+    expect(clean!).toBeGreaterThan(0);
+    expect(build(true)).toBe(clean);
+  });
+
+  it('the HR-at-power window is 8 plan weeks ending at the current week', () => {
+    const signalAt = (w: number) => {
+      const s = emptyState();
+      s.w = w;
+      s.triConfig!.bike = { ftp: 250 };
+      const wks: any[] = Array.from({ length: w }, () => ({ garminActuals: {} }));
+      // Tempo rides in wks[1..3] only.
+      [158, 156, 154].forEach((hr, i) => { wks[i + 1].garminActuals[`b${i}`] = tempoRide(`b${i}`, hr); });
+      s.wks = wks;
+      return computeTriAdaptationRatios(s).signals.hrAtPower;
+    };
+    // w: 9 → current wks[8], window wks[1..8]: all three ride weeks.
+    expect(signalAt(9)).not.toBeNull();
+    // w: 10 → window wks[2..9]: wks[1] has left it, two points are too few.
+    expect(signalAt(10)).toBeNull();
+  });
+});
+
+describe('current week at the plan edges (week 1 and the last week)', () => {
+  const ratedWeek = (prefix: string, actual: number) => ({
+    triWorkouts: [
+      { id: `${prefix}a`, t: 'easy', r: 7, rpe: 7, discipline: 'run' },
+      { id: `${prefix}b`, t: 'threshold', r: 7, rpe: 7, discipline: 'run' },
+    ],
+    rated: { [`${prefix}a`]: actual, [`${prefix}b`]: actual },
+  });
+
+  it('week 1: ratings in the week in progress (wks[0]) are read', () => {
+    const s = emptyState();
+    s.w = 1;
+    s.wks = [ratedWeek('r0', 5), {}, {}] as any;
+    expect(computeTriAdaptationRatios(s).signals.rpeRun).not.toBeNull();
+  });
+
+  it('last week: ratings in the final plan week are read and nothing past it is', () => {
+    const s = emptyState();
+    s.w = 4; // current week = wks[3], the last
+    s.wks = [{}, {}, {}, ratedWeek('r3', 5)] as any;
+    const last = computeTriAdaptationRatios(s).signals.rpeRun;
+    expect(last).not.toBeNull();
+    // The same ratings one week earlier (mid-plan, w: 3) give the same signal.
+    const mid = emptyState();
+    mid.w = 3;
+    mid.wks = [{}, {}, ratedWeek('r2', 5), {}] as any;
+    expect(computeTriAdaptationRatios(mid).signals.rpeRun).toBe(last);
   });
 });

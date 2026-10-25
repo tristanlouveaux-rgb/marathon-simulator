@@ -46,6 +46,8 @@ import { gp } from './paces';
 import { SEED_RUN_PACE_SEC_KM, HYROX_RUN_PACE_MIN_SEC_KM, HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { doublesRatioAt, seedRoxzoneSecForFormat, hyroxDoublesTables, hyroxDoublesTablesForState, type HyroxDoublesTables } from './hyrox-doubles';
 import { hyroxSeedRunPaceSecKm } from './hyrox-results';
+import { resolveHyroxAthleteSex } from './hyrox-division';
+import { hasRealRunningFitnessSignal } from './physiological-vdot';
 import {
   computePersonalRunPaceOffset,
   blendPersonalRunPaceOffset,
@@ -120,6 +122,56 @@ export function doublesRunPaceFactor(singlesPaceSecKm: number, tables?: HyroxDou
 
 export type HyroxRunPaceSource = 'user' | 'derived' | 'seed';
 
+/** Where the returned pace came from (captions). 'race': the band seed
+ *  adjusted by the personal offset from the athlete's last HYROX race, for a
+ *  runner with no real running-fitness signal (E5, 2026-10-22). */
+export type HyroxRunPaceProvenance = HyroxRunPaceSource | 'race';
+
+/**
+ * The run-pace base a personal race offset was fitted against: 'vdot', the
+ * CP model at the athlete's VDOT (derivePopulationRunPace), for a measured
+ * runner; 'seed', the band seed pace, for a runner with no real
+ * running-fitness signal (D5). The offset is a residual on its base, so it
+ * applies only on that base, and refreshHyroxPersonalRunPaceOffset refits it
+ * when the base in use changes (the first real running signal arrives, or it
+ * lapses). Stored on hyroxConfig as `personalRunPaceOffsetBase`; undefined on
+ * offsets written before 2026-10-22 (initialization.hyrox.ts still writes
+ * none), read as 'vdot' and refitted at the next launch.
+ */
+export type HyroxRunPaceOffsetBase = 'vdot' | 'seed';
+
+type HyroxConfigWithOffsetBase = NonNullable<SimulatorState['hyroxConfig']> & { personalRunPaceOffsetBase?: HyroxRunPaceOffsetBase };
+
+/** The base the stored personal offset was fitted against (undefined: 'vdot'). */
+export function hyroxRunPaceOffsetBase(hx: SimulatorState['hyroxConfig']): HyroxRunPaceOffsetBase {
+  return (hx as HyroxConfigWithOffsetBase | undefined)?.personalRunPaceOffsetBase ?? 'vdot';
+}
+
+/** The run base in use: the CP model at the VDOT when the runner is measured
+ *  (hasRealRunningFitnessSignal), else the band seed (D5). */
+function hyroxRunVdotIsMeasured(state: SimulatorState): boolean {
+  try { return hasRealRunningFitnessSignal(state); } catch { return false; }
+}
+
+/**
+ * The band seed run pace in a target format: the singles seed (the band's
+ * median run total / 8 in the athlete's seed field, hyroxSeedRunPaceSecKm),
+ * and for doubles x the percentile-matched doubles run ratio on `tables`
+ * (default: the athlete's own doubles tables). The one seed the forecast's run
+ * pace and the personal offset fit read.
+ */
+export function hyroxSeedRunPaceForFormat(
+  state: SimulatorState,
+  band: AbilityBand,
+  targetFormat: 'singles' | 'doubles',
+  tables?: HyroxDoublesTables,
+): number {
+  const singlesSeed = hyroxSeedRunPaceSecKm(state, band);
+  return targetFormat === 'doubles'
+    ? Math.round(singlesSeed * doublesRunPaceFactor(singlesSeed, tables ?? hyroxDoublesTablesForState(state)))
+    : singlesSeed;
+}
+
 export interface HyroxRunPaceComponents {
   /** Daniels threshold pace at user's VDOT (with LT refinement). */
   thresholdSecKm: number;
@@ -139,7 +191,17 @@ export interface HyroxRunPaceComponents {
 
 export interface HyroxRunPaceResult {
   paceSecKm: number;
+  /** The branch that won: 'user' whenever the stored value is returned, even
+   *  one written by applyHyroxRunPaceDerivation. The marker-bump gate reads
+   *  this (main.ts runs detect before apply for that reason). Not a caption. */
   source: HyroxRunPaceSource;
+  /** Where the returned pace came from, the one source for every provenance
+   *  caption (Forecast chip, confidence note, Run pace page, Stats row). The
+   *  stored value keeps its own provenance (hyroxRunPaceSource 'derived'
+   *  stays derived); otherwise equal to `source`. The Forecast chip read
+   *  `source` and said "Set manually" for a stored derived pace that Stats
+   *  captioned "Updated from your runs" (ISSUE-406 (d)). */
+  provenance: HyroxRunPaceProvenance;
   /** The model-derived value if available, regardless of which won. */
   derivedSecKm: number | null;
   /** Component breakdown for UI surfacing (Stats view CP card). */
@@ -188,7 +250,7 @@ export function derivePopulationRunPace(
  */
 export function deriveHyroxRunPace(state: SimulatorState): HyroxRunPaceResult {
   const hx = state.hyroxConfig;
-  if (!hx) return { paceSecKm: SEED_RUN_PACE_SEC_KM.intermediate, source: 'seed', derivedSecKm: null };
+  if (!hx) return { paceSecKm: SEED_RUN_PACE_SEC_KM.intermediate, source: 'seed', provenance: 'seed', derivedSecKm: null };
 
   const band = hx.athleteBand;
   const targetFormat: 'singles' | 'doubles' =
@@ -196,16 +258,27 @@ export function deriveHyroxRunPace(state: SimulatorState): HyroxRunPaceResult {
   // The band seed is a singles pace: the band's median run total / 8 in the
   // field the band was read in (hyroxSeedRunPaceSecKm). Doubles applies the
   // same run ratio as the derived path so both sources mean the same thing.
-  const singlesSeed = hyroxSeedRunPaceSecKm(state, band);
-  const seed = targetFormat === 'doubles'
-    ? Math.round(singlesSeed * doublesRunPaceFactor(singlesSeed, hyroxDoublesTablesForState(state)))
-    : singlesSeed;
+  const seed = hyroxSeedRunPaceForFormat(state, band, targetFormat);
 
-  // Population model (no offset).
-  const pop = derivePopulationRunPace(state, targetFormat);
+  // Population model (no offset), only for a measured runner. The model reads
+  // state.v, and without a real running-fitness signal that is the bare
+  // baseline (the default VDOT 50, or a stale carried value): a pace from it
+  // would be captioned "Updated from your runs" for a runner with no runs. The
+  // canonical rule is no claims off the bare-baseline VDOT
+  // (hasRealRunningFitnessSignal, physiological-vdot.ts), so such a runner gets
+  // the band seed, captioned "Population est." (Tristan, 2026-10-21, D5). The
+  // personal offset is a residual against this model, so it goes with it.
+  const measured = hyroxRunVdotIsMeasured(state);
+  const pop = measured ? derivePopulationRunPace(state, targetFormat) : null;
 
-  // Personal offset from logged-race observations, decayed by age.
-  const personalOffset = pop ? computePersonalRunPaceOffset(state) : 0;
+  // Personal offset from the last HYROX race, decayed by age. It is a residual
+  // on the base it was fitted against (hyroxRunPaceOffsetBase), so it applies
+  // only on that base: the CP model for a measured runner, the band seed for
+  // an unmeasured one. A mismatched offset (the base changed since the fit)
+  // applies nowhere until refreshHyroxPersonalRunPaceOffset refits it.
+  const offsetBase = hyroxRunPaceOffsetBase(hx);
+  const personalOffset = pop && offsetBase === 'vdot' ? computePersonalRunPaceOffset(state) : 0;
+  const seedOffset = !measured && offsetBase === 'seed' ? computePersonalRunPaceOffset(state) : 0;
 
   let derived: number | null = null;
   let components: HyroxRunPaceComponents | undefined;
@@ -222,12 +295,55 @@ export function deriveHyroxRunPace(state: SimulatorState): HyroxRunPaceResult {
     // Manually-set yields to improvements: derived overrides user when
     // faster by ≥ 5 s/km. Below that margin, user wins.
     if (derived != null && derived <= userVal - 5) {
-      return { paceSecKm: derived, source: 'derived', derivedSecKm: derived, components };
+      return { paceSecKm: derived, source: 'derived', provenance: 'derived', derivedSecKm: derived, components };
     }
-    return { paceSecKm: userVal, source: 'user', derivedSecKm: derived, components };
+    // The stored value wins. A value applyHyroxRunPaceDerivation wrote keeps
+    // 'derived' provenance; one the athlete entered or pasted is 'user'.
+    const provenance: HyroxRunPaceSource = hx.hyroxRunPaceSource === 'derived' ? 'derived' : 'user';
+    return { paceSecKm: userVal, source: 'user', provenance, derivedSecKm: derived, components };
   }
-  if (derived != null) return { paceSecKm: derived, source: 'derived', derivedSecKm: derived, components };
-  return { paceSecKm: seed, source: 'seed', derivedSecKm: null };
+  if (derived != null) return { paceSecKm: derived, source: 'derived', provenance: 'derived', derivedSecKm: derived, components };
+  // An unmeasured runner with a previous HYROX race: the band seed moved by
+  // the offset fitted against that seed, so the race's run time still anchors
+  // the forecast (E5, 2026-10-22). D5 dropped the offset with the VDOT model,
+  // and a beginner who had raced lost the race's anchor. Still the seed branch
+  // (source 'seed', no model value): nothing is written to the athlete's pace
+  // slot, and the plan keeps the seed.
+  if (seedOffset !== 0) {
+    return {
+      paceSecKm: Math.max(HYROX_RUN_PACE_MIN_SEC_KM, Math.round(seed + seedOffset)),
+      source: 'seed', provenance: 'race', derivedSecKm: null,
+    };
+  }
+  return { paceSecKm: seed, source: 'seed', provenance: 'seed', derivedSecKm: null };
+}
+
+/**
+ * The VDOT the run horizon projects from: the base the forecast's run pace
+ * uses. A measured runner (hasRealRunningFitnessSignal): state.v. Otherwise
+ * the band seed (D5), expressed as the VDOT at which the forecast's own CP
+ * model (gp(v).t x cpRatioForVdot(v), the singles pace derivePopulationRunPace
+ * gives without LT) equals the band's singles seed pace, found by bisection
+ * over the model's VDOT range [25, 85]. No new constant: the model and the
+ * seed are the forecast's own. Null without a HYROX config. Tracking side.
+ */
+export function hyroxRunBaseVdot(state: SimulatorState): number | null {
+  const hx = state.hyroxConfig;
+  if (!hx) return null;
+  if (hyroxRunVdotIsMeasured(state)) {
+    return typeof state.v === 'number' && state.v > 0 ? state.v : null;
+  }
+  const seed = hyroxSeedRunPaceSecKm(state, hx.athleteBand);
+  if (!Number.isFinite(seed) || seed <= 0) return null;
+  const modelPace = (v: number) => gp(v, null).t * cpRatioForVdot(v);
+  let lo = 25, hi = 85; // modelPace falls as VDOT rises
+  if (seed >= modelPace(lo)) return lo;
+  if (seed <= modelPace(hi)) return hi;
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    if (modelPace(mid) > seed) lo = mid; else hi = mid;
+  }
+  return Math.round(((lo + hi) / 2) * 10) / 10;
 }
 
 /**
@@ -247,28 +363,41 @@ export const HYROX_FATIGUE_TO_THRESHOLD_RATIO: Record<AbilityBand, number> = {
 };
 
 /**
- * Idempotent refresh: compute the initial personal offset from a user's
- * stored previous-race data when the offset hasn't been computed yet.
- * Mutates `state.hyroxConfig` in place when a non-zero offset is produced.
+ * Idempotent refresh: fit the personal offset from the athlete's stored
+ * previous race against the run-pace base in use, and refit it when that base
+ * changes. Mutates `state.hyroxConfig` in place.
+ *
+ * The base (HyroxRunPaceOffsetBase): the CP model at the athlete's VDOT for a
+ * measured runner (hasRealRunningFitnessSignal), the band seed pace for an
+ * unmeasured one (D5, the base deriveHyroxRunPace uses). The offset is the
+ * observed race pace minus the base at the race's format, blended
+ * (blendPersonalRunPaceOffset). Fitting an unmeasured runner against the seed
+ * keeps the race anchoring the forecast; fitting against the bare-baseline
+ * VDOT (the default 50) gave an offset that was either dropped (D5) or, once a
+ * real signal arrived, applied to a different VDOT than it was fitted at
+ * (E5, 2026-10-22). The offset is a pure function of the stored race and the
+ * base (the date stamp is the race date, so a refit leaves its decay alone).
  *
  * Returns true if state was modified (caller should call `saveState`).
- * Returns false when there's no data, when the offset already exists, or
- * when the math is degenerate.
  *
  * Called from:
- * - `initialization.hyrox.ts` (initial onboarding path; same logic inlined there for now)
- * - `main.ts` at launch (boot-time migration for existing users who pre-date v2)
+ * - `main.ts` at launch, before the run-pace marker pass
+ * - `hyrox-prev-time-update.ts` after a new previous race is entered
+ * (`initialization.hyrox.ts` inlines an older copy fitted against the VDOT
+ * model with no base stamp; this refresh refits it at the next launch.)
  *
  * Skipped paths (no-op):
  * - No `previousHyroxTimeSec` stored
  * - Format unknown (`hyroxPreviousTimeFormat` missing)
- * - VDOT out of range
- * - Offset already populated (`personalRunPaceOffsetSec != null`)
+ * - Measured runner with VDOT out of range
+ * - Offset already fitted against the base in use
  */
 export function refreshHyroxPersonalRunPaceOffset(state: SimulatorState): boolean {
-  const hx = state.hyroxConfig;
+  const hx = state.hyroxConfig as HyroxConfigWithOffsetBase | undefined;
   if (!hx) return false;
-  if (hx.personalRunPaceOffsetSec != null) return false;
+  const measured = hyroxRunVdotIsMeasured(state);
+  const wantBase: HyroxRunPaceOffsetBase = measured ? 'vdot' : 'seed';
+  if (hx.personalRunPaceOffsetSec != null && hx.personalRunPaceOffsetBase === wantBase) return false;
   const prevTimeSec = hx.previousHyroxTimeSec;
   const prevFmt = hx.hyroxPreviousTimeFormat;
   const prevFormatKnown =
@@ -276,15 +405,36 @@ export function refreshHyroxPersonalRunPaceOffset(state: SimulatorState): boolea
     prevFmt === 'open_doubles' || prevFmt === 'pro_doubles';
   if (prevTimeSec == null || !prevFormatKnown) return false;
   const vdot = state.v;
-  if (typeof vdot !== 'number' || vdot < 25 || vdot > 85) return false;
+  if (measured && (typeof vdot !== 'number' || vdot < 25 || vdot > 85)) return false;
+  // An offset fitted against another base no longer applies (deriveHyroxRunPace
+  // reads it only on its own base): clear it before the refit, so a refit that
+  // finds no offset leaves none behind.
+  const hadStale = hx.personalRunPaceOffsetSec != null;
+  if (hadStale) {
+    hx.personalRunPaceOffsetSec = undefined;
+    hx.personalRunPaceOffsetUpdatedAtISO = undefined;
+    hx.personalRunPaceOffsetConfidence = undefined;
+    hx.personalRunPaceOffsetBase = undefined;
+  }
 
   const splits = (hx as { hyroxPreviousStationSplits?: Record<string, number> }).hyroxPreviousStationSplits;
   const splitCount = splits ? Object.keys(splits).length : 0;
   const hasSplits = splitCount >= 6;
   const band = hx.athleteBand;
-  // The previous race's own field: its weight family, the pair's division
-  // (else sex) for doubles, the athlete's sex for singles.
-  const prevTables = hyroxDoublesTables(prevFmt, state.biologicalSex, hx.division);
+  // The previous race's own field: its weight family, the division the pair
+  // raced in (hyroxPreviousTimeDivision, else the current division, else
+  // sex) for doubles, the athlete's sex for singles. The same field "where
+  // you lost time" compares the result in.
+  const raceDivision = hx.hyroxPreviousTimeDivision ?? hx.division;
+  // The athlete's own sex (their singles field), hyroxPlanningBandFor's rule:
+  // biological sex, then the current division pick, then the race's (a
+  // women's or men's pair says it). The race division alone would read a
+  // sex-unset Women pick who raced Mixed in the pooled singles field here
+  // while her planning band reads the women's.
+  const athleteSex = resolveHyroxAthleteSex(state.biologicalSex, hx.division)
+    ?? resolveHyroxAthleteSex(undefined, hx.hyroxPreviousTimeDivision)
+    ?? state.biologicalSex;
+  const prevTables = hyroxDoublesTables(prevFmt, athleteSex, raceDivision);
 
   let stationsTotalSec: number;
   let roxzoneSec: number;
@@ -312,30 +462,37 @@ export function refreshHyroxPersonalRunPaceOffset(state: SimulatorState): boolea
     stationsFromSplits,
   };
   const observedPaceSecKm = backComputeRunPaceFromRace(observation);
-  if (observedPaceSecKm == null) return false;
+  if (observedPaceSecKm == null) return hadStale;
 
   const prevTargetFormat: 'singles' | 'doubles' =
     (prevFmt === 'open_doubles' || prevFmt === 'pro_doubles') ? 'doubles' : 'singles';
+  // The base at the previous race: the athlete's own sex, the race's format
+  // and division (the same tables as the observation above). The CP model at
+  // the VDOT for a measured runner, the band seed for an unmeasured one.
   const fakeState = {
     ...state,
-    hyroxConfig: { ...hx, format: prevFmt, athleteBand: band },
+    biologicalSex: athleteSex,
+    hyroxConfig: { ...hx, format: prevFmt, athleteBand: band, division: raceDivision },
   } as SimulatorState;
-  const modelAtPrev = derivePopulationRunPace(fakeState, prevTargetFormat);
-  if (!modelAtPrev) return false;
+  const basePaceSecKm = measured
+    ? derivePopulationRunPace(fakeState, prevTargetFormat)?.paceSecKm ?? null
+    : hyroxSeedRunPaceForFormat(fakeState, band, prevTargetFormat, prevTables);
+  if (basePaceSecKm == null) return hadStale;
 
   const blended = blendPersonalRunPaceOffset({
     observedPaceSecKm,
-    modelPaceSecKm: modelAtPrev.paceSecKm,
+    modelPaceSecKm: basePaceSecKm,
     stationsFromSplits,
   });
-  if (blended.offsetSec === 0) return false;
+  if (blended.offsetSec === 0) return hadStale;
 
   hx.personalRunPaceOffsetSec = blended.offsetSec;
   hx.personalRunPaceOffsetUpdatedAtISO = observation.dateISO;
   hx.personalRunPaceOffsetConfidence = blended.confidence;
+  hx.personalRunPaceOffsetBase = wantBase;
   console.log(
     `[hyrox] personalised run-pace offset = ${blended.offsetSec >= 0 ? '+' : ''}${blended.offsetSec} s/km` +
-    ` (observed ${observedPaceSecKm}, model ${modelAtPrev.paceSecKm}, splits=${stationsFromSplits}, conf=${blended.confidence.toFixed(2)})`,
+    ` (observed ${observedPaceSecKm}, ${wantBase} base ${basePaceSecKm}, splits=${stationsFromSplits}, conf=${blended.confidence.toFixed(2)})`,
   );
   return true;
 }

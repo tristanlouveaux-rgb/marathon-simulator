@@ -1,7 +1,5 @@
 // Re-export all cross-training functions
 export * from './activities';
-export * from './load-matching';
-export * from './matcher';
 export * from './suggester';
 
 // Universal Load Currency system (new)

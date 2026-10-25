@@ -40,18 +40,36 @@ export function rankWeakestLinks(prediction: HyroxPrediction | null): WeakestLin
   // No meaningful gains when race day is past or unset.
   if (proj.weeksRemaining <= 0) return [];
 
-  const rows: WeakestLinkRow[] = proj.stations.map(p => ({
+  const rows: WeakestLinkRow[] = proj.stations.map(toRow);
+
+  rows.sort((a, b) => b.gainableSec - a.gainableSec);
+  // Drop trailing entries with zero gain. They add noise without info.
+  return rows.filter(r => r.gainableSec >= 1);
+}
+
+function toRow(p: HyroxStationProjection): WeakestLinkRow {
+  return {
     station: p.station,
     currentSec: p.currentSec,
     projectedSec: p.projectedSec,
     gainableSec: Math.max(0, p.currentSec - p.projectedSec),
     improvementPct: p.improvementPct,
     source: p.source,
-  }));
+  };
+}
 
-  rows.sort((a, b) => b.gainableSec - a.gainableSec);
-  // Drop trailing entries with zero gain. They add noise without info.
-  return rows.filter(r => r.gainableSec >= 1);
+/** One station's row on the same terms as rankWeakestLinks, kept when its
+ *  gain is under a second (rankWeakestLinks drops those). Null without a
+ *  projection, or once race day has passed. "Where to gain" uses it to show
+ *  the station the last race lost the most on. */
+export function weakestLinkRowFor(
+  prediction: HyroxPrediction | null,
+  station: HyroxStationProjection['station'],
+): WeakestLinkRow | null {
+  const proj = prediction?.projection;
+  if (!proj || proj.weeksRemaining <= 0) return null;
+  const p = proj.stations.find(x => x.station === station);
+  return p ? toRow(p) : null;
 }
 
 /** Convenience: top N rows from rankWeakestLinks. */

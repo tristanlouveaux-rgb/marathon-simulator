@@ -50,6 +50,12 @@ function buildState(opts: {
   } as unknown as SimulatorState;
 }
 
+/** A measured runner: a watch VO2max is a real running-fitness signal, so
+ *  computePhysiologyMitigation reads state.v. */
+function measured(s: SimulatorState): SimulatorState {
+  return { ...s, vo2: s.v } as SimulatorState;
+}
+
 describe('computeHyroxStaleness', () => {
   it('no race date → unknown, full trust', () => {
     const r = computeHyroxStaleness(buildState({}));
@@ -95,13 +101,21 @@ describe('computeHyroxStaleness', () => {
     const noPhys = computeHyroxStaleness(buildState({
       raceDateOffsetMonths: 18, band: 'intermediate',
     }));
-    const withPhys = computeHyroxStaleness(buildState({
+    const withPhys = computeHyroxStaleness(measured(buildState({
       raceDateOffsetMonths: 18, band: 'intermediate',
       vdot: 50,                 // above intermediate-implied 45
       ctlBaseline: 80,          // strong Strava signal
-    }));
+    })));
     expect(withPhys.physiologyMitigation).toBeGreaterThan(noPhys.physiologyMitigation);
     expect(withPhys.bandWeight).toBeGreaterThan(noPhys.bandWeight);
+  });
+
+  it('a bare-baseline VDOT (no running-fitness signal) gives no mitigation; a measured one does', () => {
+    // VDOT 50 on a beginner band (implied 32) scored the maximum, 1.0, and
+    // released the stale-race penalty off the default value (2026-10-22).
+    const bare = buildState({ raceDateOffsetMonths: 15, band: 'beginner', vdot: 50 });
+    expect(computePhysiologyMitigation(bare)).toBe(0.5);
+    expect(computePhysiologyMitigation(measured(bare))).toBe(1);
   });
 
   it('confidence cap remains low for stale even with strong physiology', () => {

@@ -15,7 +15,6 @@ import {
   generateWeekWorkouts, parseWorkoutDescription,
   calculateWorkoutLoad, checkConsecutiveHardDays, assignDefaultDays
 } from '@/workouts';
-// applyCrossTrainingToWorkouts is intentionally NOT used here.
 // Plan modifications must only happen via explicit user confirmation in events.ts.
 import { ft, fpModel, displayPaceSec, formatPace, formatWorkoutTime, formatKm, fmtDesc, DAY_NAMES, DAY_NAMES_SHORT } from '@/utils';
 import { SPORTS_DB, SPORT_LABELS, LOAD_PROFILES } from '@/constants';

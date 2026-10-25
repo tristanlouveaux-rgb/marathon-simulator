@@ -83,7 +83,8 @@ function emptySummary(): DisciplineAdherenceSummary {
 
 /**
  * Compute per-discipline adherence over the last `weeks` completed weeks.
- * The current week (`state.w`) is excluded. It's still in progress.
+ * The current week (`wks[s.w - 1]`, `s.w` is 1-based) is excluded. It's still
+ * in progress.
  */
 export function computeTriAdherence(
   state: SimulatorState,
@@ -96,12 +97,14 @@ export function computeTriAdherence(
   };
 
   const wks = state.wks ?? [];
-  const currentWeek = state.w ?? 0;
-  const startWeek = Math.max(0, currentWeek - weeks);
+  // The last completed week is wks[s.w - 2], as plan-adherence.triathlon.ts
+  // reads it.
+  const lastCompletedIdx = (state.w ?? 1) - 2;
+  const startWeek = Math.max(0, lastCompletedIdx - weeks + 1);
   const illness = (state as any).illnessState;
   const planStart = state.planStartDate;
 
-  for (let w = currentWeek - 1; w >= startWeek; w--) {
+  for (let w = lastCompletedIdx; w >= startWeek; w--) {
     const wk = wks[w];
     const planned = wk?.triWorkouts;
     if (!planned) continue;

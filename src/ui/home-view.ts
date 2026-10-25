@@ -12,7 +12,8 @@ import type { Week } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/app/runtime';
 import { getPhysiologySource } from '@/data/sources';
-import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, getTrailingEffortScore, computeDayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO, normalizeiTrimp} from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, getTrailingEffortScore, computeDayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDayTargetTSS, isRestDayOverreached, normalizeiTrimp, signalBActualTSS, signalBAdhocTSS, ratedRpeOf } from '@/calculations/fitness-model';
+import { computeWeekDoubleDayBonus } from '@/calculations/double-day';
 import { computePlannedWeekTarget, computeCurrentWeekCarry } from '@/calculations/planned-week-target';
 import { computeAcwrReductionProjection } from '@/calculations/acwr-reduction-projection';
 import { workoutsToPlannedRuns } from '@/cross-training/suggester';
@@ -20,8 +21,8 @@ import { computeReadiness, readinessColor, readinessColorStops, computeRecoveryS
 import { computeTriReadiness } from '@/calculations/tri-readiness';
 import { hyroxMtlAcwr } from '@/calculations/mtl';
 import { computeDecayedTriCarry } from '@/calculations/tri-cross-training-carry';
-import { computeDailyCoach, type StrainContext } from '@/calculations/daily-coach';
-import { computeCapacityStrain, capacityStrainNote } from '@/calculations/capacity-strain';
+import { computeDailyCoach, deriveStrainContext } from '@/calculations/daily-coach';
+import { computeCapacityStrain, capacityStrainNote, REST_DAY_OVERREACH_SENTENCE } from '@/calculations/capacity-strain';
 import { getSleepInsight, fmtSleepDuration, sleepScoreColor, buildBarChart, getSleepBank, fmtSleepBank, deriveSleepTarget, buildDailySignalBTSS, computeSleepDebtOutlook, mergeManualSleepHistory } from '@/calculations/sleep-insights';
 import type { PhysiologyDayEntry } from '@/types/state';
 import { generateWeekWorkouts, parseWorkoutDescription } from '@/workouts';
@@ -42,7 +43,6 @@ import { buildHolidayBannerHome, clearHoliday, cancelScheduledHoliday } from './
 import { formatKm, fmtDateUK, fmtDesc, formatPace, ft } from '@/utils/format';
 import { localDateKey, isOnLocalDay } from '@/utils/local-date';
 import { setOnWeekAdvance, applyRecoveryAdjustment } from './events';
-import { TL_PER_MIN } from '@/constants';
 import { normalizeSport } from '@/cross-training/activities';
 import { formatActivityType } from '@/calculations/activity-matcher';
 import { resolveActivityDisplayName } from './sport-picker-modal';
@@ -120,7 +120,13 @@ export interface LoadSegment {
   tss: number;
   durationMin: number;
   color: string;
+  /** The week's double-day compounding bonus (computeWeekDoubleDayBonus), not
+   *  a sport: no duration, not counted as a sport. */
+  doubleDay?: true;
 }
+
+/** Label of the double-day bonus row in a load breakdown. */
+export const DOUBLE_DAY_SEGMENT_LABEL = 'Double-day load';
 
 export function sportColor(sport: string): string {
   const s = normalizeSport(sport);
@@ -158,21 +164,23 @@ export function breakdownShade(index: number): string {
   return BREAKDOWN_SHADES[i];
 }
 
-function normalizeiTrimpLocal(itrimp: number): number {
-  return normalizeiTrimp(itrimp);
-}
-
 function parseDurMinLocal(d: string): number {
   const m = d.match(/(\d+)min/);
   return m ? parseInt(m[1]) : 30;
 }
 
 /**
- * Compute a per-sport breakdown of Signal B TSS for the current week.
- * Same activities and dedup as computeWeekRawTSS, grouped by label.
- * Known differences from that total: no strength RPE override and no double-day bonus.
+ * Per-sport breakdown of a week's Signal B TSS: the same activities, dedup and
+ * per-activity rule as computeWeekRawTSS (signalBActualTSS with the rating,
+ * so a rated strength session counts its strength override; signalBAdhocTSS
+ * for an adhoc entry with no activity record), grouped by label. The week's
+ * double-day compounding bonus, which the total also counts, is its own
+ * segment (`doubleDay`, last), so the segments sum to computeWeekRawTSS. Until
+ * 2026-10-22 (E4) the breakdown had no strength override and no bonus: a rated
+ * strength session with heart rate showed its roughly 20 TSS iTRIMP against
+ * 107 in the total.
  *
- * @param planStartDate - unused since unspentLoadItems stopped counting as load.
+ * @param planStartDate - dates the double-day bonus, as computeWeekRawTSS does.
  */
 export function computeLoadBreakdown(
   wk: Week,
@@ -204,17 +212,8 @@ export function computeLoadBreakdown(
       if (seenGarminIds.has(actual.garminId)) continue;
       seenGarminIds.add(actual.garminId);
     }
-    const ratedVal = ratedMap[workoutId];
-    const rpe = (typeof ratedVal === 'number') ? ratedVal : 5;
-    let tss: number;
-    let durationMin: number;
-    if (actual.iTrimp != null && actual.iTrimp > 0) {
-      tss = normalizeiTrimpLocal(actual.iTrimp);
-      durationMin = actual.durationSec / 60;
-    } else {
-      durationMin = actual.durationSec > 0 ? actual.durationSec / 60 : actual.distanceKm * 6;
-      tss = durationMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
-    }
+    const durationMin = actual.durationSec > 0 ? actual.durationSec / 60 : actual.distanceKm * 6;
+    const tss = signalBActualTSS(actual, ratedRpeOf(ratedMap[workoutId])); // computeWeekRawTSS's rule
     // Label: use displayName for cross-training slots, else "Running"
     const rawLabel = (actual.displayName && !actual.workoutName) ? actual.displayName : 'Running';
     const label = normalizeRunLabel(rawLabel);
@@ -229,30 +228,21 @@ export function computeLoadBreakdown(
     if (isPlannedAdhocId(w.id)) continue;
     // Skip if garminActuals already covers this entry (garminActuals wins. May have been Strava-upgraded)
     if (w.id && (wk.garminActuals as any)?.[w.id]) continue;
-    // Dedup by garminId. Check both id prefix and direct garminId property
+    // Dedup by the 'garmin-<id>' prefix, computeWeekRawTSS's rule.
     const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
-    const garminId = rawId ?? (w as any).garminId ?? null;
-    if (garminId) {
-      if (seenGarminIds.has(garminId)) {
-        console.log(`[LoadBreakdown] DEDUP adhoc id="${w.id}" n="${w.n}" garminId=${garminId}`);
+    if (rawId) {
+      if (seenGarminIds.has(rawId)) {
+        console.log(`[LoadBreakdown] DEDUP adhoc id="${w.id}" n="${w.n}" garminId=${rawId}`);
         continue;
       }
-      seenGarminIds.add(garminId);
+      seenGarminIds.add(rawId);
     }
-    let tss: number;
-    let durationMin: number;
-    if (w.iTrimp != null && w.iTrimp > 0) {
-      tss = normalizeiTrimp(w.iTrimp);
-      durationMin = parseDurMinLocal(w.d);
-    } else {
-      const rpe = w.rpe ?? w.r ?? 5;
-      durationMin = parseDurMinLocal(w.d);
-      tss = durationMin * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
-    }
+    const durationMin = parseDurMinLocal(w.d);
+    const tss = signalBAdhocTSS(w); // computeWeekRawTSS's adhoc rule
     const sport = normalizeSport(w.n.replace(' (Garmin)', '').toLowerCase());
     const rawLabel = w.n.replace(' (Garmin)', '').replace(' (Strava)', '');
     const label = normalizeRunLabel(rawLabel);
-    console.log(`[LoadBreakdown] adhoc id="${w.id}" n="${w.n}" label="${label}" tss=${tss.toFixed(0)} dur=${durationMin.toFixed(0)}m garminId=${garminId ?? 'none'}`);
+    console.log(`[LoadBreakdown] adhoc id="${w.id}" n="${w.n}" label="${label}" tss=${tss.toFixed(0)} dur=${durationMin.toFixed(0)}m garminId=${rawId ?? 'none'}`);
     add(label, tss, durationMin, sportColor(sport));
   }
 
@@ -261,9 +251,14 @@ export function computeLoadBreakdown(
   // overflow item's activity is already counted as its twin or adhoc entry.
   // Adding them put the surplus on top of the matched run (audit B20).
 
-  return Array.from(segments.values())
+  const out = Array.from(segments.values())
     .filter(s => s.tss > 0.5)
     .sort((a, b) => b.tss - a.tss);
+  const bonus = computeWeekDoubleDayBonus(wk, planStartDate);
+  if (bonus > 0.5) {
+    out.push({ label: DOUBLE_DAY_SEGMENT_LABEL, tss: bonus, durationMin: 0, color: '#94A3B8', doubleDay: true });
+  }
+  return out;
 }
 
 
@@ -285,9 +280,10 @@ export function showPlanLoadBreakdownSheet(s: SimulatorState): void {
     }
   }
 
+  // The double-day bonus row stays last (computeLoadBreakdown's order).
   const segments = Array.from(totalSegments.values())
     .filter(seg => seg.tss > 0.5)
-    .sort((a, b) => b.tss - a.tss)
+    .sort((a, b) => Number(!!a.doubleDay) - Number(!!b.doubleDay) || b.tss - a.tss)
     .map((seg, i) => ({ ...seg, color: breakdownShade(i) }));
   const totalTss = Math.round(segments.reduce((sum, seg) => sum + seg.tss, 0));
   const weeksText = `${completedWks.length} week${completedWks.length !== 1 ? 's' : ''} completed`;
@@ -311,7 +307,7 @@ export function showPlanLoadBreakdownSheet(s: SimulatorState): void {
           <div style="display:flex;align-items:center;gap:8px">
             <div style="width:10px;height:10px;border-radius:50%;background:${seg.color};flex-shrink:0"></div>
             <span style="font-size:14px;color:var(--c-black)">${seg.label}</span>
-            <span style="font-size:12px;color:var(--c-faint)">${fmtDur(seg.durationMin)}</span>
+            ${seg.doubleDay ? '' : `<span style="font-size:12px;color:var(--c-faint)">${fmtDur(seg.durationMin)}</span>`}
           </div>
           <span style="font-size:14px;font-weight:600;color:var(--c-black)">${Math.round(seg.tss)}</span>
         </div>
@@ -941,7 +937,7 @@ export function buildReadinessRing(s: SimulatorState): string {
 
   const effectiveSleepTarget0 = s.sleepTargetSec ?? deriveSleepTarget(s.physiologyHistory ?? []);
   const sleepBank = getSleepBank(s.physiologyHistory ?? [], effectiveSleepTarget0);
-  const _rdnDailyTSS = buildDailySignalBTSS(s.wks ?? [], (s as any).previousPlanWks);
+  const _rdnDailyTSS = buildDailySignalBTSS(s.wks ?? [], (s as any).previousPlanWks, s.planStartDate);
   const _rdnDebtOutlook = computeSleepDebtOutlook(s.physiologyHistory ?? [], _rdnDailyTSS, s.athleteTier ?? 'recreational', effectiveSleepTarget0);
   const sleepDebtExcessSec = _rdnDebtOutlook.typicalDebtSec != null
     ? _rdnDebtOutlook.debtSec - _rdnDebtOutlook.typicalDebtSec
@@ -989,19 +985,17 @@ export function buildReadinessRing(s: SimulatorState): string {
   // Day type
   const hasPlannedWorkout = plannedDayTSS > 0;
   const isRestDay = !hasPlannedWorkout && !matchedActivityToday;
-  // Rest-day overreach: activity exceeds a typical light session (50% of per-session avg)
-  const restDayOverreachThreshold = perSessionAvg * REST_DAY_OVERREACH_RATIO;
-  const isRestDayOverreaching = isRestDay && todaySignalBTSS > 0 && perSessionAvg > 0 && todaySignalBTSS > restDayOverreachThreshold;
-  // Strain: two scales for different purposes.
-  // Linear (actual/target × 100). Used for the readiness floor thresholds.
-  //   The floor cares about real physiological load completion, not visual display.
-  // Logarithmic (log(1+actual)/log(1+target) × 100). Used for ring fill only.
+  // Rest-day overreach on logged sessions only, against the plan's per-session
+  // average (isRestDayOverreached; not the Just-Track ring anchor above): the
+  // rule the Readiness page, the strain page and the coach read. Passive step
+  // load lifted the ring to "High for rest day" on a walking day while the
+  // Readiness page read the day as fine.
+  const isRestDayOverreaching = strainWk ? isRestDayOverreached(strainWk, strainDay, isRestDay, plannedCtx.perSessionAvg) : false;
+  // Logarithmic strain (log(1+actual)/log(1+target) × 100), for ring fill.
   //   Early effort registers visually (20/100 TSS → ~38% not 20%);
   //   exceeding target grows slowly (130% linear → ~107% log).
-  //   Matches WHOOP/Bevel logarithmic strain display.
-  const strainPctLinear = hasPlannedWorkout && todaySignalBTSS > 0 && plannedDayTSS > 0
-    ? (todaySignalBTSS / plannedDayTSS) * 100
-    : 0;
+  //   Matches WHOOP/Bevel logarithmic strain display. The coach's plan-relative
+  //   percent comes from deriveStrainContext (sessions only), below.
   const strainPctLog = hasPlannedWorkout && todaySignalBTSS > 0 && plannedDayTSS > 0
     ? (Math.log(1 + todaySignalBTSS) / Math.log(1 + plannedDayTSS)) * 100
     : 0;
@@ -1057,47 +1051,31 @@ export function buildReadinessRing(s: SimulatorState): string {
 
   // ── Primary message (single authoritative sentence) ─────────────────────
   // Replaces the old readinessSentence + HRV banner with one coherent message
-  // computed by daily-coach using all available signals.
-  const trainedToday = todaySignalBTSS > 0;
-  const todayPlannedWorkout = plannedCtx.workoutsForDay(todayDayOfWeek)
-    .find(w => w.status !== 'skip' && w.status !== 'replaced');
-  const todayIsHard = todayPlannedWorkout?.isHard ?? false;
-
-  let upcomingHard: StrainContext['upcomingHard'] = null;
-  for (let offset = 1; offset <= 2; offset++) {
-    const targetDow = (todayDayOfWeek + offset) % 7;
-    if (targetDow < todayDayOfWeek) break;
-    const hit = plannedCtx.workoutsForDay(targetDow)
-      .find(w => w.status !== 'skip' && w.status !== 'replaced' && w.isHard);
-    if (hit) {
-      upcomingHard = { whenLabel: offset === 1 ? 'tomorrow' : 'the day after', type: hit.type };
-      break;
-    }
-  }
-
-  const strainCtx: StrainContext = {
-    strainPct: strainPctLinear,
-    capacityStrainPct: capStrain.pctCapacity,
-    isRestDay,
-    isRestDayOverreaching,
-    trainedToday,
-    todayIsHard,
-    upcomingHard,
-    recentCrossTraining: null, // populated below if found
-    actualTSS: todaySignalBTSS,
-  };
-
-  const coach = computeDailyCoach(s, strainCtx);
-  // Tri-mode post-session override: canonical capacityStrainNote — injury-cap
-  // overshoot first ("X TSS logged against an injury-capped day of Y…"), then
-  // the Big/Solid/Good-training tiers vs the capacity anchor. Same helper the
-  // Readiness detail page reads, so the two surfaces cannot diverge. Running
-  // mode gets the same copy via coach.primaryMessage. (Override restored from
-  // the 2026-05-19 snapshot — lost in the May crash.)
+  // computed by daily-coach using all available signals. The coach's context
+  // comes from deriveStrainContext, the source the coach page and the Readiness
+  // page use (D8): it carries today's planned workout, so the line names the
+  // session, and its session fields count logged sessions only (passive step
+  // load is strain, not a session: ISSUE-406 (c)). Home built its own context
+  // before, without the planned workout.
+  const coach = computeDailyCoach(s, deriveStrainContext(s));
+  // Tri-mode post-session override: capacityStrainNote, which calls
+  // postSessionNote: gated on a logged session, injury-cap overshoot first
+  // ("X TSS logged against an injury-capped day of Y…"), then the Big / Solid /
+  // Good training tier from sessionPctCapacity, quoting the ring's number. Running,
+  // HYROX and Just-Track get the same sentence from the same helper through
+  // coach.primaryMessage, and the Readiness page calls it too, so one session
+  // reads one tier word on every surface. (Override restored from the
+  // 2026-05-19 snapshot — lost in the May crash.)
   // Fallback = the chronic sentence this card would otherwise show, so a
   // trained day below the strain tiers still leads with "X TSS logged today."
+  // Rest-day overreach leads, as on the coach line (running, HYROX) and the
+  // Readiness page: Home read "153 TSS logged today. Keep training
+  // consistently..." beside a warn-coloured ring while Readiness said
+  // "Overreaching. High load on a rest day." (2026-10-22, E2).
   const triPostSessionNote = isTri
-    ? capacityStrainNote(capStrain, triReadinessResult?.sentence ?? readiness.sentence)
+    ? (isRestDayOverreaching
+      ? REST_DAY_OVERREACH_SENTENCE
+      : capacityStrainNote(capStrain, triReadinessResult?.sentence ?? readiness.sentence))
     : null;
   // TEMP DEBUG (2026-06-03, remove after dogfood verification)
   console.log('[readiness-debug]', JSON.stringify({
@@ -2400,6 +2378,7 @@ export function renderTrackOnlyWeekDetail(): void {
   const wk = s.wks?.[(s.w ?? 1) - 1];
   const tss = wk ? Math.round(computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate)) : 0;
   const segments = wk ? computeLoadBreakdown(wk, wk.rated ?? {}, s.planStartDate) : [];
+  const sportCount = segments.filter(seg => !seg.doubleDay).length;
   const unit: 'km' | 'mi' = s.unitPref ?? 'km';
 
   // Activity rows from current week (same dedup as buildRecentActivity).
@@ -2440,7 +2419,7 @@ export function renderTrackOnlyWeekDetail(): void {
         <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;border-top:1px solid rgba(0,0,0,0.05)">
           <div style="width:10px;height:10px;border-radius:50%;background:${seg.color};flex-shrink:0"></div>
           <span style="flex:1;font-size:14px;color:#0F172A">${seg.label}</span>
-          <span style="font-size:11px;color:#94A3B8">${Math.round(seg.durationMin)} min</span>
+          ${seg.doubleDay ? '' : `<span style="font-size:11px;color:#94A3B8">${Math.round(seg.durationMin)} min</span>`}
           <span style="font-size:13px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums;min-width:54px;text-align:right">${Math.round(seg.tss)} TSS</span>
         </div>`).join('');
 
@@ -2481,7 +2460,7 @@ export function renderTrackOnlyWeekDetail(): void {
         <div style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);overflow:hidden">
           <div style="padding:14px 16px;display:flex;align-items:baseline;justify-content:space-between">
             <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#94A3B8">By sport</div>
-            <div style="font-size:11px;color:#64748B">${segments.length} ${segments.length === 1 ? 'sport' : 'sports'}</div>
+            <div style="font-size:11px;color:#64748B">${sportCount} ${sportCount === 1 ? 'sport' : 'sports'}</div>
           </div>
           ${segBlock}
         </div>

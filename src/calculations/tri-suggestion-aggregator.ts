@@ -184,7 +184,9 @@ export function collectTriSuggestions(
     const overshootPct = Math.round(overload.overshootPct * 100);
     const recDiscipline = overload.recommendedDiscipline;
     const recOpt = overload.options[recDiscipline];
-    const firstMod = recOpt.reduceMods[0]; // placeholder fallback; modal reads overloadOptions directly
+    // Placeholder fallback; the modal reads overloadOptions directly. The
+    // recommended option holds a change in one of its two sets.
+    const firstMod = recOpt.reduceMods[0] ?? recOpt.replaceMods[0];
     // Map detector's severity vocabulary (heavy/extreme) to the aggregator's
     // existing severity vocabulary (caution/warning). The modal keys its
     // banner/colour styling off the latter.
@@ -193,8 +195,10 @@ export function collectTriSuggestions(
       id: `xt_overload_${overload.recommendedDiscipline}`,
       source: 'cross_training_overload',
       discipline: recDiscipline,
-      headline: `Cross-training added ${overload.crossTrainingTSS} TSS this week — consider easing your ${recDiscipline}`,
-      body: `Your tri plan is ${overload.plannedTriTSS} TSS this week. Cross-training has added ${overload.crossTrainingTSS} TSS on top (+${overshootPct}%). ${recDiscipline.charAt(0).toUpperCase() + recDiscipline.slice(1)} has the most remaining planned load — start there, or flip to swim/run via the chip switcher.`,
+      headline: `Cross-training added ${overload.crossTrainingTSS} TSS this week. Consider easing your ${recDiscipline}.`,
+      // The recommendation rule (D1): the first discipline, in the order the
+      // cross-training resembles, with a session to change.
+      body: `Your tri plan is ${overload.plannedTriTSS} TSS this week. Cross-training has added ${overload.crossTrainingTSS} TSS on top (+${overshootPct}%). ${recDiscipline.charAt(0).toUpperCase() + recDiscipline.slice(1)} is the first discipline, in the order the cross-training resembles, with a session to change. The chip switcher shows the others.`,
       severity,
       // Placeholder values. The modal reads `overloadOptions` and commits the
       // full per-discipline mod array, not this single workout. Kept as a

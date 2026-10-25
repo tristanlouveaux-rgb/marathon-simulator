@@ -19,7 +19,6 @@ import type { HyroxStation } from '@/types/triathlon';
 import { predictHyroxRace, resolveHyroxStationBenchmarks, hyroxStationSeedsForState } from '@/calculations/race-prediction.hyrox';
 import {
   hyroxCohortForState,
-  hyroxSeedRunPaceSecKm,
   hyroxCohortPlacement,
   hyroxPlacementHeadline,
   hyroxPlacementCaption,
@@ -29,7 +28,8 @@ import {
 } from '@/calculations/hyrox-results';
 import { latestTestAgeMonths } from '@/calculations/hyrox-station-history';
 import { isHyroxDoublesFormat } from '@/calculations/hyrox-division';
-import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
+import { deriveHyroxRunPace, type HyroxRunPaceResult } from '@/calculations/hyrox-run-pace';
+import { hyroxRunPaceCaption } from './forecast-labels';
 import { renderPlanShapeCard } from '../plan-shape-chart';
 import { getHyroxPartnerCache, refreshHyroxPartnerCache, setHyroxPartnerCacheListener, type HyroxPartnerCache } from '@/data/hyroxPartnerSync';
 import type { SimulatorState } from '@/types/state';
@@ -87,10 +87,10 @@ export function renderHyroxStatsView(): void {
   // calibrated count (hyroxBenchmarkLedger), so Stats, Account, the benchmark
   // card and the forecast agree.
   const ledger = hyroxBenchmarkLedger(s);
-  // Seeds for untested stations and the run pace: real band medians of the
-  // athlete's singles field at the target's weights, the forecast's own.
+  // Seeds for untested stations: real band medians of the athlete's singles
+  // field at the target's weights, the forecast's own. The run pace row reads
+  // deriveHyroxRunPace (its seed included).
   const seeds = hyroxStationSeedsForState(s);
-  const seedRunPace = hyroxSeedRunPaceSecKm(s, band);
   const predTimeSec = prediction?.totalSec ?? hx.previousHyroxTimeSec;
   // The rank line: the finish placed in the athlete's own cohort (format x
   // sex, or the pair's division), in their age group when the age is known
@@ -273,7 +273,7 @@ export function renderHyroxStatsView(): void {
               <div style="font-size:11px;color:var(--c-muted)">${ledger.calibratedCount} / ${ledger.total} stations calibrated</div>
             </div>
             ${ledger.rows.map(row => renderBenchmarkRow(row, seeds[row.station], s)).join('')}
-            ${renderRunPaceRow(hx.hyroxRunPaceSecKm, seedRunPace, hx.hyroxRunPaceSource)}
+            ${renderRunPaceRow(runPaceResult, format === 'open_doubles' || format === 'pro_doubles')}
             ${(format === 'pro_singles' || format === 'pro_doubles') ? `
               <div style="border-top:1px solid rgba(0,0,0,0.05);margin-top:6px;padding:10px 0 0;display:flex;justify-content:space-between;align-items:center;gap:12px">
                 <div>
@@ -405,33 +405,43 @@ function renderAcwrRow(acwr: number): string {
   `;
 }
 
-function renderRunPaceRow(
-  userSecKm: number | undefined,
-  seedSecKm: number | undefined,
-  source: 'user' | 'derived' | 'seed' | undefined,
-): string {
+/**
+ * The run pace row's sub-line: what the number is. The pace before venue
+ * factors (the Forecast's Run pace chip shows it after them), and for doubles
+ * the pair's pace (the doubles run ratio applied, partners run every leg
+ * together). D12, 2026-10-21.
+ */
+export function hyroxRunPaceRowCaption(isDoubles: boolean): string {
+  return isDoubles ? 'Pair pace, 8 legs, before venue' : 'Average of 8 legs, before venue';
+}
+
+function renderRunPaceRow(runPace: HyroxRunPaceResult, isDoubles: boolean): string {
   // Run pace (can be fractional): whole second with the minute carried, the
   // forecast's formatter, never "4:60".
   const fmtPace = (s: number) => fmtModelPaceKm(s);
 
-  const hasUser = userSecKm != null;
-  const sourceCaption =
-    source === 'derived' ? 'Updated from your runs. Beat your last test.' :
-    source === 'user'    ? 'Set manually.' :
-                           'From splits';
+  // The pace and its provenance come from deriveHyroxRunPace, the call the
+  // forecast reads, so this row and the Forecast's Run pace chip name the same
+  // provenance (ISSUE-406 (d): the row read hx.hyroxRunPaceSource, the chip
+  // the derivation's branch, and a stored derived pace read "Set manually" on
+  // the Forecast and "Updated from your runs" here). The seed row shows the
+  // derivation's seed too, in the athlete's format (it showed the singles band
+  // seed for a doubles athlete).
+  const isSeed = runPace.provenance === 'seed';
+  const sourceCaption = hyroxRunPaceCaption(runPace.provenance);
   return `
     <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(0,0,0,0.04)">
       <div>
         <div style="font-size:13px;font-weight:600;color:#0F172A">1km Run Pace</div>
-        <div style="font-size:11px;color:var(--c-muted)">Average across all 8 legs</div>
+        <div style="font-size:11px;color:var(--c-muted)">${hyroxRunPaceRowCaption(isDoubles)}</div>
       </div>
       <div style="text-align:right">
-        ${hasUser ? `
-          <div style="font-size:14px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">${fmtPace(userSecKm!)}/km</div>
+        ${!isSeed ? `
+          <div style="font-size:14px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">${fmtPace(runPace.paceSecKm)}/km</div>
           <div style="font-size:10px;color:var(--c-muted)">${sourceCaption}</div>
         ` : `
-          <div style="font-size:12px;color:var(--c-faint);font-variant-numeric:tabular-nums">${seedSecKm ? `${fmtPace(seedSecKm)}/km` : '—'}</div>
-          <div style="font-size:10px;color:var(--c-faint)">Population est.</div>
+          <div style="font-size:12px;color:var(--c-faint);font-variant-numeric:tabular-nums">${runPace.paceSecKm > 0 ? `${fmtPace(runPace.paceSecKm)}/km` : '—'}</div>
+          <div style="font-size:10px;color:var(--c-faint)">${sourceCaption}</div>
         `}
       </div>
     </div>

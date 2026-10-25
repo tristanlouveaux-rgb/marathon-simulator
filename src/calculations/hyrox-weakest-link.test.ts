@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rankWeakestLinks, topWeakestLinks } from './hyrox-weakest-link';
+import { rankWeakestLinks, topWeakestLinks, weakestLinkRowFor } from './hyrox-weakest-link';
 import type { HyroxPrediction } from './race-prediction.hyrox';
 
 function build(stations: Array<{
@@ -82,5 +82,24 @@ describe('topWeakestLinks', () => {
     const top = topWeakestLinks(p, 2);
     expect(top.length).toBe(2);
     expect(top.map(r => r.station)).toEqual(['sled_push', 'ski_erg']);
+  });
+});
+
+describe('weakestLinkRowFor', () => {
+  it('one station on the same terms, kept at zero gain (rankWeakestLinks drops it)', () => {
+    const p = build([
+      { station: 'wall_balls', currentSec: 413, projectedSec: 413 },
+      { station: 'ski_erg',    currentSec: 319, projectedSec: 315 },
+    ]);
+    expect(rankWeakestLinks(p).map(r => r.station)).toEqual(['ski_erg']);
+    const wb = weakestLinkRowFor(p, 'wall_balls')!;
+    expect(wb.gainableSec).toBe(0);
+    expect(wb.currentSec).toBe(413);
+    expect(weakestLinkRowFor(p, 'ski_erg')).toEqual(rankWeakestLinks(p)[0]);
+  });
+
+  it('null without a projection or after race day', () => {
+    expect(weakestLinkRowFor(null, 'wall_balls')).toBeNull();
+    expect(weakestLinkRowFor(build([{ station: 'wall_balls', currentSec: 240, projectedSec: 220 }], 0), 'wall_balls')).toBeNull();
   });
 });

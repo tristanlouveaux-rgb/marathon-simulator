@@ -40,10 +40,8 @@ describe('parseHhMmSs — target finish parsing', () => {
   });
 });
 
-describe('goal back-calculation rows: fractional times never print ":60"', () => {
-  // The back-calculation distributes the gain proportionally, so targets are
-  // fractional. Rounding only the seconds part printed 119.6 s as "1:60".
-  const result: GoalBackCalcResult = {
+describe('goal modal body: one feasibility line, the race plan carries the splits', () => {
+  const base: GoalBackCalcResult = {
     feasibility: 'achievable',
     gainNeededSec: 120,
     totalHeadroomSec: 600,
@@ -56,16 +54,41 @@ describe('goal back-calculation rows: fractional times never print ":60"', () =>
     achievedSec: 4500,
     shortfallSec: 0,
     caveat: null,
+    likelyRangeSec: [5008, 5762],
+    floorSource: 'cohort',
   };
-  const html = renderResultBody(result);
+  const ctx = { goalSec: 4500, forecastSec: 5385, cohort: { format: 'open_singles' as const, sex: 'female' as const } };
 
-  it('station times round before the minute split, like the forecast rows', () => {
-    expect(html).toContain('5:00 → 2:00');
-    expect(html).toContain('5:00 → 4:40');
-    expect(html).not.toMatch(/\d:60/);
+  it('no run or station rows (the race plan lists every leg one tap later)', () => {
+    const html = renderResultBody(base, { ...ctx, goalSec: 5200 });
+    expect(html).not.toContain('SkiErg');
+    expect(html).not.toContain('Run pace');
+    expect(html).not.toMatch(/\d:\d\d/);
+    expect(html).toContain('Inside your forecast\'s likely range.');
+    expect(html).not.toContain('headroom');
   });
 
-  it('run pace carries the minute, like the forecast average run pace', () => {
-    expect(html).toContain('6:00 → 5:00');
+  it('one sentence per state: stretch names the likely range, unrealistic the field, no training-time advice', () => {
+    expect(renderResultBody({ ...base, feasibility: 'stretch' }, ctx))
+      .toContain('Faster than your forecast\'s likely range, 1:23:28 to 1:36:02.');
+    const unrealistic = renderResultBody({ ...base, feasibility: 'unrealistic' }, { ...ctx, goalSec: 3600 });
+    expect(unrealistic).toContain('1:00:00 is out of reach even with every leg at top-1% level for Open Singles women.');
+    expect(unrealistic).not.toMatch(/training time|6\+ months|realistic combination/);
+    expect(renderResultBody({ ...base, feasibility: 'already_on_pace' }, { ...ctx, goalSec: 5500 })).toContain('Your forecast already beats this goal.');
+    expect(renderResultBody({ ...base, feasibility: 'already_on_pace' }, { ...ctx, goalSec: 5385 })).toContain('Matches your forecast.');
+    for (const feasibility of ['achievable', 'stretch', 'unrealistic', 'already_on_pace'] as const) {
+      const text = renderResultBody({ ...base, feasibility }, ctx).replace(/<[^>]+>/g, '').trim();
+      expect(text.split('. ').length).toBe(1);
+    }
+  });
+
+  it('visual constraints: sentence case, no tinted callout, no olive figures, no em dash', () => {
+    for (const feasibility of ['achievable', 'stretch', 'unrealistic', 'already_on_pace'] as const) {
+      const html = renderResultBody({ ...base, feasibility }, ctx);
+      expect(html).not.toMatch(/text-transform:\s*uppercase/i);
+      expect(html).not.toMatch(/background:\s*rgba\(/);
+      expect(html).not.toContain('#4f5a3b');
+      expect(html).not.toContain('\u2014');
+    }
   });
 });

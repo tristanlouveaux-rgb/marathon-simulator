@@ -211,7 +211,7 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
 
         <div class="hx-rise" style="width:100%;max-width:480px;text-align:center;margin-bottom:20px;animation-delay:0.05s">
           <h2 style="font-size:clamp(1.5rem,5vw,1.9rem);font-weight:300;color:var(--c-black);letter-spacing:-0.01em;margin:0 0 6px;line-height:1.15">
-            Hyrox setup
+            HYROX setup
           </h2>
           <p style="font-size:13px;color:var(--c-faint);margin:0">Configure your competition format and training setup.</p>
         </div>

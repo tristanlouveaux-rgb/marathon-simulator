@@ -157,6 +157,28 @@ supabase functions deploy delete-account --project-ref elnuiudfndsvtbfisaje --no
 
 After the deploy the export holds `hyrox_partner_snapshots` (own row), `hyrox_partner_links` (`user_id`, `created_at`; no `partner_id`) and `hyrox_partner_invites` (`owner_id`, `created_at`, `expires_at`; no code), and `delete-account` deletes the partner rows itself, so the partner stops reading the numbers even when the app's cleanup fails.
 
+**Pending: the landing site's privacy copy, deploy with the partner-matching release.** Since `7fdf0d0` (2026-10-19) the app's `public/privacy.html` discloses partner sharing (a "HYROX Doubles partners" section) and ships with the app build. The branded domain `mosaicrunning.run` is served by the separate `~/Documents/mosaic-landing` project (Vercel project `mosaic-landing`), where the mirror is committed as `9c57ff4` (`privacy.html`, plus the "Where it is stored" sentence in `support.html`) and not deployed, so the live pages still say no data is shared with other users. The app's own links read the landing copy (Account > Privacy Policy opens `https://mosaicrunning.run/privacy.html`, `src/ui/account-view.ts:333`), so users see the new wording only after this deploy. Deploy it with the release that includes partner matching, not before. That repo has no git remote, and a deploy uploads the working tree as it stands (the live site has matched an uncommitted tree before), so check the tree first:
+
+```bash
+cd ~/Documents/mosaic-landing && git status --short && git log --oneline -1
+```
+
+Expected: no output from `git status --short`, and `9c57ff4` (or a later commit) on top. Then deploy:
+
+```bash
+cd ~/Documents/mosaic-landing && vercel --prod
+```
+
+Check the live pages (the bare domain redirects to `www`); each command prints 1:
+
+```bash
+curl -s https://www.mosaicrunning.run/privacy.html | grep -c "HYROX Doubles partners"
+```
+
+```bash
+curl -s https://www.mosaicrunning.run/support.html | grep -c "linked HYROX Doubles partner"
+```
+
 **Diagnosing a Partner page error.** The page shows one line, plus a "Try again" button when the page could not load.
 - "Offline. Connect and try again.": the device reports offline, or a request failed at the network.
 - "Sign in to link a partner.": no session.

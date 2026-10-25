@@ -123,7 +123,10 @@ describe('real station percentiles, no "est." label', () => {
     const p = predictHyroxRace(s)!;
     const cohort = { format: 'open_singles' as const, sex: 'female' as const };
     const out = renderPerformanceRadar({ stations: p.stations, cohort });
-    expect(out).toContain(hyroxResultsCaption(cohort, 'ski_erg'));
+    // The field's finisher count: an 8-spoke chart names no one station's
+    // split count.
+    expect(out).toContain(hyroxResultsCaption(cohort));
+    expect(out).not.toContain('with a timed');
     expect(out).not.toMatch(/est\./);
   });
 
@@ -153,7 +156,11 @@ describe('real station percentiles, no "est." label', () => {
       [{ format: 'open_doubles', division: 'mixed' }, 'female', / of mixed pairs$/],
     ];
     for (const [hx, sex, re] of cases) {
-      const s = hyroxState({ ...hx, stationBenchmarksSingles: SINGLES }, { biologicalSex: sex });
+      // A measured runner (watch VO2max at the default VDOT 50): the run pace
+      // comes from VDOT, so the total sits off the band median and the label
+      // reads "faster than N% of ...". Without a real signal the run pace is
+      // the band seed (D5) and an intermediate total reads "median among ...".
+      const s = hyroxState({ ...hx, stationBenchmarksSingles: SINGLES }, { biologicalSex: sex, vo2: 50 });
       setState(s);
       const p = predictHyroxRace(s)!;
       const cohort = hx.format === 'open_doubles' ? { format: 'open_doubles' as const, sex: 'mixed' as const } : { format: 'open_singles' as const, sex };

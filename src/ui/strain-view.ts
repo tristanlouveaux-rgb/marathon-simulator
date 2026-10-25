@@ -12,7 +12,7 @@ import {
   computeDayTargetTSS,
   computePassiveTSS,
   PASSIVE_TSS_PER_ACTIVE_MIN,
-  REST_DAY_OVERREACH_RATIO,
+  isRestDayOverreached,
   getNormalizerFromState,
   type TargetTSSRange,
 } from '@/calculations/fitness-model';
@@ -254,8 +254,9 @@ export function getStrainForDate(date: string, s: SimulatorState, todayReadiness
   );
 
   // ── Overreaching check ─────────────────────────────────────────────────
-  const restDayThreshold = perSessionAvg * REST_DAY_OVERREACH_RATIO;
-  const isOverreaching = isRestDay && actualTSS > 0 && perSessionAvg > 0 && actualTSS > restDayThreshold;
+  // Logged sessions only (isRestDayOverreached), the rule Home's ring, the
+  // Readiness page and the coach read; the ring itself keeps the strain TSS.
+  const isOverreaching = wkForPlan ? isRestDayOverreached(wkForPlan, date, isRestDay, perSessionAvg) : false;
 
   // ── Marker colour ──────────────────────────────────────────────────────
   let markerColor = 'white';

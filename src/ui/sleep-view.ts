@@ -231,7 +231,7 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
   const generalInsight = getSleepInsight({ history: physiologyHistory, recentWeeklyTSS });
   const primaryInsight = stageInsight ?? generalInsight;
 
-  const dailyTSSByDate = buildDailySignalBTSS(state.wks ?? [], (state as any).previousPlanWks);
+  const dailyTSSByDate = buildDailySignalBTSS(state.wks ?? [], (state as any).previousPlanWks, state.planStartDate);
 
   // Sleep bank
   const effectiveSleepTarget = state.sleepTargetSec ?? deriveSleepTarget(physiologyHistory);

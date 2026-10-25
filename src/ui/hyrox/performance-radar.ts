@@ -172,7 +172,7 @@ export function renderPerformanceRadar(opts: RadarOpts): string {
   if (calibratedCount === 0) {
     return `
       <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;padding:18px 20px;margin-bottom:14px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
-        <div style="font-size:11px;color:var(--c-faint);margin-bottom:6px">Performance radar</div>
+        <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Performance radar</div>
         <div style="font-size:13px;color:var(--c-black);margin-bottom:6px;line-height:1.4">Calibrate stations to see your strengths and limiters.</div>
         <div style="font-size:12px;color:var(--c-muted);margin-bottom:14px;line-height:1.5">Without per-station times we can only show your ability-band estimate, which plots every spoke at the same percentile and tells you nothing. One pass through each station, fresh, surfaces the real shape of your race.</div>
         <button id="hx-radar-calibrate-cta" style="font-size:12px;font-weight:600;color:var(--c-black);background:transparent;border:1px solid var(--c-border);border-radius:8px;padding:8px 14px;cursor:pointer">Test stations →</button>
@@ -180,9 +180,10 @@ export function renderPerformanceRadar(opts: RadarOpts): string {
     `;
   }
 
-  // Provenance subtitle: the cohort's race splits (HYROX results, seasons 8
-  // and 9), then what a spoke means.
-  const subtitle = `${hyroxResultsCaption(cohort, 'ski_erg')} Each spoke places your station time among the field's race splits. Further out is faster.`;
+  // Provenance subtitle: the cohort's race results (HYROX results, seasons 8
+  // and 9) with the field's finisher count (the radar has 8 spokes, so no
+  // one station's split count), then what a spoke means.
+  const subtitle = `${hyroxResultsCaption(cohort)} Each spoke places your station time among the field's race splits. Further out is faster.`;
 
   // Build the user polygon as a closed `<path>` so we can normalise its length
   // to 1 via `pathLength="1"` and animate stroke-dashoffset to draw it on. The
@@ -212,7 +213,7 @@ export function renderPerformanceRadar(opts: RadarOpts): string {
       .hx-radar-dot   { opacity: 0; transform-origin: center; transform-box: fill-box; animation: hxRadarFadeIn 0.35s cubic-bezier(0.2,1.6,0.4,1) forwards; }
     </style>
     <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;padding:18px 20px 16px;margin-bottom:14px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
-      <div style="font-size:11px;color:var(--c-faint);margin-bottom:6px">Performance radar</div>
+      <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Performance radar</div>
       <div style="font-size:12px;color:var(--c-muted);margin-bottom:14px;line-height:1.4">${subtitle}</div>
       <div style="position:relative;width:100%;max-width:380px;margin:0 auto;aspect-ratio:1/1">
         <svg viewBox="0 0 ${SVG_VIEW} ${SVG_VIEW}" style="position:absolute;top:${SVG_INSET_PCT}%;left:${SVG_INSET_PCT}%;width:${100 - SVG_INSET_PCT * 2}%;height:${100 - SVG_INSET_PCT * 2}%;display:block;overflow:visible">

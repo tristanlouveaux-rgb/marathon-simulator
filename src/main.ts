@@ -943,6 +943,21 @@ async function launchApp(): Promise<void> {
       console.warn('[hyrox] MTL refresh failed', err);
     }
 
+    // Boot-time: fit the personal run-pace offset from the stored previous
+    // race against the run-pace base in use (the VDOT model for a measured
+    // runner, the band seed otherwise), and refit it when that base changes
+    // (the first real running signal arrives). Idempotent: skips an offset
+    // already fitted against the base in use. Runs before the marker pass so
+    // the derivation it writes reads the refitted offset (E5, 2026-10-22).
+    // See SCIENCE_LOG §AA.
+    try {
+      const { refreshHyroxPersonalRunPaceOffset } = await import('@/calculations/hyrox-run-pace');
+      const mutable = getMutableState();
+      if (refreshHyroxPersonalRunPaceOffset(mutable)) saveState();
+    } catch (err) {
+      console.warn('[hyrox] personal run-pace offset refresh failed', err);
+    }
+
     // HYROX run pace yield-to-improvements. Auto-derive from VDOT and overwrite
     // hx.hyroxRunPaceSecKm when the derived value is meaningfully faster than
     // the stored user value. Mirrors triathlon's marker-bump pattern. Toast
@@ -965,19 +980,6 @@ async function launchApp(): Promise<void> {
       if (wrote || bumps.length > 0) saveState();
     } catch (err) {
       console.warn('[hyrox] marker-bump pass failed', err);
-    }
-
-    // Boot-time: compute the initial personal run-pace offset for existing
-    // HYROX users who pre-date the v2 (CP-anchored) model. Idempotent —
-    // skips when the offset has already been populated. Without this,
-    // existing users wouldn't see the Bayesian personalisation until they
-    // re-onboard. See SCIENCE_LOG §AA.
-    try {
-      const { refreshHyroxPersonalRunPaceOffset } = await import('@/calculations/hyrox-run-pace');
-      const mutable = getMutableState();
-      if (refreshHyroxPersonalRunPaceOffset(mutable)) saveState();
-    } catch (err) {
-      console.warn('[hyrox] personal run-pace offset refresh failed', err);
     }
 
     // Doubles partner: read the link once per session and push this athlete's

@@ -38,4 +38,22 @@ describe('plannedHyroxSessionsPerWeek', () => {
     s.wks[1].triWorkouts!.push({ id: 'erg-2', t: 'hyrox_erg_easy', discipline: 'station' } as never);
     expect(plannedHyroxSessionsPerWeek(s, 4)).toBeCloseTo(4, 9);
   });
+
+  // s.w is 1-based: the window starts at the week in progress, wks[s.w - 1].
+  // It started at wks[s.w], next week, so it skipped the current week and in
+  // race week read past the plan (0 sessions/wk).
+  it('starts at the current week (s.w is 1-based)', () => {
+    const s = stateWith([{ sessions: 6 }, { sessions: 4 }, { sessions: 4 }, { sessions: 4 }, { sessions: 4 }], 1);
+    expect(plannedHyroxSessionsPerWeek(s, 4)).toBeCloseTo(4.5, 9); // weeks 1 to 4: (6+4+4+4)/4
+  });
+
+  it('race week covers itself instead of reading past the plan', () => {
+    const s = stateWith([{ sessions: 6 }, { sessions: 5 }, { sessions: 3 }], 3);
+    expect(plannedHyroxSessionsPerWeek(s, 4)).toBeCloseTo(3, 9);
+  });
+
+  it('a short tail averages over the weeks that remain', () => {
+    const s = stateWith([{ sessions: 6 }, { sessions: 5 }, { sessions: 3 }], 2);
+    expect(plannedHyroxSessionsPerWeek(s, 4)).toBeCloseTo(4, 9); // (5+3)/2
+  });
 });

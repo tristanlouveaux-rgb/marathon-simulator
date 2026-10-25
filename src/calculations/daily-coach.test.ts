@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { computeDailyCoach, getTodayFeeling, buildCoachSignalsPayload, postSessionSentence, injuryCapOvershootSentence, type StrainContext } from './daily-coach';
+import { REST_DAY_OVERREACH_SENTENCE } from './capacity-strain';
 import type { SimulatorState, Week } from '@/types';
 
 // ─── Minimal state factory ───────────────────────────────────────────────────
@@ -369,19 +370,19 @@ describe('postSessionSentence — shared post-session copy (running Tier 1 + tri
   });
 
   it('returns "Solid session" at 100–129%', () => {
-    expect(postSessionSentence(43, 100)).toBe('Solid session today (43 TSS). Rest up and recover.');
-    expect(postSessionSentence(43, 99.5)).toBe('Solid session today (43 TSS). Rest up and recover.'); // rounds to 100
+    expect(postSessionSentence(43, 100)).toBe('Solid session today. 43 TSS logged. Rest up and recover.');
+    expect(postSessionSentence(43, 99.5)).toBe('Solid session today. 43 TSS logged. Rest up and recover.'); // rounds to 100
     expect(postSessionSentence(60, 129.4)).toContain('Solid session');
   });
 
   it('returns "Big session" at 130%+', () => {
     const msg = postSessionSentence(85, 145);
-    expect(msg).toContain('Big session today (85 TSS)');
+    expect(msg).toContain('Big session today. 85 TSS logged.');
     expect(msg).toContain('prioritise recovery');
   });
 
   it('rounds the TSS figure shown in the sentence', () => {
-    expect(postSessionSentence(42.6, 110)).toContain('(43 TSS)');
+    expect(postSessionSentence(42.6, 110)).toContain(' 43 TSS logged.');
   });
 });
 
@@ -389,7 +390,7 @@ describe('postSessionSentence — CTL-anchored 80% tier (adhoc days)', () => {
   it('80-99% acknowledges only when ctlAnchored (session is done, not in progress)', () => {
     expect(postSessionSentence(43, 87)).toBeNull();                          // planned-target case: caller keeps "Nearly at today's target"
     expect(postSessionSentence(43, 87, { ctlAnchored: true }))
-      .toBe("Good training today (43 TSS), most of a typical day's load.");
+      .toBe("Good training today. 43 TSS logged, most of a typical day's load.");
   });
 
   it('below 80% returns null even when ctlAnchored', () => {
@@ -417,5 +418,51 @@ describe('injuryCapOvershootSentence — rehab-cap call-out (capacity-based ring
 
   it('rounds all displayed numbers', () => {
     expect(injuryCapOvershootSentence(41.6, 19.7, 92.9)).toContain('42 TSS logged against an injury-capped day of 20.');
+  });
+});
+
+// ─── HYROX hard sessions read as hard on the Home coach line (ISSUE-406 (b)) ──
+// The coach takes hardness from getPlannedDayTSSContext. The running token check
+// alone called a HYROX Tempo Run easy, so a poor-sleep morning read "Poor sleep
+// last night. Rest or easy movement is appropriate." instead of naming the session.
+describe('computeDailyCoach — HYROX hard sessions', () => {
+  function localDow(): number {
+    return (new Date().getDay() + 6) % 7;
+  }
+  function hyroxDay(t: string, n: string): SimulatorState {
+    return makeState({
+      eventType: 'hyrox' as any,
+      w: 1,
+      wks: [makeWeek(1, {
+        triWorkouts: [{ id: 'W1-q', t, n, d: '50min', r: 7, rpe: 7, discipline: 'run', dayOfWeek: localDow(), estimatedDurationMin: 50 }],
+        adhocWorkouts: [],
+      } as any)],
+      physiologyHistory: [{ date: todayISO(), sleepScore: 40 } as any],
+    });
+  }
+
+  it('a Tempo Run day names the session on poor sleep', () => {
+    const coach = computeDailyCoach(hyroxDay('hyrox_run_tempo', 'Tempo Run'));
+    expect(coach.primaryMessage).toBe('Sleep 40/100 last night. Consider converting Tempo Run to easy effort.');
+  });
+
+  it('a station density day is hard too', () => {
+    const coach = computeDailyCoach(hyroxDay('hyrox_station_density', 'Station Density'));
+    expect(coach.primaryMessage).toContain('Consider converting Station Density to easy effort.');
+  });
+
+  it('an easy run day keeps the easy copy', () => {
+    const coach = computeDailyCoach(hyroxDay('hyrox_run_easy', 'Easy Run'));
+    expect(coach.primaryMessage).toBe('Poor sleep last night. Rest or easy movement is appropriate.');
+  });
+});
+
+describe('computeDailyCoach: a rest-day overreach leads under a blocker too', () => {
+  it('injured or ill, heavy load on a rest day: the coach line is the rest-day overreach sentence, as on Readiness', () => {
+    const strain: StrainContext = { ...REST_STRAIN, isRestDayOverreaching: true, trainedToday: true, actualTSS: 150 };
+    const injured = computeDailyCoach(makeState({ injuryState: { active: true } as any }), strain);
+    expect(injured.primaryMessage).toBe(REST_DAY_OVERREACH_SENTENCE);
+    const ill = computeDailyCoach(makeState({ illnessState: { active: true, severity: 'resting', startDate: todayISO() } as any }), strain);
+    expect(ill.primaryMessage).toBe(REST_DAY_OVERREACH_SENTENCE);
   });
 });
