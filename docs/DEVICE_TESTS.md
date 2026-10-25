@@ -181,6 +181,25 @@ Run each on iOS (WKWebView) at 375 px wide and in a desktop browser. No plan reg
 - [ ] **Forecast tab order**: after the Race order card the tab reads Where you lost time, Where to gain, Performance radar, Where you sit, Biggest targets, every title in the same bold style, no capitals labels. Biggest targets reads "M:SS now → M:SS at <band>" with a neutral saving cell and no green pill (known: the combined line can exceed the three rows, ISSUE-402 (i)). Where you sit rows read "Running" and "Roxzone".
 - [ ] **First-timer**: a total beginner onboarded with no previous result sees no Where you lost time card.
 
+### HYROX plan part 2: station doses, complete sessions, sims, injury gate v2 (2026-10-25, `013ff472`)
+
+Run each on iOS (WKWebView) at 375 px wide and in a desktop browser. `HYROX_GENERATOR_VERSION` is 19, so a stored HYROX plan regenerates once on the first launch of this build: note that the plan rebuilt and that past weeks kept their ticks.
+
+- [ ] **Station session card and detail modal**: a beginner and an intermediate plan. The card reads "10 min warm-up, then 20 min strength, then:" (or "10 min warm-up, then:" in a week without the block) above the stations, lines like "SkiErg, 2 × 250 m, damper 6", and "Then N min easy erg." below. The modal shows the rounds header, the warm-up line, the strength rows when the week holds a block, the stations, then the finisher. A technique session shows no time column; a race-pace session shows its set target once and the weakest-station line. Long rows (a beginner sled's load as a % of race weight) wrap with no sideways scroll. `renderComponents`, `renderSessionParts`
+- [ ] **Guided station session**: it starts at the first station set (the warm-up and finisher are not sets), rests 2 min after every technique set (90 s race pace) and none after the last. A beginner session holding both sleds: rounds 3 and 4 step only through the sled lanes, each set showing its amount and load ("1 lane (12.5 m), sled unloaded" in weeks 1 and 2). `hyroxSessionWalk`
+- [ ] **Guided brick**: intermediate, the two stations alternate rounds, each run leg records, and the 30 s jog into a station is not shown as rest. Open doubles: rounds without a station run straight into the round rest.
+- [ ] **Race simulation**: intermediate, 8 h, race about 18 weeks out. The sim week's card reads "Race Simulation" on the brick's day with no long run or quality run beside it; the guided player walks 8 × 1 km into the stations in race order; the summary offers benchmark updates for the stations at race weight. Open doubles: the sim shows half amounts and offers no benchmark update. `generateHyroxSim`
+- [ ] **Sim 14 days out by date**: a Thursday race 16 weeks out. Any sim in the two weeks before race week sits on Thursday or earlier, 14 or more days before race day. `hyroxSimLastDow`
+- [ ] **Week before race week**: intermediate, 8 h, 16 weeks. Its station session opens with the light strength block; the long run is still the week's longest run. Race week holds no strength.
+- [ ] **Shoulder (upper body 50) set mid-plan**: current and future circuits show upper-body and full-body stations at half amounts, each line naming its own halved rest; lower-body stations (Sled Push, Sandbag Lunges) whole with their full rest; a 5-min warm-up on the planned erg; an erg finisher at half its minutes, or none under 5 min; no brick or race simulation. The session note is one sentence led by "Upper-body capacity 50%". Earlier weeks are unchanged. Note what the Plan tab shows in the empty brick or sim slot: the week's notes (`hyroxPlanNotes`) are not rendered, so nothing on screen may say why it is empty.
+- [ ] **Knee (lower body 50), SkiErg and Row Erg access**: a station session that planned a Row Erg warm-up shows a whole 10-min SkiErg warm-up ("SkiErg warm-up in place of the Row Erg").
+- [ ] **Run capacity 50**: every run card's badge matches its text (an easy run "N min easy ... (~X km)", intervals with every span and rep distance halved and the rep count unchanged); the long run stays the week's longest; commute cards show half the distance. `withHyroxRunShare`
+- [ ] **Week 1 assessment under lower body 50**: rebuild from week 1. The assessment lists only the SkiErg (the station at 100%) and names the others as left out ("a time at reduced volume is not a benchmark"); the guided assessment walks only the SkiErg. With both sides restricted it is gone. `hyroxAssessmentAtCapacities`
+- [ ] **Adapted strength card (every mode)**: an active knee injury in rehab with upper and lower body at 50. The HYROX base-week standalone strength card shows the adapted session at about 27 min, RPE 4, never longer than planned, with a short list (2 lower-body, 2 upper-body where safe, and the core exercises), not 11 exercises. Repeat on a running and a triathlon plan: the injured strength card's list shrinks with its minutes too (`abd02e27`).
+- [ ] **Tiny cut sets**: upper body 5. Note the smallest sets shown (expect rows like "Wall Balls, 1 × 1 rep, ..." or "Farmer Carry, 2 × 2 m, ..." and a 1-min warm-up) and whether they read as a session worth doing; a one-rep set never reads "1 reps" (ISSUE-408).
+- [ ] **Clear the injury**: the plan returns to the uninjured plan exactly (sessions, minutes, loads).
+- [ ] **Timing**: saving the injury modal feels instant (node: mean 7.8 ms per rebuild). Plan generation for competitive 2 h with a Thursday race 24 weeks out (node about 21 to 26 ms at part 2 review round 3, not re-measured since) shows no visible stall on onboarding Continue.
+
 ### Native OAuth (needs a fresh archive — plugin change)
 - [ ] **Strava connect** via `ASWebAuthenticationSession` returns cleanly, app stays alive, no `invalid_state` JSON page. `oauth-native.ts`
 - [ ] **Garmin connect**, same path.
@@ -296,6 +315,13 @@ Have test coverage, but real-data confirmation is worth it.
 - [ ] **Forecast after the regen**: note the forecast headline before and after the v24 regeneration. A 70.3, T100 or Ironman plan that already had two taper weeks moves by seconds (probe: Ironman 7 h 27 s faster, 70.3 7 h 8 s slower, T100 6 h 5 s slower). A 16-week Olympic plan, which gained a taper week, was not measured: note the size of the move.
 - [ ] **Effort multiplier reaches the taper**: after two weeks rated clearly harder (or easier) than planned, the taper weeks shrink (or grow) with the training weeks, and taper week 1 still reads about 55% of the reference week as shown in the plan, race week about 30%.
 - [ ] **Race leg against the closing-week activation**: a Tuesday or Wednesday race whose pre-race spin or jog was skipped. After the race syncs, check which slot the bike or run leg matched; a match to the 20-min spin or 5-min jog is the known risk (ISSUE-400 (i)).
+
+**HYROX plan part 2 (2026-10-25, `013ff472`)**: unit-tested, needs real data.
+
+- [ ] **Load step from the athlete's own rating**: a beginner plan. Rate a technique session RPE 3 in the app (RPE prompt or guided 1-tap), then roll the week over: the next session holding those stations shows the step ("Load up after an easy rating: ...") and the higher load. Let a watch-only sync fill the next one with no rating entered: the load holds. `athleteRatedRpe`
+- [ ] **Race-pace targets against feel**: over two weeks, compare each race-pace set's "about m:ss a set" with what you hit at RPE 7; note any station whose target is clearly off.
+- [ ] **A real injury across a capacity change**: set an injury with run 50, train two weeks on the gated plan, then raise run to 100 (or mark recovered). Compare next week's long run with the longest run you actually did in the last 4 weeks: above 110% is ISSUE-407.
+- [ ] **A sim week under a mild restriction**: with any restriction in a sim week, note how the week reads (no sim, no long run, no quality run) and whether it still feels like a training week (ISSUE-410).
 
 ## Verified log
 
