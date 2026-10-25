@@ -9358,3 +9358,245 @@ the VDOT at which the forecast's own CP model (the singles pace `derivePopulatio
 **Guards.** `src/ui/post-session-one-tier.test.ts` (one tier word and number on every surface in running, HYROX and triathlon, healthy, injured and ill; half the plan plus steps in the Big strain tier prints no tier and no injury-cap line), `capacity-strain.test.ts` (postSessionNote: one gate, one percent, steps never lift a partial session); `hyrox-run-pace.test.ts` (offset fitted against the seed, refitted on the first real signal, legacy offset refitted, entered pace still wins; base VDOT reproduces the seed for every band); `race-projection.hyrox.test.ts` (an unmeasured runner's run gain equals a measured runner's at the base VDOT); `run-pace-provenance.test.ts` (the race provenance on the Forecast and Stats); `day-week-signal-b-agreement.test.ts` (the sleep series equals the day's Signal B).
 
 ---
+
+## §DR: HYROX station dosing and progression: quarter-station sets, the race-pace volume ramp, doubles halving, beginner loads stepped by the athlete's own rating, bricks by tier (2026-10-19/20, lane H2b part 1; merged in `013ff472`)
+
+**Side.** Planning: what a station session and a brick prescribe, how that grows, and the loads. Two tracking changes: a station time teaches a benchmark only from a full station at race weight (item 6), and `Week.ratedByAthlete` records which ratings the athlete entered (item 4).
+
+**Sources.** The HYROX parameter sheet of 2026-10-12, revised after its fact-check (technique.station_session, bricks.structure, bricks.timing, the per-station volume table, rules_to_code; the sheet and its fact-check sit in the lane's local audit outputs, not in the repo). Cited in it: Centr's beginner HYROX plan (sled unloaded in weeks 1 and 2, then 4 to 6 sets of 15 to 20 m at 50 to 60% of race weight with full 2-min rests, race weight in the final weeks); Rox Lyfe (10 × 10 wall balls at division weight; 20 to 25 wall balls after each run); Velites (4 × 25 m sled push at competition weight, 1:30 rest); the5krunner (one weekly session on the weakest station); Rundida (one 12.5 m sled lane in a beginner brick); Fast Talk (2 min between bouts); `docs/research/hyrox.md` §3.5 (station RPE 7 to 8; brick rounds and run distances) and §4.4 (a key brick and a lighter secondary brick); the 26/27 Singles rulebook §8 (damper 6, four 12.5 m sled lanes, wall-ball target 2.70 m women and 3.00 m men) and Doubles rulebook §7.2 (partners split the work inside every station). Tristan's decisions: progressive loads borrowed from running (volume) and weightlifting (load), 2026-10-12; the race-pace dose to the nearest quarter, implements to the next standard size and a reduced-load week in short plans, 2026-10-20. The load step is `suggestNextWeight` (`strength-progression.ts`; `STRENGTH_PROGRESSION_PCT` 0.025, `STRENGTH_MIN_INCREMENT_KG` 2.5; RIR autoregulation, Helms et al. 2016, Strength Tracking above).
+
+**Supersedes.** §AO's band dose ceilings and round-filling for station sessions and bricks; the technique circuit at 0.65 × the seed time; the density circuit's full-race-volume rounds; the full brick's full station every round.
+
+**1. Sets and the two formats** (`hyrox-station-dose.ts:43`, `:57`; `generateStationTechnique` and `generateStationRacePace`, `hyrox-generators.ts:1140`, `:1197`).
+
+```
+set          = 0.25 x the station's race volume                       HYROX_STATION_SET_FRACTION (product choice, the sheet's 0.25 x column)
+technique    = 2 sets a station (0.5 x), RPE 5, 120 s after every set, no time target
+               set length estimate = race split x 0.25 x 1.2           HYROX_EASY_PASS_TIME_FACTOR (sizes minutes only)
+               stations: beginner 4 (rotated, each every 2 weeks; no eccentric-heavy station in base; sleds 4 single lanes),
+                         intermediate and advanced 3 at race weight
+race pace    = 3 stations, the forecast's weakest first, race weight, RPE 7, 90 s rest,
+               set target = race split x 0.25
+```
+
+Why: the sheet's audit found the old sessions combined full race distance, race load, several rounds and a faster-than-race target at a nominal RPE 5. Real programmes go past 1 × race distance only at reduced load or in short sets. Technique keeps half the race volume in short sets at controlled effort; race pace keeps race weight at no more than the race volume. RPE 7 is the low end of §3.5's 7 to 8; 90 s is Velites', 120 s Centr's.
+
+**2. The race-pace volume ramp** (`hyroxRacePaceSets`, `:128`).
+
+```
+f    = phase multiplier x deload factor x effort / MTL-gap lever / HYROX_PEAK_MULT      (the week's nominal size relative to peak)
+sets = clamp(floor(4 f + 0.5), 2, 4)                                                  (nearest quarter of the race volume)
+then step down until the session fits its share of the week's built size (doseMinutes), never under 2
+```
+
+At the nominal multipliers: f under 0.625 gives 2 sets (0.5 ×), 0.625 to 0.87 gives 3 (0.75 ×), 0.875 and above (build at 0.92, peak at 1.00) the full 4 (1.0 ×). This is running's lever (volume rides the week's size, the size the guard governs). f never reads the chosen hours, so a week a fixed ceiling holds stays the same week at every chosen hours above it. Before Tristan's decision of 2026-10-20 the rounding was floor(), which held intermediate build at 0.75 × where the sheet lists 1.0 ×.
+
+**3. Doubles** (`hyroxDoublesSets`, `:100`; `hyroxBrickStationRounds`).
+
+```
+doubles sets = max(1, ceil(sets / 2))        (each partner trains half of every station, HYROX_DOUBLES_STATION_SHARE 0.5)
+brick:       each station takes every other one of its rounds, the first included; the rest are the partner's turn
+```
+
+Rounding up keeps every station and keeps a sled set one lane, so doubles reach the full doubles share at 0.75 of peak.
+
+**4. Beginner loads and the step on the athlete's own rating** (`HYROX_BEGINNER_LOADS`, `:210`; `hyroxBeginnerRaceWeightWeek`, `:232`; `hyroxLoadKgAt`, `:258`; `hyroxBeginnerStationLoadKg`, `:300`; `athleteRatedRpe`, `src/calculations/athlete-rating.ts:50`).
+
+```
+anchor fraction:  sleds 0 in weeks 1-2, then 0.5;  farmers carry, sandbag, wall ball 0.6;  1.0 from raceWeightWeek
+raceWeightWeek  = max(4, fullSimWeek - 1)          (no full sim: max(4, raceWeek - 4))   4 = 2 unloaded weeks + 1 reduced-load week + 1
+anchor kg:        sled = floor(race kg x fraction / 2.5) x 2.5;  implement = the largest standard size <= race kg x fraction
+                  (kettlebells 4, 6, 8, 12, 16, 20, 24, 28, 32 kg; wall balls 2, 4, 6, 9, 12 kg; sandbag 5 to 30 kg in 5 kg steps)
+step:             RIR = 'reps-left' if athlete rating < target RPE, 'about-right' if equal, 'barely' if above, none if unrated
+                  sled: suggestNextWeight(last kg, RIR, phase, deload, injury)  (+2.5%, at least one 2.5 kg plate, base and build only)
+                  implement: the next standard size when suggestNextWeight steps, else the same
+load            = min(race kg, max(anchor kg, stepped kg));  peak, taper, deload and an adapting or pausing injury hold it
+rating used     = wk.rated[id] only while wk.ratedByAthlete[id] holds the same number
+```
+
+Why: weightlifting's lever for the athletes who start below race weight, exactly as the strength sessions use `suggestNextWeight`. A step needs the athlete's own effort report: a technique session with 2 min rest after every set averages a low heart rate, so `deriveRPE` reads it as RPE 3 or 4, under the target of 5, and every loaded station would climb with no rating entered (review major, part 1). The provenance map fails safe: any writer that does not record its source supersedes the athlete's entry, and a missing entry holds the load. The implement ladders are product facts (Rogue Kettlebells; the Centr x HYROX Competition Wall Ball and Sandbag, checked 2026-10-20), so a step lands on an implement the athlete can buy. Intermediate and advanced athletes train at race weight (sheet).
+
+**5. Bricks by tier** (`HYROX_BRICK_FORMATS`, `:367`).
+
+| Brick | Rounds × run | Effort | Stations | Rest between rounds | RPE |
+|---|---|---|---|---|---|
+| Beginner (Mini Brick) | 3 × 400 m | goal race pace, no faster | 1 | 120 s | 6 |
+| Intermediate | 4 × 800 m | goal race pace | 2 alternating | 120 s | 7 |
+| Advanced key | 6 × 800 m | race pace or faster, negative split | 2 alternating, one eccentric | the 30 s jog only | 7 |
+| Advanced peak secondary | 4 × 800 m | easy | ergs, sleds or the farmers carry | 120 s | 5 (not a hard session) |
+
+Each round's station is 0.25 × its race volume (the sheet's own quarter), with the existing 30 s jog into it counted. RPE 6 and 7 are the generator's existing mini-brick and brick values; 5 is the sheet's technique effort. The taper's brick takes the beginner structure on ergs. Goal race pace is priced at the athlete's HYROX run pace.
+
+**6. Benchmark learning** (tracking; `hyrox-session-benchmarks.ts:117`, `:125`). A component with `raceFraction` under 1 (a quarter-station set, a doubles sim's partner half) or `loadPct` under 1 (a station below race weight) is not a station time: it takes no benchmark write and no percentile. A singles race simulation at race weight can teach the benchmarks.
+
+**Limitations.**
+1. No HYROX training trial exists; every training row is low confidence.
+2. The 0.5 × technique and 1.0 × race-pace volumes and the quarter-station set inside station sessions are product choices within untiered examples.
+3. The technique set estimate reuses the RPE-4 assessment factor (1.2) for RPE 5; a beginner's reduced-load sled set is overestimated. It sizes minutes only.
+4. A session-level RPE stands in for per-lift RIR, and a 1-point gap below the target reads as 'reps-left': product mappings, not validated equivalences.
+5. Doubles round up, so a beginner doubles brick does 2 of 3 rounds.
+6. An unloaded sled carries no external load in MTL; the sled's own mass is unknown.
+7. The weakest station needs a race date (the forecast's projection reads it); a plan without one rotates stations.
+8. Guided benchmark learning waits for full-station sessions: race simulations (§DS).
+
+## §DS: HYROX complete station sessions, strength from the spare minutes, race simulations and the 0.55 / 0.30 taper (2026-10-20 to 22, lane H2b part 2 and its review rounds; merged in `013ff472`)
+
+**Side.** Planning. Tracking changes: a race simulation day is a planned brick day for double-day compounding (`double-day.ts:146`), a dropped sim counts in the capability offer's aerobic minutes (`capability-substitution.ts:56`), and a singles sim at race weight can teach benchmarks (§DR item 6).
+
+**Sources.** The parameter sheet (sims.schedule, sims.week_volume, split.running_share, strength.sessions, strength.content, strength.concurrent, eccentric.min_gap, long_run.cap, taper.length, taper.volume, taper.content). Cited in the code: GoWOD (full sim 3 to 4 weeks out), Lousa (advanced: a full sim after 12 to 16 weeks without competing, 6 to 8 weeks out), HybridPro (never in the final 2 weeks), Voom and Rundida (a half sim the week before a full one), Blagrove 2018 (2 to 3 strength sessions a week improve running economy 2 to 8%), Ronnestad 2010 (1 a week kept 12 weeks of gains for 13 weeks, n = 6), Bosquet et al. 2007 and Wang et al. 2023 (the 41 to 60% taper band; ES 0.72, SMD −0.77). Tristan's decisions: the taper at 0.55 then 0.30 (2026-10-19), fill the chosen hours, the part-2 brief and its three reviews (2026-10-20).
+
+**1. The complete station session and the 15-min floor** (`hyroxSessionWarmup`, `hyrox-generators.ts:989`; `holdsStationFloor`, `plan_engine.hyrox.ts:1190`; `fillFinishers`, `:2363`).
+
+```
+session  = warm-up 10 min (HYROX_SESSION_WARMUP_MIN, the existing run warm-up; easy erg, or a jog without one)
+         + strength block 20 min (HYROX_STRENGTH_BLOCK_MIN, the running pool's shortest session) when the week has the minutes
+         + station work
+         + easy erg finisher >= 5 min (HYROX_FINISHER_MIN_MIN, the existing cool-down), filled from the spare minutes,
+           each session up to the tier long-run cap 60 / 75 / 90 min (deload or taper: no longer or heavier than its counterpart)
+floor    : round(station work + 10) >= 15 min, or no cut takes the session there (HYROX_MIN_STATION_SESSION_MIN)
+bricks and sims open with a 10-min jog
+```
+
+Why: every station session warms up and holds enough work to be worth a session. The floor stops the cuts (the MTL cap, the deload and taper caps, race week's rounds, the taper's smallest circuit) at the last round or station that keeps it; before, a doubles session at its floor ran 13 to 14 min (756 such sessions on the review's open doubles grid). A block with an @X% 1RM lower-body lift or plyometrics falls under the 48 h eccentric rule (sheet eccentric.min_gap). The cap bounds the finisher, not the block: enforcing it on the block took beginner build weeks at the sheet's strength count from 31 of 48 to 1 (round 3).
+
+**2. Strength from the spare minutes** (the strength step, `plan_engine.hyrox.ts:2108`; `addStrength`, `:4644`; `hyroxStrengthContent` and `hyroxStrengthLength`, `gym.ts:195`, `:161`).
+
+```
+build the week without strength; strengthMin = what its limits leave; build again, kept only when running,
+quality runs, hard sessions, station work, the long run and the sim are unchanged
+spend strengthMin: each station session's block (20 min), then the standalone session (beginner and intermediate base weeks)
+                   at min(content length, what is left), never under 20; content length 20 (total beginner, beginner, novice) or 45
+at most HYROX_STRENGTH_SESSIONS (base 2; build 1, advanced 2; peak 1); a deload drops the standalone; the week before race week
+holds 1 light activation block, race week none
+```
+
+Why: the sheet splits the week 40% running and 60% station sessions, strength and brick station work, so strength never takes a running minute, a quality run or station work. Before (part 2 build), strength was fixed and displaced running in low-hours base weeks (beginner base: 62 of 75 weeks under 0.40 running). One session a day keeps strength off a run day, the nearest the plan gets to the sheet's 6 h gap.
+
+**3. Race simulations** (`hyroxSimWeeks`, `:1273`; `hyroxSimLastDow`, `:1242`; `generateHyroxSim`, `hyrox-generators.ts:1424`).
+
+```
+session  : rounds of 1 km at HYROX race pace into the next race station at full volume, race order, 30 s jog counted
+           full 8 + 8; half 4 + 4 (the first half, then the second); doubles stations the partner's half; RPE the tier brick's
+full sim : beginner and intermediate tiers, the eligible week nearest raceWeek - 4 (ties earlier);
+           advanced only when 16+ weeks without a race at that week, about raceWeek - 8
+half sims: every 4th loaded week of build and peak, not the full sim's week; advanced at least 6 weeks apart
+eligible : loaded build or peak week, not a deload, week >= 5, outside the race taper, holds a brick slot,
+           its sim day 14 or more days before race day by date
+week     : full sim takes the brick and long-run slots, the quality run drops, race pace runs as technique;
+           half sim takes the brick slot, the quality run drops
+step-down: 8 km over the 110% single-run ceiling -> half; 4 km over it -> none (the week keeps its brick);
+           a sim that costs the week its station session, or beside a half sim its long run -> the same steps
+```
+
+Why: the sheet's conservative schedule. The 14 days are measured by date because the race taper covers 8 to 14 days depending on the race weekday; before, a Thursday or Friday race's Saturday half sim fell 12 or 13 days out (216 of 2,048 sims on the review grid). The MTL cap never cuts a sim (it is the race's length); a week over the cap says so.
+
+**4. The taper** (`hyroxTaperFraction`, `hyrox-constants.ts:618` = `triTaperFraction`; `exemptCircuitOf`, `plan_engine.hyrox.ts:4173`; `addTaperBlock`, `:4723`).
+
+```
+taper week 1 = 0.55 x the reference week's planned minutes; race week = 0.30 (a race-week-only taper 0.55)
+reference    = the last loaded week (not taper, not deload), a sim week skipped while an earlier one exists
+exempt       : the smallest circuit's station work in both weeks, and in race week its warm-up too
+long run     : shortened toward max(run floor, the week's longest other run) before it leaves;
+               one that cannot stay the longest stays as a 20-min easy run when that fits
+running      : taper week 1 <= the week before (a sim's run legs counted); race week <= taper week 1
+light block  : minutes from the fraction's spare, the finishers, easy runs above 20 min, the long run above its floor
+```
+
+Why: the 57.5% mean cut sits inside the 41 to 60% band with the largest effect, matching triathlon (§DN). It replaces 0.70 then 0.55 (a 37.5% mean cut, in the weaker band; ISSUE-400 (t)). The exempt circuit and the run-count rules follow taper.content: keep frequency and the run count.
+
+**5. Planned load** (`hyroxSessionPlannedTss`, `hyrox-session-shape.ts:143`). Each part at its own effort in canonical TSS: the work at the session's `plannedTssPerMin(type, RPE)`, the warm-up and finisher at the easy RPE, the block at the gym rate at its RPE. The engine and the planned-day pricer read it (Load Currency Law: one producer, no consumer rescales).
+
+**6. Filling the chosen hours.** Spare minutes go to strength, then the finishers, then easy erg sessions in free slots. In a run slot the running share leaves unfunded, easy erg work stands only at the shortest easy session (20 min), which restored the one-more-hour bound (B): measured for this docs pass at `013ff472`, 16 of 2,916 adjacent-hour pairs hold fewer total minutes, the worst by 23 min, and none past one easy session or a quality run in weeks whose running did not rise.
+
+**Limitations.** Figures marked "round 3" were measured at part 2 review round 3 (`07d5dca` to its fix commits) and not re-measured after the later rounds, which changed taper and race-week running.
+1. No HYROX training trial exists.
+2. The block (20 min) and standalone (20 or 45 min) lengths reuse app values. From intermediate up the block's running-pool content takes about 30 min, so planned minutes and TSS understate it by about a third (round 3).
+3. Strength carries no MTL (mtl.ts has no strength factor).
+4. Strength sits below the sheet's counts at low hours, under the guard and in beginner-tier taper weeks of 3 h or more (round 3: beginner build at the default hours held the block in 29 of 38 weeks; the light block missed 23 of 96 no-race plans).
+5. No upper-body press or pull-up, grip or elbow work, or heavier-than-race sled work in the strength content.
+6. Sim RPE reuses the tier brick's; beginners mostly get the half sim, because the 110% rule turns an 8 km sim into a half.
+7. A sim week can sit above the MTL cap (round 3: 24 of 211 total-beginner sim weeks at 4 and 6 h).
+8. The light block can take the taper long run below the sheet's 0.65 × the previous 4 weeks' longest long run (round 3: 43 of 120 singles and 45 of 120 open doubles plans, often by the full 20 min).
+9. Beginner-tier singles technique sessions with their block run past the 60-min session cap, up to 85 min (pro singles women; 77 to 79 open).
+10. Taper depth: the exempt circuit puts taper weeks above 0.55 and 0.30 in total; a 0.30 race week is a 70% single-week cut, beyond what the literature tests directly. Round 4 (`a63f298` to `ffc0509`): singles two-week cuts 36.7 to 58.6% over 3,774 plans, 11 under 41% (2 h, 8 to 11 weeks); open doubles mixed up to 61.0%, 22 of 1,258 outside the band.
+11. When race week's easy-run cap drops an easy run, the circuit grows into the freed minutes (round 8 question 6).
+12. Not device-verified.
+
+## §DT: HYROX injury gate v2: each injured week is the uninjured week at its capacities' shares (2026-10-22 to 25, lane H2b; merged in `013ff472`)
+
+**Side.** Planning. It supersedes the injury-gate rules of part 2 rounds 1 to 8, which searched session shapes (whole-station cuts, cut orders, ranked candidates, partial walks, gated reference copies for the ceilings) and checked the shares, the floor and the ceilings afterwards; each round traded one invariant for another.
+
+**The capacity model.** The shared engine reads a region capacity as 0 = the region must not be loaded, 100 = fully loadable, 1 to 99 = loadable at reduced volume (`bodyRegionLoadability`, `src/injury/engine.ts:699`). v2 takes that literally: each part of the plan keeps its capacity's share of its volume, and nothing else changes. The athlete's capacities are run, upper body and lower body (`getDisciplineCapacity`); a station loads the side `HYROX_STATION_REGION` gives it.
+
+```
+r = run / 100;  u = upper / 100;  l = lower / 100;  f = min(u, l)
+c(SkiErg) = u;  c(Sled Push, Sandbag Lunges) = l;  c(other stations, Row Erg) = f          (per-region scaling)
+week'       = the week built without the injury (buildHyroxTrainingWeeks), each session through the gate on its day
+              (injuredWeekOf, plan_engine.hyrox.ts:5354; hyroxInjuryGate, :2779); nothing added or moved
+run         : minutes max(1, round(m x r)); distance, time, MTL exact x r; text rewritten (withHyroxRunShare); none at r = 0
+station set : amount' = floor(amount x c); ratio = amount' / amount; time, MTL, race fraction and the rest after it x ratio
+              (withHyroxPartialSets, restScale); a station with no whole metre or rep leaves
+finisher    : floor(min x c_erg); leaves under 5 min (HYROX_FINISHER_MIN_MIN)
+warm-up     : the planned way, unless another of the athlete's ways with the same MTL a minute has a strictly higher
+              capacity (an erg moves only to the other erg; a jog stays a jog); minutes max(1, round(10 x c_way)),
+              none at 0, then round 1 at the easy RPE is the warm-up
+kept        : no side the session uses at 0, and round(station work incl. scaled rests + 10) >= 15     (the planned warm-up)
+              race week's short circuit planned under the floor: kept while none of its station work is cut
+brick, sim  : kept only at r = u = l = 1
+assessment  : stations with c = 1 whole, the others left out and named; none when f = 0 or no station is at 1
+easy erg    : max(1, round(m x c_erg)); none at 0
+strength    : paused -> none; adapted -> min(decision minutes, planned minutes) at min(decision RPE, planned RPE),
+              decision minutes = max(10, round(18 l) + round(15 u) + 10), each term only for a loadable region (core only when
+              the trunk is safe); exercises per limb region max(1, round(4 x capacity)) while loadable, core 3
+              resolved phase -> floor(m x f) and each line's reps x f (a station session's block the same way)
+ceilings    : the deload ceiling, taper fractions, race-week rules and the acute:chronic guard and its floor from the uninjured plan
+```
+
+**Why the invariants hold by construction.** Every share is non-decreasing in its capacity and every part only shrinks, so each component, session and week sits at or under the uninjured one, nothing falls as a capacity rises, and the ceilings computed on the uninjured week hold on the injured week. The one component above its literal share is the adapted standalone strength session (below). The warm-up moves only between ways of equal MTL a minute: a jog in place of an erg had raised session MTL above the uninjured session's and put 37 to 39 injured weeks over the weekly MTL cap (v2 review). A tie keeps the planned erg: under an upper-body restriction the Row Erg reads min(u, l) = u, so a move gains nothing. Rests take their set's share because a set at a share of its amount needs that share of the recovery; with full rests, 218 of 230 kept singles circuits at 25/25 were under 25% work, and the floor measured rest, not training (now 0 of 931; work is 51.3% of station time). The floor counts the planned 10-min warm-up, so a shortened warm-up never decides whether a session stays (round 7's lesson: counting the held warm-up let a better state keep fewer sessions). The assessment keeps whole stations because a time at reduced volume is no calibration.
+
+**Strength.** The adapted standalone session is the shared decision's own (`injuryStrengthDecision`, `src/workouts/injury-strength.ts`), as triathlon and running take it. Its minutes scale each limb region's block with that region's capacity (18 and 15 min at full) and keep the 10-min core block whole, with a 10-min floor; with one side at 0 the other side's block stays (regional substitution, Bleakley 2012; PEACE & LOVE, §AN). Since `abd02e27` its exercise list follows the same scaling: round(4 × capacity) exercises per limb region, at least one while loadable, the 3 core exercises whole, so a card lists what its length holds. That change applies in every mode that uses the shared decision (running, triathlon, cycling, HYROX, the injury nudge and the on-demand generator). Before, the list was 4 + 4 + 3 at any capacity: a 12-min card at 5/5 listed the 43-min session's 11 exercises.
+
+**Verified** (node lattice, the lane's reports of 2026-10-22 and 2026-10-25, 0 failures): 24,845,535 session states (18,205,904 kept) and 48,735,932 single +5 steps; 2,116,800 strength states over 5 phases and 8 locations; 37,584 rebuilt plans (from week 1 and from length minus 4, 29 states) and 319,464 injured weeks with no added session or quality run, week minutes, TSS and MTL at or under the uninjured week, the weekly MTL cap, the deload ceiling, the acute:chronic guard, no hard sessions on consecutive days, 48 h between eccentric sessions and the 110% rule in km; 1,635 real `regenerateHyroxWeeksFrom` rebuilds identical to gating the uninjured week; 13,890 injured weeks' notes. Uninjured plans and the other modes byte-identical to the lane's pre-v2 tip (1,152 HYROX plans, 440 other-mode fingerprints). Reviewer reproductions matched every count. Mean rebuild 7.8 ms in node.
+
+**Cost.** 16 variants, 6 bands at the minimum and default hours, 12 weeks, rebuilt from week 1: 192 plans and 2,304 training weeks a state. Columns: circuits (uninjured / v2 before its review fixes / merged); weeks without station work (same); minutes as % of uninjured (v2 / merged). The drop between the v2 and merged columns under side restrictions is the rest scaling: shorter rests put more cut sessions under the floor.
+
+| State (run / upper / lower) | Circuits | Weeks without station work | Minutes % |
+|---|---|---|---|
+| 0 / 100 / 100 | 2317 / 2205 / 2205 | 24 / 141 / 141 | 29.0 / 28.9 |
+| 50 / 100 / 100 | 2317 / 2317 / 2317 | 24 / 47 / 47 | 57.3 / 57.3 |
+| 90 / 100 / 100 | 2317 / 2317 / 2317 | 24 / 47 / 47 | 79.5 / 79.4 |
+| 100 / 30 / 100 | 2317 / 2063 / 1452 | 24 / 270 / 784 | 68.7 / 64.0 |
+| 100 / 50 / 100 | 2317 / 2177 / 1932 | 24 / 176 / 364 | 72.6 / 69.4 |
+| 100 / 90 / 100 | 2317 / 2287 / 2258 | 24 / 74 / 99 | 79.8 / 79.2 |
+| 100 / 100 / 50 | 2317 / 2114 / 1743 | 24 / 266 / 558 | 75.6 / 70.8 |
+| 100 / 100 / 90 | 2317 / 2277 / 2257 | 24 / 122 / 138 | 80.0 / 79.3 |
+| 100 / 50 / 50 | 2317 / 2062 / 1596 | 24 / 430 / 819 | 70.6 / 65.5 |
+| 50 / 50 / 50 | 2317 / 2062 / 1596 | 24 / 430 / 819 | 43.1 / 38.1 |
+| 100 / 30 / 70 | 2317 / 1995 / 1262 | 24 / 483 / 1129 | 67.2 / 61.5 |
+| 0 / 100 / 50 | 2317 / 1999 / 1627 | 24 / 368 / 660 | 19.8 / 15.2 |
+
+**Limitations** (the open product calls are ISSUE-407 to ISSUE-412).
+1. **Sims leave under any restriction**, and a sim holds the week's long run (full sim) and quality run, so that week loses both: under a mild restriction all 48 full-sim weeks on the review grid kept 49% of their minutes (round 8: 87%). Planning the sim week without the sim would need the uninjured build to read the injury.
+2. **A dropped erg swap has no run fallback.** An easy run's slot the uninjured week gave to easy erg work stays erg work through the gates and leaves when its erg's side is at 0: at upper body 0, run 100, 18 of 546 training weeks run less than the same athlete with no ergs and 9 hold fewer runs (reproduced for this docs pass at `013ff472`).
+3. **Tiny sets can remain** when an uncut station keeps a session over the floor: 10.6% of kept cut circuit states (200,205 of 1,885,102) hold a set under 10 s, 244 of 931 kept circuits at 25/25 (e.g. "Farmer Carry: 2 × 2 m"). A minimum meaningful set needs a number from Tristan.
+4. **The near-full-capacity cliff.** A 5% cut tips a session just above the floor under it and the whole circuit leaves. In the reviewer's lattice, weeks without station work: 322 under a run-only restriction (the baseline), 536 at upper body 95, 704 at lower body 95, 3,657 at 50/50 and 7,025 at 30/30. Kept-ness stays monotone.
+5. **Ceilings are measured on the uninjured plan.** Against the injured plan's own weeks, taper week 1 can run more than the injured week before it and a deload week can sit above 0.75 of the injured reference week (reviewer grid: 56 of 36,828 taper weeks, 16,361 of 55,191 deload weeks).
+6. **The 110% rule holds in km.** Displayed minutes round, so 3,455 of 319,464 injured weeks show a run above 110% of the 4-week longest in minutes; the km rule holds in all of them.
+7. **Capacity transitions mid-plan.** The single-run ceiling and the acute:chronic guard read the build's own weeks (`historyLimits`, `plan_engine.hyrox.ts:3903`, reads `built`), not the stored weeks the athlete trained, so raising a capacity or clearing the injury on a plan already held can break both: the reviewer measured the 110% rule broken in 214 to 238 of 324 transitions (e.g. a 3.8 km run against a 1.8 km 4-week longest). Pre-existing (round 8 is the same in displayed minutes); not covered by the static-capacity lattice.
+8. The adapted standalone strength session sits above min(u, l) × the uninjured minutes in 96% of adapted lattice states, by up to 28 min (core whole, the 10-min floor, regional substitution); per region it is proportional, and it never exceeds the uninjured minutes or planned TSS.
+9. With both sides restricted no station is at 100%, so week 1 holds no assessment (46 of 54 open singles men plans rebuilt from week 1 then hold no station work in week 1). The assessment also leaves with either side at 0, even when its kept stations load only the other side.
+10. A run-only restriction can leave a week whose only station work was a brick or sim without station work (run 50: 47 of 2,304 weeks; run 0: 141; uninjured 24).
+11. Quality-run spans read to the whole second at odd shares ("1 min 3 s"), and heart-rate interval reps can fall under 2 min, shorter than heart rate takes to reach 90% of max.
+12. The strength block in the resolved phase scales by the lower capacity, although gym-pool exercises have regions.
+13. The shared engine's aerobic offer gates the Row Erg on the upper body alone (`pickAerobicSubstitute`); the plan reads it as full-body.
+14. Not device-verified.
+
+## §DU: A stale HYROX race's VDOT band only for a measured runner (2026-10-25, `ee3e8c66`)
+
+**Side.** Planning (the ability band behind every planning input). `hyroxStalenessAdjustedBand` (`src/calculations/hyrox-staleness.ts:200`) blends a stale race's time band toward the band the running VDOT implies (`bandFromVdot`) when the race's weight is under 0.7. It now takes the VDOT band only when `hyroxVdotIsMeasured(state)` (`:41`, `hasRealRunningFitnessSignal`, §BF); otherwise a stale race keeps its time band. The rule reaches every path that reads it: the onboarding initializer, the version regeneration's re-band (`rebandStoredHyroxPlan`), log-a-race and the previous-format fix (`hyroxStoredRaceBand`, `:223`).
+
+**Why.** The bare-baseline VDOT (the store default 50) is no claim about the athlete (§BV, D5 of lane ctd): it re-banded an athlete with a stale race and no running data toward the default's band. The forecast's stale-race seed blend already gated it the same way (`race-prediction.hyrox.ts:602`).
+
+**Limitation.** `bandFromVdot` is still one scale for both sexes (ISSUE-397 (a)). Test: `plan_engine.hyrox.stations.test.ts` (the version regeneration, log-a-race and the format fix with a measured runner; the same old race with the bare VDOT keeps its time band).
+
+---
