@@ -199,7 +199,11 @@ const STALENESS_BAND_ORDER: AbilityBand[] = ['total_beginner', 'beginner', 'novi
  */
 export function hyroxStalenessAdjustedBand(state: SimulatorState, timeBand: AbilityBand): { band: AbilityBand; probe: HyroxStalenessResult } {
   const probe = computeHyroxStaleness(state);
-  const vdotBand = bandFromVdot(state.v);
+  // The VDOT band only for a measured runner: the bare-baseline VDOT (the
+  // default 50) is no claim about the athlete (hasRealRunningFitnessSignal,
+  // D5 2026-10-21), so without a real running signal a stale race keeps the
+  // band its time gives.
+  const vdotBand = hyroxVdotIsMeasured(state) ? bandFromVdot(state.v) : null;
   if (probe.bandWeight < 0.7 && vdotBand && vdotBand !== timeBand) {
     const band = STALENESS_BAND_ORDER.indexOf(timeBand) < STALENESS_BAND_ORDER.indexOf(vdotBand) ? timeBand : vdotBand;
     return { band, probe };

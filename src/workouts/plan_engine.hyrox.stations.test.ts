@@ -373,6 +373,7 @@ describe('H2 integration review minors', () => {
     // a 70-min finish four years ago with a VDOT of 40 stays novice.
     const old = build('novice', 6, 16);
     old.v = 40;
+    (old as any).vo2 = 40; // a measured runner: the staleness rule's VDOT band needs a real running signal (D5)
     old.hyroxConfig!.previousHyroxTimeSec = 4200;
     old.hyroxConfig!.hyroxPreviousTimeFormat = 'open_singles';
     old.hyroxConfig!.hyroxPreviousRaceDate = new Date(Date.now() - 4 * 365 * 86400000).toISOString().slice(0, 10);
@@ -383,6 +384,16 @@ describe('H2 integration review minors', () => {
     applyHyroxGeneratorRegen(old);
     expect(old.hyroxConfig!.athleteBand).toBe('novice');
     expect(old.hyroxConfig!.mtlCap).toBe(HYROX_MTL_CAP.novice);
+    // Without a real running signal the bare VDOT is no claim: the same old race keeps the band its time gives.
+    const bare = build('novice', 6, 16);
+    bare.v = 40;
+    bare.hyroxConfig!.previousHyroxTimeSec = 4200;
+    bare.hyroxConfig!.hyroxPreviousTimeFormat = 'open_singles';
+    bare.hyroxConfig!.hyroxPreviousRaceDate = new Date(Date.now() - 4 * 365 * 86400000).toISOString().slice(0, 10);
+    bare.hyroxConfig!.athleteBand = 'novice';
+    bare.hyroxConfig!.generatorVersion = HYROX_GENERATOR_VERSION - 1;
+    applyHyroxGeneratorRegen(bare);
+    expect(bare.hyroxConfig!.athleteBand).toBe('advanced');
     // A first-timer (no previous time) keeps the band their running fitness gave.
     const f = build('total_beginner', 4, 16);
     const band = f.hyroxConfig!.athleteBand;
@@ -399,16 +410,19 @@ describe('H2 integration review minors', () => {
     // regeneration and the initializer give it.
     const logged = build('novice', 6, 16);
     logged.v = 40;
+    (logged as any).vo2 = 40; // a measured runner: the staleness rule's VDOT band needs a real running signal (D5)
     applyHyroxPrevTimeUpdate({ timeSec: 4200, format: 'open_singles', raceDateISO: fourYearsAgo });
     expect(getState().hyroxConfig!.athleteBand).toBe('novice');
     // A recent race is trusted: advanced.
     const recent = build('novice', 6, 16);
     recent.v = 40;
+    (recent as any).vo2 = 40; // a measured runner: the staleness rule's VDOT band needs a real running signal (D5)
     applyHyroxPrevTimeUpdate({ timeSec: 4200, format: 'open_singles', raceDateISO: new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10) });
     expect(getState().hyroxConfig!.athleteBand).toBe('advanced');
     // The format fix on the same old race: novice whichever format it is filed under.
     const fixed = build('novice', 6, 16);
     fixed.v = 40;
+    (fixed as any).vo2 = 40; // a measured runner: the staleness rule's VDOT band needs a real running signal (D5)
     fixed.hyroxConfig!.previousHyroxTimeSec = 4200;
     fixed.hyroxConfig!.hyroxPreviousTimeFormat = 'pro_singles';
     fixed.hyroxConfig!.hyroxPreviousRaceDate = fourYearsAgo;
