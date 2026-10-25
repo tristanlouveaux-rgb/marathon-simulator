@@ -184,6 +184,47 @@ export function hyroxEntrySplitsWeight(dateISO: string | undefined, mitigation: 
   return applyMitigation(baseDecayAt(months).baseSplitsWeight, mitigation);
 }
 
+/** Bands from slowest to fastest. */
+const STALENESS_BAND_ORDER: AbilityBand[] = ['total_beginner', 'beginner', 'novice', 'intermediate', 'advanced', 'competitive'];
+
+/**
+ * The band a previous race gives once its age is weighed (the onboarding
+ * initializer's staleness rule, initialization.hyrox.ts): when the race is
+ * old enough to be partly distrusted (bandWeight under 0.7) and the athlete's
+ * VDOT gives another band, the slower of the two (never over-promise on a
+ * stale benchmark; the staleness model is gated by physiology mitigation, so
+ * a still-fit athlete keeps the race's band). `state.hyroxConfig` carries the
+ * race (date or event id) and `athleteBand` set to `timeBand`. Shared by the
+ * initializer and, through hyroxStoredRaceBand, every stored-plan re-band.
+ */
+export function hyroxStalenessAdjustedBand(state: SimulatorState, timeBand: AbilityBand): { band: AbilityBand; probe: HyroxStalenessResult } {
+  const probe = computeHyroxStaleness(state);
+  // The VDOT band only for a measured runner: the bare-baseline VDOT (the
+  // default 50) is no claim about the athlete (hasRealRunningFitnessSignal,
+  // D5 2026-10-21), so without a real running signal a stale race keeps the
+  // band its time gives.
+  const vdotBand = hyroxVdotIsMeasured(state) ? bandFromVdot(state.v) : null;
+  if (probe.bandWeight < 0.7 && vdotBand && vdotBand !== timeBand) {
+    const band = STALENESS_BAND_ORDER.indexOf(timeBand) < STALENESS_BAND_ORDER.indexOf(vdotBand) ? timeBand : vdotBand;
+    return { band, probe };
+  }
+  return { band: timeBand, probe };
+}
+
+/**
+ * hyroxStalenessAdjustedBand on a stored plan: the probe reads the stored
+ * previous race (date or event id) with athleteBand set to `timeBand`, the
+ * band the race's time gives. Every path that bands a stored previous race
+ * reads it (lane H2b review): the version regeneration's re-band
+ * (hyrox-plan-regen.ts), log-a-race (hyrox-prev-time-update.ts) and the
+ * previous-format fix (hyrox-prev-format-fix.ts), as the onboarding
+ * initializer does, so the same race gives the same band on every path.
+ */
+export function hyroxStoredRaceBand(state: SimulatorState, timeBand: AbilityBand): AbilityBand {
+  if (!state.hyroxConfig) return timeBand;
+  return hyroxStalenessAdjustedBand({ ...state, hyroxConfig: { ...state.hyroxConfig, athleteBand: timeBand } }, timeBand).band;
+}
+
 export function computeHyroxStaleness(state: SimulatorState): HyroxStalenessResult {
   const hx = state.hyroxConfig;
   const dateStr = hx?.hyroxPreviousRaceDate

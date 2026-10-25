@@ -3,6 +3,11 @@
  *   generator → parseHyroxSession → StrengthGuideController → benchmark learning.
  * Guards the wiring the unit tests cover in isolation (rounds expansion, timed
  * rest, best-round learning) actually composes across the real modules.
+ * Since lane H2b (generator v19) a race-pace session prescribes quarter-station
+ * sets (HyroxComponent.raceFraction 0.25): a set time is not a station time,
+ * so those sets teach no benchmark. A full-station session (the race
+ * simulations of part 2; here the same circuit with its components at the
+ * full station, fullStation) still teaches it.
  */
 import { describe, it, expect } from 'vitest';
 import { generateHyroxStation } from '@/workouts/hyrox-generators';
@@ -15,6 +20,12 @@ import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import type { HyroxStation } from '@/types/triathlon';
 
 const ACCESS = { sled: 'always' as const, skiErg: true, rowErg: true };
+
+/** The same circuit with every station component covering the full station
+ *  (no raceFraction), as a full-station session would. */
+function fullStation<T extends { hyroxComponents?: Array<{ raceFraction?: number }> }>(w: T): T {
+  return { ...w, hyroxComponents: (w.hyroxComponents ?? []).map(({ raceFraction: _f, ...c }) => c) };
+}
 
 /** Walk a parsed session to completion exactly as the overlay does: tick work
  *  time, tap Complete set, skip the timed rest, repeat. Returns the records. */
@@ -46,9 +57,11 @@ describe('HYROX guided flow — density end to end', () => {
 
   it('generates a multi-round circuit with rest encoded on every station', () => {
     expect(density.hyroxRounds!).toBeGreaterThanOrEqual(2);
-    expect(density.hyroxRoundRestSec).toBe(120);
+    // Race pace (lane H2b): 90 s after every set, between rounds too.
+    expect(density.hyroxRoundRestSec).toBe(90);
     const stations = density.hyroxComponents!.filter(c => c.type !== 'run');
-    expect(stations.every(c => c.restAfterSec === 30)).toBe(true);
+    expect(stations.every(c => c.restAfterSec === 90)).toBe(true);
+    expect(stations.every(c => c.raceFraction === 0.25)).toBe(true);
   });
 
   it('parser expands rounds and uses timed rest (not athlete-paced)', () => {
@@ -64,16 +77,33 @@ describe('HYROX guided flow — density end to end', () => {
     expect(records.every(r => r.durationSec > 0)).toBe(true);
   });
 
-  it('learning picks the best round and updates the benchmark it beats', () => {
+  it('quarter-station sets record a best set but teach no benchmark', () => {
     const session = parseHyroxSession(density)!;
     const station0 = density.hyroxComponents![0].type as HyroxStation;
+    const records = walkSession(session, (round, exIdx) => (exIdx === 0 ? [100, 90, 80, 80][round] ?? 80 : 120));
+    const state = {
+      hyroxConfig: { format: 'open_singles', stationBenchmarksSingles: { [station0]: 9999 }, stationAccess: ACCESS },
+    } as any;
+    const s0 = summariseHyroxSession(density, records, state).find(r => r.station === station0)!;
+    expect(s0.bestSec).toBe(80);
+    expect(s0.partial).toBe(true);
+    expect(s0.percentile).toBeNull();
+    expect(s0.eligible).toBe(false);
+    expect(applyHyroxSessionBenchmarks(density, records, state)).toEqual([]);
+    expect(state.hyroxConfig.stationBenchmarksSingles[station0]).toBe(9999);
+  });
+
+  it('learning picks the best round of a full-station session and updates the benchmark it beats', () => {
+    const full = fullStation(density);
+    const session = parseHyroxSession(full)!;
+    const station0 = full.hyroxComponents![0].type as HyroxStation;
 
     // Station 0 gets a fast final round (300s); everything else steady at 350s.
     const records = walkSession(session, (round, exIdx) =>
       exIdx === 0 ? [400, 380, 300, 300, 300][round] ?? 300 : 350);
 
     // Best round for station 0 should be the fastest we fed it.
-    const summary = summariseHyroxSession(density, records, {
+    const summary = summariseHyroxSession(full, records, {
       hyroxConfig: { format: 'open_singles', stationBenchmarksSingles: {}, stationAccess: ACCESS },
     } as any);
     const s0 = summary.find(r => r.station === station0)!;
@@ -84,7 +114,7 @@ describe('HYROX guided flow — density end to end', () => {
     const state = {
       hyroxConfig: { format: 'open_singles', stationBenchmarksSingles: { [station0]: 9999 }, stationAccess: ACCESS },
     } as any;
-    const applied = applyHyroxSessionBenchmarks(density, records, state);
+    const applied = applyHyroxSessionBenchmarks(full, records, state);
     expect(applied.find(a => a.station === station0)?.toSec).toBe(300);
     expect(state.hyroxConfig.stationBenchmarksSingles[station0]).toBe(300);
     const hist = state.hyroxConfig.stationBenchmarkHistory[station0];
@@ -93,18 +123,22 @@ describe('HYROX guided flow — density end to end', () => {
 });
 
 describe('HYROX guided flow — a faster session produces a faster forecast', () => {
-  it('a session that beats a station benchmark lowers the predicted finish time', () => {
-    const density = generateHyroxStation({
+  it('a full-station session that beats a station benchmark lowers the predicted finish time', () => {
+    const density = fullStation(generateHyroxStation({
       kind: 'station_density', targetMinutes: 55, band: 'intermediate',
-      stationAccess: ACCESS, phase: 'build', slotIndex: 0,
-    });
-    const station0 = density.hyroxComponents![0].type as HyroxStation; // wall_balls
+      stationAccess: ACCESS, phase: 'build', slotIndex: 0, weakest: 'wall_balls',
+    }));
+    const station0 = density.hyroxComponents![0].type as HyroxStation; // wall_balls (the weakest leads)
+    expect(station0).toBe('wall_balls');
 
-    // State with a deliberately SLOW wall_balls benchmark (600s); other stations on seeds.
+    // State with a deliberately SLOW wall_balls benchmark (600s). The circuit's
+    // other stations hold fast benchmarks (200 s), so their 350 s rounds write
+    // nothing and only wall balls moves the forecast; the rest are on seeds.
+    const others = Object.fromEntries(density.hyroxComponents!.filter(c => c.type !== station0).map(c => [c.type, 200]));
     const state = {
       hyroxConfig: {
         athleteBand: 'intermediate', format: 'open_singles',
-        stationAccess: ACCESS, stationBenchmarksSingles: { [station0]: 600 },
+        stationAccess: ACCESS, stationBenchmarksSingles: { ...others, [station0]: 600 },
       },
     } as any;
 

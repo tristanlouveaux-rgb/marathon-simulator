@@ -11,11 +11,13 @@ import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { getSubstitutionsFor, findSubstitution } from '@/constants/hyrox-substitutions';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
+import { noteRatingSource } from '@/calculations/athlete-rating';
 import { intensityTargetLabel } from '@/ui/workout-adjust-overlay';
 import { parseStrengthSession, type GuidedSet, type StrengthSession } from '@/guided/strength-model';
 import { dropInAppActual, recordPlannedSessionDone } from '@/calculations/in-app-activity';
-import { isHyroxEasyErg } from '@/workouts/hyrox-generators';
+import { isHyroxEasyErg, hyroxStationRowText, hyroxSessionNotes, hyroxRoundsBreakdown, hyroxRestsScaled } from '@/workouts/hyrox-generators';
 import { ftRounded } from '@/utils/format';
+import { HYROX_EASY_RPE } from '@/constants/hyrox-constants';
 
 type HyroxDisc = 'run' | 'station' | 'brick' | 'strength' | 'cross';
 
@@ -30,11 +32,16 @@ function renderStationRow(
   if (!display) return '';
   const subId = workout.hyroxStationSubs?.[station];
   const sub = subId ? findSubstitution(station, subId) : undefined;
-  const distStr = c.reps ? `${c.reps} reps` : display.distance;
+  // Lane H2b sessions: the station's sets and prescription ("2 × 250 m,
+  // damper 6"); an older session: its amount.
+  // The race-pace set target sits in its own column, so the row leaves it out.
+  const distStr = workout.hyroxSpec ? hyroxStationRowText(c, workout, false) : c.reps ? `${c.reps} ${c.reps === 1 ? 'rep' : 'reps'}` : display.distance;
   const targetStr = c.durationSec ? ftRounded(c.durationSec) : '—';
+  const perSet = !!workout.hyroxSpec;
   const targetLabel = options.context === 'technique' ? 'per round'
-                     : options.context === 'density' ? 'target' : '';
-  const showTargetCol = options.context !== 'breakdown';
+                     : options.context === 'density' ? (perSet ? 'target a set' : 'target') : '';
+  // A lane H2b technique session sets no time target: no target column.
+  const showTargetCol = options.context !== 'breakdown' && !(perSet && options.context === 'technique');
   // Equipment-swap demoted to a small icon button on the right of the row.
   // When a swap is active, an inline "Swapped" badge sits beside the title and
   // the icon flips to a revert tooltip. No more triple-stacked grey buttons.
@@ -294,6 +301,7 @@ function setHxRated(weekIdx: number, workout: Workout, value: number | 'skip'): 
   if (!wk.rated) wk.rated = {};
   const key = (workout as any).id ?? workout.n;
   wk.rated[key] = value;
+  noteRatingSource(wk, key, 'user');
   // A skipped session carries no load: drop an in-app record left on the slot.
   if (value === 'skip') dropInAppActual(wk, key);
   saveState();
@@ -427,6 +435,35 @@ function fmtRest(sec: number): string {
   return `${sec}s`;
 }
 
+/**
+ * A lane H2b part 2 station session's parts around its stations: the warm-up
+ * and the strength block before them, the easy erg finisher after. Muted
+ * lines and the strength modal's rows; the guided player covers the
+ * stations only, said once.
+ */
+function renderSessionParts(workout: Workout, accent: string): { opening: string; closing: string } {
+  const spec = workout.hyroxSpec;
+  if (!spec) return { opening: '', closing: '' };
+  const muted = (t: string) => `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;margin-bottom:8px">${esc(t)}</div>`;
+  // With no warm-up left (the injury gates), round 1 at easy effort is it.
+  const warm = spec.warmup
+    ? muted(spec.warmup.mode === 'run' ? `Warm-up: ${spec.warmup.min} min easy jog.` : `Warm-up: ${spec.warmup.min} min easy on the ${STATION_DISPLAY[spec.warmup.mode as HyroxStation]?.name ?? 'erg'}.`)
+    : spec.warmupRound ? muted(`Warm-up: round 1 at easy effort (RPE ${HYROX_EASY_RPE}).`) : '';
+  let strength = '';
+  if (spec.strength) {
+    const parsed = parseStrengthSession({ t: 'gym', n: spec.strength.name, d: spec.strength.lines.join('\n') } as Workout);
+    strength = `
+      <div style="font-size:13px;font-weight:600;color:#0F172A;margin:6px 0 2px">Strength first, ${spec.strength.min} min, RPE ${spec.strength.rpe}${spec.strength.light ? ', light' : ''}</div>
+      <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">The guided player starts at the stations.</div>
+      ${parsed ? strengthRows(parsed, accent) : ''}
+      <div style="height:10px"></div>`;
+  }
+  const closing = spec.finisher
+    ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;padding-top:10px">Finisher: ${spec.finisher.min} min easy on the ${esc(STATION_DISPLAY[spec.finisher.station]?.name ?? 'erg')}, RPE ${HYROX_EASY_RPE}.</div>`
+    : '';
+  return { opening: warm + strength, closing };
+}
+
 function renderSessionBody(workout: Workout, components: HyroxComponent[] | undefined, accent: string, disc: HyroxDisc): string {
   const t = workout.t ?? '';
   const mtl = workout.musculoTendonLoad;
@@ -456,15 +493,28 @@ function renderSessionBody(workout: Workout, components: HyroxComponent[] | unde
     const rounds = workout.hyroxRounds ?? 3;
     const interStation = stationComponents[0]?.restAfterSec ?? 60;
     const interRound = workout.hyroxRoundRestSec ?? 180;
+    // Lane H2b: one rest after every set (each station's own when the
+    // injury gates scaled them, shown on its row), and the closing notes.
+    const restLine = workout.hyroxSpec
+      ? `${hyroxRestsScaled(workout) ? 'Rest after each set as listed' : `${fmtRest(workout.hyroxSpec.restSec)} rest after every set`} · Technique, RPE ${workout.rpe ?? 5}`
+      : `${fmtRest(interStation)} between stations · ${fmtRest(interRound)} between rounds · Technique pace`;
+    const notes = hyroxSessionNotes(workout);
+    // Not every station in every round (a beginner session's sleds).
+    const breakdown = hyroxRoundsBreakdown(workout);
 
+    const parts = renderSessionParts(workout, accent);
     return `
       <div style="padding:18px 24px 0">
         <div style="padding:12px 14px;border-radius:10px;background:rgba(91,110,160,0.06);border:1px solid rgba(91,110,160,0.12);margin-bottom:16px">
-          <div style="font-size:12px;font-weight:600;color:#3d4f80">${rounds} rounds</div>
-          <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${fmtRest(interStation)} between stations · ${fmtRest(interRound)} between rounds · Technique pace</div>
+          <div style="font-size:12px;font-weight:600;color:#3d4f80">${rounds} round${rounds === 1 ? '' : 's'}</div>
+          <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${restLine}</div>
+          ${breakdown ? `<div style="font-size:11px;color:var(--c-muted);margin-top:2px">${esc(breakdown)}</div>` : ''}
         </div>
+        ${parts.opening}
         <div style="font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--c-faint);margin-bottom:4px">Stations</div>
         ${stationRows}
+        ${notes.length > 0 ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;padding-top:10px">${esc(notes.join(' '))}</div>` : ''}
+        ${parts.closing}
         ${runFinishMin ? `
           <div style="padding:12px 14px;border-radius:10px;background:rgba(122,132,92,0.07);border:1px solid rgba(122,132,92,0.15);margin-top:14px">
             <div style="font-size:12px;font-weight:600;color:#4f5a3b">Easy run to finish</div>
@@ -482,15 +532,25 @@ function renderSessionBody(workout: Workout, components: HyroxComponent[] | unde
     const rounds = workout.hyroxRounds ?? 2;
     const interStation = stationComponents[0]?.restAfterSec ?? 30;
     const interRound = workout.hyroxRoundRestSec ?? 120;
+    // Lane H2b: one rest after every set (each station's own when the
+    // injury gates scaled them, shown on its row), and the closing notes.
+    const restLine = workout.hyroxSpec
+      ? `${hyroxRestsScaled(workout) ? 'Rest after each set as listed' : `${fmtRest(workout.hyroxSpec.restSec)} rest after every set`} · RPE ${workout.rpe ?? 7}`
+      : `${fmtRest(interStation)} between stations · ${fmtRest(interRound)} between rounds · Stations only`;
+    const notes = hyroxSessionNotes(workout);
 
+    const parts = renderSessionParts(workout, accent);
     return `
       <div style="padding:18px 24px 0">
         <div style="padding:12px 14px;border-radius:10px;background:rgba(184,116,44,0.06);border:1px solid rgba(184,116,44,0.12);margin-bottom:16px">
-          <div style="font-size:12px;font-weight:600;color:#8a5820">${rounds} rounds · Race pace</div>
-          <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${fmtRest(interStation)} between stations · ${fmtRest(interRound)} between rounds · Stations only</div>
+          <div style="font-size:12px;font-weight:600;color:#8a5820">${rounds} round${rounds === 1 ? '' : 's'} · Race pace</div>
+          <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${restLine}</div>
         </div>
+        ${parts.opening}
         <div style="font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--c-faint);margin-bottom:4px">Stations</div>
         ${stationRows}
+        ${notes.length > 0 ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.45;padding-top:10px">${esc(notes.join(' '))}</div>` : ''}
+        ${parts.closing}
       </div>
       ${mtl != null && mtl > 0 ? renderMtlNote(mtl, disc) : ''}`;
   }
@@ -516,10 +576,10 @@ function fmtRestSuffix(sec: number): string {
  * underneath. A neutral summary chip leads, matching the station-circuit modal's
  * shape. The guided player walks the sets one at a time.
  */
-function renderStrengthBreakdown(session: StrengthSession, accent: string, workout: Workout): string {
-  const dur = workout.estimatedDurationMin;
-  const durStr = dur ? (dur >= 60 ? `${Math.floor(dur / 60)}h ${dur % 60 > 0 ? `${dur % 60}m` : ''}`.trim() : `${dur}m`) : null;
-
+/** One row per exercise of a parsed strength session (the first set carries
+ *  the prescription), cue and rest underneath: the strength modal's rows,
+ *  shared with a station session's strength block. */
+function strengthRows(session: StrengthSession, accent: string): string {
   const byExercise = new Map<number, GuidedSet>();
   for (const s of session.sets) {
     if (!byExercise.has(s.exerciseIndex)) byExercise.set(s.exerciseIndex, s);
@@ -541,6 +601,13 @@ function renderStrengthBreakdown(session: StrengthSession, accent: string, worko
         </div>
       </div>`;
   }).join('');
+  return rows;
+}
+
+function renderStrengthBreakdown(session: StrengthSession, accent: string, workout: Workout): string {
+  const dur = workout.estimatedDurationMin;
+  const durStr = dur ? (dur >= 60 ? `${Math.floor(dur / 60)}h ${dur % 60 > 0 ? `${dur % 60}m` : ''}`.trim() : `${dur}m`) : null;
+  const rows = strengthRows(session, accent);
 
   return `
     <div style="padding:18px 24px 0">

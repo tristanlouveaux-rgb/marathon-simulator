@@ -188,6 +188,18 @@ export interface Workout extends WorkoutDefinition {
    *  scheduler's hard-day rule (scheduler.hyrox isHighIntensity) skips it.
    *  Undefined = an ordinary session. */
   hyroxLight?: boolean;
+  /** HYROX mode (lane H2b): the prescription a station session or brick was
+   *  written from. The generators build the description from it and the
+   *  components (hyrox-generators hyroxSessionText), so a cut of rounds or a
+   *  station (the MTL cap, the ceilings) rewrites the text from the session
+   *  itself. Absent on sessions generated before generator v19. */
+  hyroxSpec?: import('./triathlon').HyroxSessionSpec;
+  /** HYROX mode (lane H2b part 2): a standalone strength session holding
+   *  heavy lower-body strength or plyometrics, so the 48 h eccentric rule
+   *  spaces it (scheduler.hyrox isEccentricSession; sheet eccentric.min_gap).
+   *  A station session's strength block carries its own flag
+   *  (hyroxSpec.strength.eccentric). */
+  hyroxEccentric?: boolean;
   /** HYROX mode: per-station substitution picks when the user lacks equipment.
    *  Keyed by HyroxStation id, value is the substitution id from
    *  `HYROX_STATION_SUBSTITUTIONS`. Display layer overlays the substitute name.
@@ -661,6 +673,11 @@ export interface Week {
    *  and label. See src/workouts/phases.ts. */
   checkpoint?: boolean;
   rated: Record<string, number | 'skip'>; // Workout ratings
+  /** The RPE the athlete entered on a slot (an RPE prompt, a guided 1-tap
+   *  rating, Mark as done, the watch's self-reported RPE), as opposed to an
+   *  estimate derived from a synced recording. Counts only while `rated[id]`
+   *  still holds the same number (calculations/athlete-rating.ts). */
+  ratedByAthlete?: Record<string, number>;
   ratedChanges?: Record<string, number>;  // VDOT changes from ratings
   skip: SkippedWorkout[];               // Skipped workouts to carry forward
   /** Race-time penalty (seconds) charged into `s.timp` per workout id when a

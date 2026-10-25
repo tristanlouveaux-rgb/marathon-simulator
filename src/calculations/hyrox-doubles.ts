@@ -215,8 +215,10 @@ export function doublesStationSoloSec(station: HyroxStation, teamSec: number, ta
  * at the same cumulative percentile. Inside the tables this is the exact
  * inverse of singles × doublesRatioAt('total').
  *
- * Kept for hyroxBandingTimeSec (the onboarding initializer's banding until
- * lane H2 moves it to hyroxPlanningBandFor, hyrox-planning-band.ts).
+ * Kept for the race projection's improvement ceiling
+ * (race-projection.hyrox.ts), which reads a doubles total in singles terms.
+ * Banding no longer uses it: every format bands through hyroxPlanningBandFor
+ * (hyrox-planning-band.ts, Open Singles terms on the athlete's own field).
  * Placements no longer convert: a doubles total is placed on the doubles
  * table directly.
  */

@@ -540,7 +540,7 @@ describe('Capacity-slider scaling in HYROX plan engine', () => {
     const week = regenerateHyroxWeek(s, 6);
     const stations = (week!.triWorkouts ?? []).filter(w => (w.t || '').startsWith('hyrox_station_'));
     for (const st of stations) {
-      expect((st.modReason ?? '')).toMatch(/Capacity 20%/);
+      expect((st.modReason ?? '')).toMatch(/Lower-body capacity 20%/);
     }
   });
 

@@ -22,6 +22,7 @@ import {
   mapGarminType,
   reconcileCrossSourceDuplicates,
   deriveRPE,
+  deriveRpeSource,
   getHREffort,
   getPaceAdherence,
 } from '@/calculations/activity-matcher';
@@ -45,6 +46,7 @@ import {
   type MatchResult,
 } from '@/calculations/matching';
 import { reconcileTriCompletions } from '@/calculations/activity-matcher.triathlon';
+import { noteRatingSource, type RatingSource } from '@/calculations/athlete-rating';
 import { isInAppActual } from '@/calculations/in-app-activity';
 import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
 import { classifyByName } from '@/data/stravaSync';
@@ -241,6 +243,12 @@ function buildExternalActivity(item: GarminPendingItem): ExternalActivity {
   };
 }
 
+/** Who entered deriveItemRPE's result: the watch's self-reported RPE is the
+ *  athlete's own, every other branch an estimate (athlete-rating.ts). */
+function itemRpeSource(item: GarminPendingItem): RatingSource {
+  return deriveRpeSource({ garmin_rpe: item.garminRpe });
+}
+
 function deriveItemRPE(
   item: GarminPendingItem,
   s: ReturnType<typeof getMutableState>,
@@ -419,6 +427,7 @@ export function openActivityReReview(onDone?: () => void, weekNum?: number): voi
   // Snapshot state so Cancel can restore it exactly
   const snapshot = {
     rated: { ...wk.rated },
+    ratedByAthlete: wk.ratedByAthlete ? { ...wk.ratedByAthlete } : undefined,
     garminActuals: JSON.parse(JSON.stringify(wk.garminActuals || {})),
     garminMatched: { ...(wk.garminMatched || {}) },
     adhocWorkouts: JSON.parse(JSON.stringify(wk.adhocWorkouts || [])),
@@ -478,6 +487,7 @@ export function openActivityReReview(onDone?: () => void, weekNum?: number): voi
       const wk2 = s2.wks?.[wkIdx];
       if (wk2) {
         wk2.rated = snapshot.rated;
+        wk2.ratedByAthlete = snapshot.ratedByAthlete;
         wk2.garminActuals = snapshot.garminActuals;
         wk2.garminMatched = snapshot.garminMatched;
         wk2.adhocWorkouts = snapshot.adhocWorkouts;
@@ -1113,6 +1123,7 @@ function showRpePrompt(
         const wid = slider.dataset.wid!;
         const val = parseInt(slider.value, 10);
         wk.rated[wid] = val;
+        noteRatingSource(wk, wid, 'user');
 
         // Refresh adhoc load from the rated RPE. But ONLY when no HR signal exists.
         // HR users (most): the iTrimp/aerobicEffect from Garmin/Strava is more reliable
@@ -1223,7 +1234,10 @@ function applyReview(
     if (matchWorkoutId && !usedWorkoutIds.has(matchWorkoutId)
       && (wk.rated[matchWorkoutId] === undefined || supersedesInApp)) {
       usedWorkoutIds.add(matchWorkoutId);
-      if (!(supersedesInApp && typeof wk.rated[matchWorkoutId] === 'number')) wk.rated[matchWorkoutId] = rpe;
+      if (!(supersedesInApp && typeof wk.rated[matchWorkoutId] === 'number')) {
+        wk.rated[matchWorkoutId] = rpe;
+        noteRatingSource(wk, matchWorkoutId, itemRpeSource(item));
+      }
       wk.garminMatched[item.garminId] = matchWorkoutId;
       // Alias to reuse existing code below
       const match = { workoutId: matchWorkoutId, workoutName: resolvedName ?? matchWorkoutId, confidence: matchObj?.confidence ?? 'low' as const };
@@ -1317,6 +1331,7 @@ function applyReview(
     if (matchId && !usedWorkoutIds.has(matchId)) {
       usedWorkoutIds.add(matchId);
       wk.rated[matchId] = rpe;
+      noteRatingSource(wk, matchId, itemRpeSource(item));
       wk.garminMatched[item.garminId] = matchId;
 
       // Store garminActuals so the slot card shows the activity name. No duplicate adhoc
@@ -1366,6 +1381,7 @@ function applyReview(
     if (matchId && !usedWorkoutIds.has(matchId)) {
       usedWorkoutIds.add(matchId);
       wk.rated[matchId] = rpe;
+      noteRatingSource(wk, matchId, itemRpeSource(item));
       wk.garminMatched[item.garminId] = matchId;
 
       // Store garminActuals so the slot card shows the activity name. No duplicate adhoc.
@@ -1435,6 +1451,7 @@ function applyReview(
       const slotId = bestSlot.id || bestSlot.n;
       usedWorkoutIds.add(slotId);
       wk.rated[slotId] = rpe;
+      noteRatingSource(wk, slotId, itemRpeSource(item));
       wk.garminMatched[item.garminId] = slotId;
 
       // Store garminActuals so the slot card shows the activity name. No duplicate adhoc
@@ -1926,6 +1943,7 @@ export function autoProcessActivities(
     if (match && !usedWorkoutIds.has(match.workoutId)) {
       usedWorkoutIds.add(match.workoutId);
       wk.rated[match.workoutId] = rpe;
+      noteRatingSource(wk, match.workoutId, itemRpeSource(item));
       wk.garminMatched[item.garminId] = match.workoutId;
       if (!wk.garminActuals) wk.garminActuals = {};
       wk.garminActuals[match.workoutId] = {
@@ -1967,6 +1985,7 @@ export function autoProcessActivities(
     if (match && !usedWorkoutIds.has(match.workoutId)) {
       usedWorkoutIds.add(match.workoutId);
       wk.rated[match.workoutId] = rpe;
+      noteRatingSource(wk, match.workoutId, itemRpeSource(item));
       wk.garminMatched[item.garminId] = match.workoutId;
       // Store garminActuals so the slot card shows the activity name. No duplicate adhoc
       if (!wk.garminActuals) wk.garminActuals = {};
@@ -2018,6 +2037,7 @@ export function autoProcessActivities(
     if (namedMatch && !usedWorkoutIds.has(namedMatch.workoutId)) {
       usedWorkoutIds.add(namedMatch.workoutId);
       wk.rated[namedMatch.workoutId] = rpe;
+      noteRatingSource(wk, namedMatch.workoutId, itemRpeSource(item));
       wk.garminMatched[item.garminId] = namedMatch.workoutId;
       // Store garminActuals so the slot card shows the activity name. No duplicate adhoc
       if (!wk.garminActuals) wk.garminActuals = {};
@@ -2063,6 +2083,7 @@ export function autoProcessActivities(
       const slotId = bestSlot.id || bestSlot.n;
       usedWorkoutIds.add(slotId);
       wk.rated[slotId] = rpe;
+      noteRatingSource(wk, slotId, itemRpeSource(item));
       wk.garminMatched[item.garminId] = slotId;
       // Store garminActuals so the slot card shows the activity name. No duplicate adhoc
       if (!wk.garminActuals) wk.garminActuals = {};

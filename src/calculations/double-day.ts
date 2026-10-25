@@ -137,9 +137,13 @@ function startMsForAdhoc(w: Workout): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
+/** A planned session that stacks runs and stations or legs in one block: a
+ *  brick, a HYROX brick or mini brick, or a HYROX race simulation (lane H2b
+ *  part 2: logged as separate run and station activities, its day is one
+ *  planned session, not a double day). */
 function isPlannedBrickWorkout(w: Workout): boolean {
   const t = (w.t ?? '').toLowerCase();
-  return t === 'brick' || t === 'hyrox_brick' || t === 'hyrox_mini_brick';
+  return t === 'brick' || t === 'hyrox_brick' || t === 'hyrox_mini_brick' || t === 'hyrox_sim';
 }
 
 /**

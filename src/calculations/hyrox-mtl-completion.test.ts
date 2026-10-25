@@ -118,13 +118,19 @@ describe('HYROX actual MTL counts sessions completed through the HYROX paths', (
     // Synced recordings for the sessions a watch records as runs or HIIT;
     // easy erg work completes through Mark as Done, a rowing record (a HIIT
     // never fills an easy erg slot).
+    // Since lane H2b part 2 a base week also holds a standalone strength
+    // session: it carries no MTL and completes through the strength flow
+    // (strength logs, no planned-session record), so it sits outside this
+    // MTL check.
+    const isGym = (w: Workout) => w.t === 'gym';
     const ergs = wk1.triWorkouts!.filter(isHyroxEasyErg);
-    matchAndAutoComplete(wk1.triWorkouts!.filter(w => !isHyroxEasyErg(w)).map((w, i) => rowFor(w, `strava-W1-${i}`)));
+    matchAndAutoComplete(wk1.triWorkouts!.filter(w => !isHyroxEasyErg(w) && !isGym(w)).map((w, i) => rowFor(w, `strava-W1-${i}`)));
     for (const e of ergs) {
       (wk1.rated ??= {})[e.id!] = e.rpe!;
       recordPlannedSessionDone(wk1, e.id!, e, { rpe: e.rpe!, durationMin: e.estimatedDurationMin!, planStartDate: PLAN_START, weekNum: 1, currentWeek: 1 });
     }
-    expect(wk1.triWorkouts!.every(w => wk1.garminActuals?.[w.id!])).toBe(true);
+    expect(wk1.triWorkouts!.filter(w => !isGym(w) && !wk1.garminActuals?.[w.id!]).map(w => `${w.n} ${w.t}`)).toEqual([]);
+    expect(wk1.triWorkouts!.filter(isGym).every(w => (w.musculoTendonLoad ?? 0) === 0)).toBe(true);
     expect(computeWeekActualMTL(wk1)).toBeCloseTo(computeWeekMTL(wk1), 6);
 
     const m = resolveMtlAdherence(s, 1);
@@ -134,10 +140,13 @@ describe('HYROX actual MTL counts sessions completed through the HYROX paths', (
     const week2 = advanceAndRegenerateWeek2(s);
     expect(s.wks[1].ctlRatio).toBeUndefined();
     expect(plannedMinutes(week2)).toBe(fullWeek2); // a stamped ratio would cut it
-    // 282 min since 2026-10-13 (generator v18): easy erg work fills week 2's
-    // budget (0.5875 x 8 h), so lane H3b's real station seeds (223 before v18,
-    // 220 before H3b) no longer move the week's minutes; 170 before both.
-    expect(fullWeek2).toBe(282);
+    // 280 min since lane H2b part 2: the station session holds its warm-up,
+    // strength block and finisher (75 min at the intermediate cap) beside the
+    // standalone strength session, within the budget (0.5875 x 8 h = 282).
+    // 255 at part 1 (the technique session's 20 min of work and a 75-min easy
+    // erg session); 282 under generator v18 (easy erg work filled the
+    // budget); 223 before v18, 220 before H3b, 170 before both.
+    expect(fullWeek2).toBe(280);
   });
 
   it('a week with nothing done still reads 0 and still re-anchors next week down', () => {

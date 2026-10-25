@@ -12,6 +12,7 @@
 
 import type { AbilityBand, HyroxStation } from '@/types/triathlon';
 import { computePlanPhases, type PhaseConfig, type PlanPhaseWeek } from '@/workouts/phases';
+import { triTaperFraction } from './triathlon-constants';
 
 // Doubles ↔ singles total-time conversion lives in
 // src/calculations/hyrox-doubles.ts (doublesTotalInSinglesTermsSec), a
@@ -224,8 +225,14 @@ export function computeDoublesCap(singlesCap: number): number {
 
 // ─── Ability band derivation from previous HYROX time ───────────────────────
 
-/** Thresholds for mapping a previous HYROX finish time to an ability band.
- *  Times are in seconds. Evaluated in order; the first matching maxSec wins. */
+/** The original global finish-time scale for the ability bands (seconds;
+ *  evaluated in order, the first matching maxSec wins). KEPT FOR REFERENCE
+ *  AND CALIBRATION ONLY: no app code bands with it. Every format bands
+ *  through the planning band (hyroxPlanningBandFor, hyrox-planning-band.ts:
+ *  the finish in Open Singles terms on the athlete's own sex's field; pooled
+ *  thresholds 3774, 4869, 6318 and 7853 s, S8-S9). It stays as the anchor the
+ *  band-field percentiles were read at (hyrox-population.ts,
+ *  HYROX_S89_BAND_FIELD_PERCENTILES) and in the results data tests. */
 export const HYROX_TIME_TO_BAND_THRESHOLDS: Array<{ maxSec: number; band: AbilityBand }> = [
   { maxSec: 60 * 60,        band: 'competitive' },   // sub-1:00:00
   { maxSec: 80 * 60,        band: 'advanced' },       // sub-1:20:00
@@ -288,11 +295,14 @@ export type HyroxTier = 'beginner' | 'intermediate' | 'advanced';
 
 /**
  * Tier of an ability band: Beginner = total_beginner (no previous race) and
- * beginner (2:00:00+); Intermediate = novice (1:40 to 2:00) and intermediate
- * (1:20 to 1:40); Advanced = advanced (1:00 to 1:20) and competitive (sub-1:00).
- * The bands come from HYROX_TIME_TO_BAND_THRESHOLDS. Single source for the
- * grouping the generators already used (the station dose ceiling,
- * hyrox-generators bandMaxRounds) and the weekly structure below.
+ * beginner; Intermediate = novice and intermediate; Advanced = advanced and
+ * competitive. The bands come from the planning band (hyroxPlanningBandFor:
+ * the athlete's finish in Open Singles terms on their own sex's field; on the
+ * pooled field the thresholds are 3774, 4869, 6318 and 7853 s, S8-S9), not
+ * the old global 1:00 / 1:20 / 1:40 / 2:00 scale
+ * (HYROX_TIME_TO_BAND_THRESHOLDS, kept for reference). Single source for the
+ * grouping the station doses (hyrox-station-dose.ts) and the weekly structure
+ * below read.
  */
 export function hyroxTier(band: AbilityBand): HyroxTier {
   switch (band) {
@@ -309,7 +319,15 @@ export function hyroxTier(band: AbilityBand): HyroxTier {
 
 // ─── Weekly session structure by tier and phase ─────────────────────────────
 
-export interface HyroxSessionCounts { runs: number; stations: number; bricks: number }
+export interface HyroxSessionCounts {
+  runs: number;
+  stations: number;
+  bricks: number;
+  /** Standalone strength sessions (lane H2b part 2): the beginner and
+   *  intermediate base week's one session beside the station session's
+   *  block. Absent: none (the stored counts never hold it). */
+  strength?: number;
+}
 
 /**
  * Sessions a week by tier and phase (parameter sheet 2026-10-12,
@@ -321,20 +339,23 @@ export interface HyroxSessionCounts { runs: number; stations: number; bricks: nu
  * alone in peak. Advanced peak bricks are the key brick and a secondary
  * (lighter) brick that is not a hard session.
  *
- * The sheet's strength sessions (beginner and intermediate base) are left out:
- * HYROX has no strength content yet (lane H2b), so the slot would be empty.
- * Taper weeks keep the peak structure (Bosquet et al. 2007: no benefit from
+ * Beginner and intermediate base weeks hold one standalone strength session
+ * (lane H2b part 2, sheet sessions.weekly: 2 runs + 1 station session + 1
+ * strength, 3 runs + 1 station session + 1 strength), in the slot the brick
+ * takes from build; every station session opens with a strength block
+ * (HYROX_STRENGTH_SESSIONS counts it), both from the minutes the week's
+ * size leaves after its runs and station work. Taper weeks keep the peak structure (Bosquet et al. 2007: no benefit from
  * cutting frequency); race week has no brick (the race is the week's brick).
  * No brick before plan week HYROX_FIRST_BRICK_WEEK or in base (bricks.timing).
  */
 export const HYROX_WEEKLY_STRUCTURE: Record<HyroxTier, Record<'base' | 'build' | 'peak', HyroxSessionCounts>> = {
   beginner: {
-    base:  { runs: 2, stations: 1, bricks: 0 },
+    base:  { runs: 2, stations: 1, bricks: 0, strength: 1 },
     build: { runs: 2, stations: 1, bricks: 1 },
     peak:  { runs: 2, stations: 1, bricks: 1 },
   },
   intermediate: {
-    base:  { runs: 3, stations: 1, bricks: 0 },
+    base:  { runs: 3, stations: 1, bricks: 0, strength: 1 },
     build: { runs: 3, stations: 1, bricks: 1 },
     peak:  { runs: 3, stations: 1, bricks: 1 },
   },
@@ -344,6 +365,38 @@ export const HYROX_WEEKLY_STRUCTURE: Record<HyroxTier, Record<'base' | 'build' |
     peak:  { runs: 3, stations: 1, bricks: 2 },
   },
 };
+
+/**
+ * Strength sessions a week by tier and phase (parameter sheet
+ * strength.sessions; Blagrove 2018: 2 to 3 a week improve running economy 2
+ * to 8%; Fast Talk 2 in base; Ronnestad 2010: after 12 weeks at 2 a week, 1 a
+ * week kept the gains for 13 weeks, n=6 cyclists). A station session's
+ * strength block counts toward it (Tristan's brief, 2026-10-20), so beginner
+ * and intermediate base is the block plus one standalone session, advanced
+ * base and build the blocks of its two station sessions, every peak the one
+ * station session's block. The week before race week holds 1 light session
+ * (the first station session's block, the activation template: heavy lifting
+ * stops 7 days out) and race week none. These are the most a week holds:
+ * strength takes only the minutes the week's limits leave once its runs and
+ * station work are sized (plan_engine.hyrox addStrength; lane H2b part 2
+ * review, 2026-10-20: running is 40% of the weekly hours and the other 60%
+ * holds the station session, strength and brick station work, sheet
+ * split.running_share), so a low-hours, guard-held or deload week holds
+ * fewer. Planning side.
+ */
+export const HYROX_STRENGTH_SESSIONS: Record<HyroxTier, Record<'base' | 'build' | 'peak', number>> = {
+  beginner:     { base: 2, build: 1, peak: 1 },
+  intermediate: { base: 2, build: 1, peak: 1 },
+  advanced:     { base: 2, build: 2, peak: 1 },
+};
+
+/** Minutes of the strength block that opens a station session: the
+ *  running-strength pool's shortest session (gym.ts RUNNING_STRENGTH_PHASE
+ *  taper, 20 min; running-pool exerciseCountForTime: 4 exercises up to 20 min,
+ *  one each of max strength, single-leg, posterior chain and calf-foot, the
+ *  sheet's strength.content). A product choice reusing the app's value: the
+ *  sheet gives no block length. */
+export const HYROX_STRENGTH_BLOCK_MIN = 20;
 
 /** First plan week that may hold a brick (bricks.timing: Rundida from week 4,
  *  the earliest source; week 4 is a deload here, so week 5). */
@@ -368,16 +421,20 @@ export const HYROX_MAX_RUNS_PER_WEEK = 5;
  */
 export function applyHyroxSessionDelta(row: HyroxSessionCounts, delta: number): HyroxSessionCounts {
   let { runs, stations, bricks } = row;
+  let strength = row.strength ?? 0;
   let d = Math.round(delta);
   while (d > 0 && runs < HYROX_MAX_RUNS_PER_WEEK) { runs++; d--; }
   while (d < 0) {
-    if (bricks > 0) bricks--;
+    // The standalone strength session holds the brick's slot in base, so it
+    // goes first, as the brick does.
+    if (strength > 0) strength--;
+    else if (bricks > 0) bricks--;
     else if (stations > 1) stations--;
     else if (runs > 1) runs--;
     else break;
     d++;
   }
-  return { runs, stations, bricks };
+  return row.strength != null ? { runs, stations, bricks, strength } : { runs, stations, bricks };
 }
 
 /** Default weekly session counts by ability band: the tier's build week
@@ -395,7 +452,7 @@ export const HYROX_WEEKLY_SESSIONS: Record<AbilityBand, HyroxSessionCounts> = {
 
 /** Total of a session-count row. */
 export function hyroxSessionTotal(c: HyroxSessionCounts): number {
-  return c.runs + c.stations + c.bricks;
+  return c.runs + c.stations + c.bricks + (c.strength ?? 0);
 }
 
 // ─── Plan duration ───────────────────────────────────────────────────────────
@@ -521,7 +578,7 @@ export const RACE_WEEK_EXCLUDED_STATIONS: HyroxStation[] = [
  * plan engine caps every week with the acute:chronic guard (planned load at
  * most ACWR_SAFE_HIGH x the mean of the previous 4 planned weeks, Tristan
  * 2026-10-12), which decides how fast short plans climb to these values.
- * Taper: taperFraction (phases.ts) of the reference week, 0.70 then 0.55.
+ * Taper: hyroxTaperFraction of the reference week, 0.55 then 0.30.
  *
  * Deload: every 4th plan week in base, build and peak (isHyroxDeloadWeek: the
  * 4-week cycle, except the week right before the race taper, which never
@@ -541,6 +598,25 @@ export const HYROX_PEAK_MULT  = 1.00;
 /** Base phase: linear ramp 0.55 + 0.30 × (weekInBase / 8), capped at 0.85. */
 export function hyroxBaseMultiplier(weekIndex: number): number {
   return Math.min(0.85, 0.55 + 0.30 * ((weekIndex - 1) / 8));
+}
+
+/**
+ * Share of the reference week (the last loaded week) for race-taper week
+ * `weekInTaper` (1-indexed; `taperWeeks` = race week) of a HYROX plan
+ * (planning side). Tristan's decision of 2026-10-19: HYROX matches triathlon
+ * (triTaperFraction, TRI_TAPER_FIRST_WEEK_FRACTION / TRI_RACE_WEEK_FRACTION):
+ * 0.55 in the week before race week, then 0.30 in race week, a 57.5% mean cut,
+ * inside the 41 to 60% band with the largest effect (Bosquet et al. 2007,
+ * ES 0.72; Wang et al. 2023, SMD -0.77); a race-week-only taper (a 1-week
+ * plan) is 0.55. The one source for the generator's taper weeks and the
+ * weekly load target (planned-week-target.ts). Before 2026-10-19 HYROX ran
+ * running's 0.70 then 0.55 (taperFraction, phases.ts), the parameter sheet's
+ * taper.volume reading. The race taper's smallest circuit or brick, race
+ * week's primer and the closing-week rules sit outside the fraction
+ * (plan_engine.hyrox).
+ */
+export function hyroxTaperFraction(weekInTaper: number, taperWeeks: number): number {
+  return triTaperFraction(weekInTaper, taperWeeks);
 }
 
 /** A taper-labelled week that is not part of the race taper (the inter-cycle
@@ -676,6 +752,17 @@ export const HYROX_INTERVAL_HR_FRACTION = 0.90;
 /** Warm-up and cool-down around a quality run (existing generator values). */
 export const HYROX_QUALITY_WARMUP_MIN = 10;
 export const HYROX_QUALITY_COOLDOWN_MIN = 5;
+
+/** Warm-up opening every station session and brick (lane H2b part 2): the
+ *  existing run warm-up length (HYROX_QUALITY_WARMUP_MIN), easy on the erg or
+ *  an easy jog. */
+export const HYROX_SESSION_WARMUP_MIN = HYROX_QUALITY_WARMUP_MIN;
+
+/** Shortest easy erg finisher on a station session: the existing cool-down
+ *  length (HYROX_QUALITY_COOLDOWN_MIN), the shortest easy block the
+ *  generators prescribe. Spare minutes below it stay with the other
+ *  sessions or unprescribed. */
+export const HYROX_FINISHER_MIN_MIN = HYROX_QUALITY_COOLDOWN_MIN;
 
 /** Shortest tempo block (minutes): the generator's existing floor on tempo
  *  work, unchanged since the triathlon port. A taper tempo holds at least this

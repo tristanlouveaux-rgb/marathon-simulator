@@ -32,8 +32,12 @@
 
 import type { GarminActual, GarminPendingItem, SimulatorState, Week, Workout } from '@/types/state';
 import type { AbilityBand } from '@/types/triathlon';
-import { ensureHyroxChronicSeed, generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
-import { HYROX_WEEKLY_SESSIONS, type HyroxSessionCounts } from '@/constants/hyrox-constants';
+import { ensureHyroxChronicSeed, generateHyroxPlan, refreshHyroxPlanWeakestStation, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
+import { HYROX_WEEKLY_SESSIONS, HYROX_MTL_CAP, computeDoublesCap, type HyroxSessionCounts } from '@/constants/hyrox-constants';
+import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
+import { hyroxStoredRaceBand } from '@/calculations/hyrox-staleness';
+import { isHyroxDoublesFormat } from '@/calculations/hyrox-division';
+import { moveRatingSource } from '@/calculations/athlete-rating';
 
 /** Generator version that moved the band defaults to the tier structure
  *  (HYROX_WEEKLY_STRUCTURE, lane H2a). */
@@ -177,6 +181,7 @@ export function rekeyNameKeyedHyroxSlots(wk: Week): void {
       if (!target || wk.rated[target] !== undefined) continue;
       wk.rated[target] = wk.rated[key];
       delete wk.rated[key];
+      moveRatingSource(wk, key, target);
     }
   }
 
@@ -237,6 +242,40 @@ function sendToReview(wk: Week, key: string, actual: GarminActual, appType: 'run
 }
 
 /**
+ * A stored plan regenerates on the planning band (H2 integration review,
+ * 2026-10-14): the band its initializer wrote may sit on the old global
+ * 60/80/100/120-minute scale, while the planning band reads the athlete's
+ * previous finish in Open Singles terms on their own sex's field
+ * (hyroxPlanningBandFor), as setup, log-a-race and the format fix do. When
+ * the previous time and its format are stored and the band differs, the band
+ * moves and the MTL cap follows it (computeDoublesCap for a doubles target),
+ * exactly as hyrox-prev-time-update.ts re-bands, with the initializer's
+ * staleness rule on top (an old race the physiology does not vouch for gives
+ * the slower of its band and the VDOT band, hyroxStalenessAdjustedBand). A
+ * first-timer (no previous time) keeps the band their running fitness gave.
+ * Returns true when it re-banded.
+ */
+export function rebandStoredHyroxPlan(s: SimulatorState): boolean {
+  const hx = s.hyroxConfig;
+  if (!hx) return false;
+  const prev = hx.previousHyroxTimeSec;
+  const fmt = hx.hyroxPreviousTimeFormat;
+  const known = fmt === 'open_singles' || fmt === 'pro_singles' || fmt === 'open_doubles' || fmt === 'pro_doubles';
+  if (prev == null || !(prev > 0) || !known) return false;
+  const timeBand = hyroxPlanningBandFor(prev, fmt, s.biologicalSex, hx.division);
+  // The initializer's staleness rule on top, so a regeneration never undoes
+  // the slower band an old race was given (hyroxStalenessAdjustedBand).
+  const band = hyroxStoredRaceBand(s, timeBand);
+  if (band === hx.athleteBand) return false;
+  const old = hx.athleteBand;
+  hx.athleteBand = band;
+  const baseCap = HYROX_MTL_CAP[band];
+  hx.mtlCap = isHyroxDoublesFormat(hx.format) ? computeDoublesCap(baseCap) : baseCap;
+  console.log(`[hyrox] stored plan re-banded on the planning band: ${old} → ${band} (MTL cap ${hx.mtlCap})`);
+  return true;
+}
+
+/**
  * Regenerate the HYROX plan when the generator version has bumped. Mutates
  * `s` in place; returns true when it regenerated (the caller saves).
  */
@@ -246,9 +285,12 @@ export function applyHyroxGeneratorRegen(s: SimulatorState): boolean {
   const savedVersion = hx.generatorVersion ?? 0;
   if (savedVersion >= HYROX_GENERATOR_VERSION) return false;
   migratePreV18HyroxSessionCounts(s);
+  rebandStoredHyroxPlan(s);
   // A plan built before the chronic seed was stored (D4) fixes it now, so the
   // rollovers and single-week rebuilds after this one read the same value.
   ensureHyroxChronicSeed(s);
+  // The race-pace sessions' weakest station, from the forecast now (lane H2b).
+  refreshHyroxPlanWeakestStation(s);
   const freshWeeks = generateHyroxPlan(s);
   if (freshWeeks.length === 0) return false;
   for (let i = 0; i < Math.min(s.wks.length, freshWeeks.length); i++) {

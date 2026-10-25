@@ -8,6 +8,7 @@ import type { GarminActual } from '@/types';
 import { drawPolylineOnCanvas } from './strava-detail';
 import { getState, getMutableState } from '@/state';
 import { saveState } from '@/state/persistence';
+import { noteRatingSource } from '@/calculations/athlete-rating';
 import { formatKm } from '@/utils/format';
 import { generateWorkoutInsight, findPreviousSession } from '@/calculations/workout-insight';
 import { looksLikeCssTest, looksLikeFtpTest } from '@/calculations/tri-benchmarks-from-history';
@@ -1179,6 +1180,7 @@ function _showRpeOverlay(
     if (save) {
       if (!wk.rated) wk.rated = {};
       wk.rated[workoutId] = parseInt(slider.value, 10);
+      noteRatingSource(wk, workoutId, 'user');
       saveState();
     }
     overlay.remove();

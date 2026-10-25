@@ -3,6 +3,7 @@ import type { InjuryState } from '@/types/injury';
 import { isRunningDeloadWeek, abilityBandFromVdot } from './plan_engine';
 import { injuryStrengthDecision } from './injury-strength';
 import type { AbilityBand } from '@/types';
+import type { AbilityBand as HyroxAbilityBand } from '@/types/triathlon';
 import { buildPoolWorkout, type GymRestStyle, type GymIntensity } from './gym-pool';
 import { buildRunningStrengthWorkout } from './running-pool';
 import { applyBodyweightProgress } from '@/calculations/bodyweight-progression';
@@ -135,6 +136,83 @@ export function generateGymWorkouts(
   }
 
   return workouts;
+}
+
+// ---------------------------------------------------------------------------
+// HYROX strength content (lane H2b part 2)
+// ---------------------------------------------------------------------------
+
+/** Minutes gym.ts gives a running-strength session in a phase
+ *  (RUNNING_STRENGTH_PHASE: base and build 45, peak 30, taper 20). */
+export function runningStrengthPhaseMinutes(phase: TrainingPhase): number {
+  return RUNNING_STRENGTH_PHASE[phase].min;
+}
+
+/**
+ * Minutes a HYROX standalone strength session runs at its content (lane H2b
+ * part 2 review, 2026-10-20). Intermediate and above draw the running pool,
+ * which sizes its exercise count by the phase length (RUNNING_STRENGTH_PHASE:
+ * 45 min in base), so they take that length. The bodyweight and novice
+ * templates hold 4 exercises, which the pool's own sizing rule
+ * (running-pool exerciseCountForTime: 4 exercises up to 20 min) puts at its
+ * shortest session, 20 min (RUNNING_STRENGTH_PHASE taper). Before, a
+ * template session was booked at 45 min for those 4 exercises.
+ */
+export function hyroxStrengthLength(band: HyroxAbilityBand, phase: TrainingPhase): number {
+  const template = band === 'total_beginner' || band === 'beginner' || band === 'novice';
+  return template ? RUNNING_STRENGTH_PHASE.taper.min : RUNNING_STRENGTH_PHASE[phase].min;
+}
+
+/** True for a prescription line that loads the lower body heavily (an
+ *  "@X% 1RM" lift: every loaded line in these templates and the running pool
+ *  is a lower-body lift) or holds plyometrics (jumps, bounds, hops): the
+ *  sheet's eccentric.min_gap list ("heavy lower-body strength or
+ *  plyometrics"). */
+function isEccentricStrengthLine(line: string): boolean {
+  return /@\s*\d+\s*%\s*1RM/i.test(line) || /\b(jumps?|bounds?|hops?)\b/i.test(line);
+}
+
+/**
+ * Strength content for a HYROX plan (lane H2b part 2; parameter sheet
+ * strength.content). What the pools hold of the sheet's list: lower-body
+ * compound lifts (squat, deadlift, Romanian deadlift, hip thrust), single-leg
+ * work, calf raises and plyometrics, with core work. What they do not hold:
+ * upper-body compound lifts (press, pull-up), the grip and elbow tolerance
+ * work for the pulls and carries (Chittenden 2026; untested), and the
+ * heavier-than-race sled work the sheet places closer to race day (a known
+ * limit, SCIENCE_LOG §DP). Drawn from this
+ * module's own dosing by ability band, as generateGymWorkouts draws it:
+ * total_beginner and beginner the bodyweight templates, novice the novice
+ * templates, intermediate and above the rotating running-strength pool at
+ * the phase's intensity (RUNNING_STRENGTH_PHASE). A deload takes RPE 1 lower,
+ * as generateGymWorkouts' deload does. `light`: the week before race week's
+ * light session, the activation template (bodyweight; heavy lifting stops 7
+ * days before the race, sheet taper.content). `minutes`: the running pool
+ * sizes its exercise count by it (exerciseCountForTime); the templates hold
+ * their own 4 exercises. The closing stretch line is kept only for a
+ * standalone session (`standalone`). Planning side.
+ */
+export function hyroxStrengthContent(
+  band: HyroxAbilityBand,
+  phase: TrainingPhase,
+  slotIndex: number,
+  opts: { minutes: number; light?: boolean; deload?: boolean; standalone?: boolean },
+): { name: string; lines: string[]; rpe: number; eccentric: boolean } {
+  const isBeginner = band === 'total_beginner' || band === 'beginner';
+  const pick = (ws: Workout[]): Workout => ws[((slotIndex % ws.length) + ws.length) % ws.length];
+  let w: Workout;
+  if (opts.light) w = (isBeginner ? getBeginnerTemplates('taper') : getNoviceTemplates('taper'))[0];
+  else if (isBeginner) w = pick(getBeginnerTemplates(phase));
+  else if (band === 'novice') w = pick(getNoviceTemplates(phase));
+  else {
+    const { intensity } = RUNNING_STRENGTH_PHASE[phase];
+    w = buildRunningStrengthWorkout(slotIndex, opts.minutes, intensity, 'traditional', phase);
+  }
+  const all = String(w.d ?? '').split('\n').map(l => l.trim()).filter(Boolean);
+  const lines = opts.standalone ? all : all.filter(l => !/^stretch\b/i.test(l));
+  const base = w.rpe ?? w.r ?? 5;
+  const rpe = opts.deload ? Math.max(2, base - 1) : base;
+  return { name: w.n, lines, rpe, eccentric: lines.some(isEccentricStrengthLine) };
 }
 
 // ---------------------------------------------------------------------------

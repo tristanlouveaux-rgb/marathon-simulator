@@ -11,7 +11,7 @@ import type { HyroxComponent, HyroxStation } from '@/types/triathlon';
 import { STATION_DISPLAY } from '@/constants/hyrox-benchmarks';
 import { ECCENTRIC_HEAVY_STATIONS } from '@/constants/hyrox-constants';
 import { strengthCardSummary } from '@/guided/strength-model';
-import { isHyroxEasyErg } from '@/workouts/hyrox-generators';
+import { isHyroxEasyErg, hyroxStationRowText, hyroxLoadStepNote } from '@/workouts/hyrox-generators';
 
 // ─── Discipline colours ───────────────────────────────────────────────────────
 
@@ -45,7 +45,7 @@ function workoutDisc(w: Workout): HyroxDisc {
 
 // ─── Component list renderer ─────────────────────────────────────────────────
 
-function renderComponents(components: HyroxComponent[]): string {
+function renderComponents(components: HyroxComponent[], w: Workout): string {
   if (!components.length) return '';
   const lines = components.map(c => {
     if (c.type === 'run') {
@@ -54,14 +54,27 @@ function renderComponents(components: HyroxComponent[]): string {
     }
     const display = STATION_DISPLAY[c.type as HyroxStation];
     if (!display) return '';
-    const dist = c.reps ? `${c.reps} reps` : display.distance;
+    // Lane H2b sessions: the station's sets and prescription; older ones: the amount.
+    const dist = w.hyroxSpec ? hyroxStationRowText(c, w) : c.reps ? `${c.reps} ${c.reps === 1 ? 'rep' : 'reps'}` : display.distance;
     return `<li style="margin-bottom:2px">${display.name}, ${dist}</li>`;
   });
 
+  // Lane H2b part 2: the parts around the stations, one muted line each.
+  const spec = w.hyroxSpec;
+  const before = [
+    ...(spec?.warmup ? [`${spec.warmup.min} min warm-up`] : spec?.warmupRound ? ['round 1 easy as the warm-up'] : []),
+    ...(spec?.strength ? [`${spec.strength.min} min strength${spec.strength.light ? ' (light)' : ''}`] : []),
+  ].join(', then ');
+  const after = spec?.finisher ? `Then ${spec.finisher.min} min easy erg.` : '';
+  const step = hyroxLoadStepNote(w);
+  const line = (t: string) => `<div style="font-size:12px;color:var(--c-muted);line-height:1.5;margin-top:6px">${escAttr(t)}</div>`;
   return `
+    ${before ? line(`${before.charAt(0).toUpperCase()}${before.slice(1)}, then:`) : ''}
     <ul style="margin:8px 0 0;padding-left:16px;font-size:12px;color:var(--c-muted);line-height:1.5;list-style:disc">
       ${lines.join('')}
     </ul>
+    ${after ? line(after) : ''}
+    ${step ? line(step) : ''}
   `;
 }
 
@@ -126,7 +139,7 @@ export function renderHyroxWorkoutCard(
            paragraph. Runs and single-line cross-training keep their line. -->
       ${showComponents ? '' : renderCardDescription(w)}
       <!-- Component list for station/brick -->
-      ${showComponents ? renderComponents(components!) : ''}
+      ${showComponents ? renderComponents(components!, w) : ''}
       <!-- Taper eccentric warning -->
       ${showTaperWarning ? `
         <div style="margin-top:8px;padding:6px 10px;border-radius:8px;background:rgba(184,116,44,0.07);border:1px solid rgba(184,116,44,0.2);font-size:11px;color:#8a5820;line-height:1.4">

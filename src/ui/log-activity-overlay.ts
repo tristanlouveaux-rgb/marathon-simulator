@@ -27,6 +27,7 @@ import { writeAdjustmentMods, adjustableWorkouts } from '@/workouts/workout-mods
 import { showSimpleToast } from './toast';
 import { addAdhocWorkoutFromPending } from '@/calculations/activity-matcher';
 import type { GarminPendingItem } from '@/types';
+import { noteRatingSource } from '@/calculations/athlete-rating';
 
 /** Sports offered in the picker, common ones first. */
 const SPORT_ORDER: SportKey[] = [
@@ -200,6 +201,7 @@ function submitAdhocForMode(
   addAdhocWorkoutFromPending(wk, item, id, rpe);
   if (!wk.rated) wk.rated = {};
   wk.rated[id] = rpe; // manual log is a completed session, not a plan slot
+  noteRatingSource(wk, id, 'user');
   saveState();
   showSimpleToast(`${SPORT_LABELS[sportKey as SportKey] ?? 'Activity'} logged: ${durationMin} min, RPE ${rpe}.`);
   import('./main-view').then(({ renderMainView }) => renderMainView());

@@ -22,9 +22,10 @@ import {
   HYROX_MTL_CAP,
   computeDoublesCap,
 } from '@/constants/hyrox-constants';
-import { ensureHyroxChronicSeed, generateHyroxPlan } from '@/workouts/plan_engine.hyrox';
+import { ensureHyroxChronicSeed, generateHyroxPlan, refreshHyroxPlanWeakestStation } from '@/workouts/plan_engine.hyrox';
 import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan } from '@/state/initialization';
 import { hyroxPlanningBandFor } from '@/calculations/hyrox-planning-band';
+import { hyroxStoredRaceBand } from '@/calculations/hyrox-staleness';
 import { isHyroxDoublesFormat, isHyroxProFormat } from '@/calculations/hyrox-division';
 
 type HyroxFormat = 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
@@ -113,9 +114,10 @@ export function applyHyroxPrevFormatChange(newFormat: HyroxFormat): PrevFormatCh
   if (prevTimeSec != null) {
     const targetIsDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
     // A doubles result decomposes in the division it was raced in, when one
-    // was recorded with it.
+    // was recorded with it. The staleness rule on top, as every path that
+    // bands a stored race (hyroxStoredRaceBand).
     const raceDivision = isHyroxDoublesFormat(newFormat) ? hx.hyroxPreviousTimeDivision : undefined;
-    const newBand = hyroxPlanningBandFor(prevTimeSec, newFormat, s.biologicalSex, hx.division, raceDivision);
+    const newBand = hyroxStoredRaceBand(s, hyroxPlanningBandFor(prevTimeSec, newFormat, s.biologicalSex, hx.division, raceDivision));
     if (newBand !== hx.athleteBand) {
       hx.athleteBand = newBand;
       const baseCap = HYROX_MTL_CAP[newBand];
@@ -133,6 +135,8 @@ export function applyHyroxPrevFormatChange(newFormat: HyroxFormat): PrevFormatCh
     // Same plan, same start: it keeps the chronic seed stored when it was
     // created (D4), or stores one now if it predates them.
     ensureHyroxChronicSeed(s);
+    // The race-pace sessions' weakest station, from the forecast now (lane H2b).
+    refreshHyroxPlanWeakestStation(s);
     s.wks = generateHyroxPlan(s);
     redistributeArchivedActivitiesToNewPlan();
   }

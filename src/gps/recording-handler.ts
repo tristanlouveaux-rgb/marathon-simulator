@@ -21,6 +21,7 @@ import { showSuggestionModal } from '@/ui/suggestion-modal';
 import { buildGpsRunActual, writeInAppActual, isPlanCardRunType } from '@/calculations/in-app-activity';
 import { resolveTriWeekWorkouts } from '@/ui/triathlon/week-resolve.triathlon';
 import { reconcileTriCompletions } from '@/calculations/activity-matcher.triathlon';
+import { noteRatingSource } from '@/calculations/athlete-rating';
 
 /**
  * Handle a completed GPS recording: find the matching workout,
@@ -198,6 +199,7 @@ function handleImpromptuRun(
     if (multiSport) {
       // Tri/HYROX ratings are completion flags; rate() would move running VDOT.
       week.rated[recording.id] = rpe;
+      noteRatingSource(week, recording.id, 'user');
     } else {
       // Rate the adhoc entry so it counts toward completedKm and effort
       rate(recording.id, workoutName, rpe, 5, 'easy', false);
@@ -343,6 +345,7 @@ function completeMultiSportRunSlot(
 ): void {
   if (!week.rated) week.rated = {};
   week.rated[key] = rpe;
+  noteRatingSource(week, key, 'user');
   if (!week.gpsRecordings) week.gpsRecordings = {};
   week.gpsRecordings[key] = recording.id;
   recordGpsActual(week, key, recording, rpe, slot.n, { workoutName: slot.n, plannedType: slot.t });

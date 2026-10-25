@@ -168,12 +168,19 @@ export function injuryStrengthDecision(
   const lowerOK = lower > 0;
   const trunkSafe = !TRUNK_LOCATIONS.includes(loc);
 
-  // Pick the first N injury-safe exercises in each loadable region.
-  const pick = (region: Region, capOK: boolean): Exercise[] =>
-    capOK ? LIBRARY.filter(e => e.region === region && safe(e)).slice(0, MAX_PER_REGION[region]) : [];
+  // Pick the first N injury-safe exercises in each loadable region. A
+  // region's exercise count follows its capacity the way its block minutes do
+  // (BLOCK_MIN x capacity, below), so the list a card shows matches its
+  // length: round(MAX_PER_REGION x capacity), at least one while the region is
+  // loadable. Core is not capacity-scaled (its block is whole).
+  const pick = (region: Region, capOK: boolean, capPct = 100): Exercise[] =>
+    capOK
+      ? LIBRARY.filter(e => e.region === region && safe(e))
+          .slice(0, Math.max(1, Math.round(MAX_PER_REGION[region] * (capPct / 100))))
+      : [];
 
-  const lowerEx = pick('lower', lowerOK);
-  const upperEx = pick('upper', upperOK);
+  const lowerEx = pick('lower', lowerOK, lower);
+  const upperEx = pick('upper', upperOK, upper);
   const coreEx = pick('core', trunkSafe && (upperOK || lowerOK));
 
   const selected = [...lowerEx, ...upperEx, ...coreEx];

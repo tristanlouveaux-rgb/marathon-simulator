@@ -120,8 +120,10 @@ describe('Mark as Done on one of two same-named sessions', () => {
     const s = hyroxState(16);
     setState(s);
     const wk = getMutableState().wks[0];
-    const [fri, sun] = easyRuns(wk); // Wednesday, Friday
-    expect([fri.dayOfWeek, sun.dayOfWeek]).toEqual([2, 4]);
+    // Wednesday and Saturday (since lane H2b part 2 Friday holds the base
+    // week's strength session).
+    const [fri, sun] = easyRuns(wk);
+    expect([fri.dayOfWeek, sun.dayOfWeek]).toEqual([2, 5]);
 
     openHyroxWorkoutDetail(fri, 0);
     (document.querySelector('#hx-detail-mark-done') as HTMLButtonElement).click();
@@ -144,7 +146,7 @@ describe('two synced Easy Runs on their own days', () => {
 
     matchAndAutoComplete([
       runRow({ garmin_id: 'strava-FRI', start_time: new Date(2026, 8, 30, 12, 0, 0).toISOString(), duration_sec: sec, distance_m: km * 1000 }), // Wednesday
-      runRow({ garmin_id: 'strava-SUN', start_time: new Date(2026, 9, 2, 12, 0, 0).toISOString(), duration_sec: sec, distance_m: km * 1000 }), // Friday
+      runRow({ garmin_id: 'strava-SUN', start_time: new Date(2026, 9, 3, 12, 0, 0).toISOString(), duration_sec: sec, distance_m: km * 1000 }), // Saturday
     ]);
 
     expect(wk.garminMatched!['strava-FRI']).toBe(fri.id);
@@ -180,7 +182,7 @@ describe('v13 → v14 regen re-keys name-keyed slot entries', () => {
   it('with two Easy Runs, a synced run follows the session on its own day; a bare rating stays under the name', () => {
     const s = v13State();
     const wk = s.wks[0];
-    const sundayStart = new Date(2026, 9, 2, 12, 0, 0).toISOString(); // Friday, the second Easy Run's day
+    const sundayStart = new Date(2026, 9, 3, 12, 0, 0).toISOString(); // Saturday, the second Easy Run's day
     wk.garminActuals = {
       'Easy Run': { garminId: 'strava-SUN', startTime: sundayStart, distanceKm: 5, durationSec: 2100, avgPaceSecKm: null, avgHR: null, maxHR: null, calories: null },
     };

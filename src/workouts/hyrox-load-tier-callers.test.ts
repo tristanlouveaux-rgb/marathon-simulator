@@ -81,9 +81,11 @@ describe('HYROX generator calls pass loadTier', () => {
 
 describe('the load tier reaches the loaded-station MTL inside the brick generators', () => {
   const noErgs = { sled: 'always' as const, skiErg: false, rowErg: false };
+  // The taper's mini brick (lane H2b): ergs, else the farmers carry. In a
+  // build or peak week the beginner brick rotates through every station.
   const base: BrickParams = {
     kind: 'mini_brick', targetMinutes: 30, band: 'beginner', stationAccess: noErgs,
-    phase: 'base', slotIndex: 0, bodyWeightKg: 70,
+    phase: 'taper', slotIndex: 0, bodyWeightKg: 70,
   };
   const stationMtl = (p: BrickParams) =>
     generateHyroxBrick(p).hyroxComponents!.filter(c => c.type !== 'run').reduce((a, c) => a + (c.mtl ?? 0), 0);

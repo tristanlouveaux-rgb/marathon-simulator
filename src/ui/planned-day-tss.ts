@@ -3,6 +3,7 @@ import { resolveWeekWorkouts } from './week-resolve';
 import { resolveTriWeekWorkouts, estimateTriWorkoutMin } from './triathlon/week-resolve.triathlon';
 import { computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeFitnessModel, ctlAdherenceRatio, isUnscheduledPlannedWorkout } from '@/calculations/fitness-model';
 import { TL_PER_MIN, plannedTssPerMin } from '@/constants';
+import { hyroxSessionPlannedTss } from '@/workouts/hyrox-session-shape';
 import { isHardWorkout } from '@/workouts/scheduler';
 import { isLongRun } from '@/workouts/long-run';
 import { signalARunSpec } from '@/cross-training/activities';
@@ -154,8 +155,13 @@ export function getPlannedDayTSSContext(s: SimulatorState, viewWeek: number): Pl
           const rpe = Math.round(w.rpe ?? w.r ?? 5);
           if (rpe <= 0) continue; // defensive: zero-RPE = no prescribed load
           // Type-keyed canonical valuation (ISSUE-263) — same rule as
-          // calculateWorkoutLoad / computePlannedDaySignalBTSS.
-          tss = durMin * plannedTssPerMin(w.t ?? '', rpe);
+          // calculateWorkoutLoad / computePlannedDaySignalBTSS. A HYROX
+          // station session or brick prices its warm-up, strength block and
+          // finisher at their own efforts (hyroxSessionPlannedTss, the plan
+          // engine's own pricing: one source).
+          tss = w.hyroxSpec
+            ? hyroxSessionPlannedTss({ ...w, estimatedDurationMin: durMin, rpe })
+            : durMin * plannedTssPerMin(w.t ?? '', rpe);
         }
         byDay[day].push({
           name: w.n ?? '',

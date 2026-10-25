@@ -27,6 +27,7 @@ import { resolveWeekWorkouts } from '@/ui/week-resolve';
 import { addUnspentItemOnce } from './excess-records';
 import { localDateKey, calendarDaysBetween } from '@/utils/local-date';
 import { isHyroxEasyErg } from '@/workouts/hyrox-easy-erg';
+import { athleteRatedRpe, noteRatingSource, type RatingSource } from './athlete-rating';
 
 /** Row shape returned by the sync-activities Edge Function */
 export interface GarminActivityRow {
@@ -252,6 +253,17 @@ export function getHREffort(
  * 4. Activity type heuristic (walks are easy, strength is moderate)
  * 5. Default mid-range RPE
  */
+/** True when a synced row carries the watch's self-reported RPE in range
+ *  (deriveRPE's first branch): the athlete's own entry, not an estimate. */
+export function hasSelfReportedRpe(row: Pick<GarminActivityRow, 'garmin_rpe'>): boolean {
+  return row.garmin_rpe != null && row.garmin_rpe >= 1 && row.garmin_rpe <= 10;
+}
+
+/** Who entered deriveRPE's result for this row (athlete-rating.ts). */
+export function deriveRpeSource(row: Pick<GarminActivityRow, 'garmin_rpe'>): RatingSource {
+  return hasSelfReportedRpe(row) ? 'user' : 'derived';
+}
+
 export function deriveRPE(
   row: GarminActivityRow,
   plannedRPE: number,
@@ -260,7 +272,7 @@ export function deriveRPE(
   age?: number,
 ): number {
   // 1. Garmin RPE. Use directly if available and in valid range
-  if (row.garmin_rpe != null && row.garmin_rpe >= 1 && row.garmin_rpe <= 10) {
+  if (hasSelfReportedRpe(row) && row.garmin_rpe != null) {
     return row.garmin_rpe;
   }
 
@@ -621,6 +633,7 @@ function supersedeInAppRun(
   if (!wk.rated) wk.rated = {};
   if (typeof wk.rated[key] !== 'number') {
     wk.rated[key] = deriveRPE(row, prior.rpe ?? 5, s.maxHR, s.restingHR, s.onboarding?.age);
+    noteRatingSource(wk, key, deriveRpeSource(row));
   }
 
   // No weekly-total write: the week's actual load is derived from its
@@ -677,8 +690,13 @@ function matchHyroxStationRow(
   if (!targetWk.rated) targetWk.rated = {};
   if (!targetWk.garminMatched) targetWk.garminMatched = {};
   if (!targetWk.garminPending) targetWk.garminPending = [];
-  const rpe = deriveRPE(row, slot.rpe || slot.r || 6, s.maxHR, s.restingHR, s.onboarding?.age);
-  targetWk.rated![workoutId] = rpe;
+  // The athlete's own rating on the slot (the guided player's 1-tap RPE)
+  // stays, as the in-app run supersede and Activity Review keep it; an
+  // earlier estimate is derived again from this row (lane H2b review).
+  if (athleteRatedRpe(targetWk, workoutId) == null) {
+    targetWk.rated![workoutId] = deriveRPE(row, slot.rpe || slot.r || 6, s.maxHR, s.restingHR, s.onboarding?.age);
+    noteRatingSource(targetWk, workoutId, deriveRpeSource(row));
+  }
   targetWk.garminMatched![row.garmin_id] = workoutId;
 
   if (!targetWk.garminActuals) targetWk.garminActuals = {};
@@ -777,6 +795,7 @@ function matchHyroxErgRow(
   if (!wk.garminActuals) wk.garminActuals = {};
   const iTrimp = resolveITrimp(row, rhrBaseline, s.maxHR, resolveTrimpSex(s));
   wk.rated[workoutId] = deriveRPE(row, slot.rpe || slot.r || 4, s.maxHR, s.restingHR, s.onboarding?.age);
+  noteRatingSource(wk, workoutId, deriveRpeSource(row));
   wk.garminMatched[row.garmin_id] = workoutId;
   wk.garminActuals[workoutId] = {
     garminId: row.garmin_id,
@@ -881,6 +900,7 @@ function supersedeInAppCrossSession(
   if (!wk.rated) wk.rated = {};
   if (typeof wk.rated[key] !== 'number') {
     wk.rated[key] = deriveRPE(row, prior.rpe ?? 5, s.maxHR, s.restingHR, s.onboarding?.age);
+    noteRatingSource(wk, key, deriveRpeSource(row));
   }
 
   // Re-review record, as for the run supersede (openActivityReReview reads it).
@@ -1700,6 +1720,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           const workoutId = hyroxRunMatch.id || hyroxRunMatch.n;
           const rpe = deriveRPE(row, (hyroxRunMatch as any).rpe || (hyroxRunMatch as any).r || 5, s.maxHR, s.restingHR, s.onboarding?.age);
           wk.rated![workoutId] = rpe;
+          noteRatingSource(wk, workoutId, deriveRpeSource(row));
           wk.garminMatched![row.garmin_id] = workoutId;
 
           if (!wk.garminActuals) wk.garminActuals = {};
@@ -1797,6 +1818,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             const prior = tw.garminActuals![guidedId];
             const rpe = deriveRPE(row, prior.rpe ?? 5, s.maxHR, s.restingHR, s.onboarding?.age);
             tw.rated[guidedId] = rpe;
+            noteRatingSource(tw, guidedId, deriveRpeSource(row));
             tw.garminMatched[row.garmin_id] = guidedId;
             tw.garminActuals![guidedId] = {
               ...prior,
@@ -1927,6 +1949,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         runAutoCompletions++;
         const rpe = deriveRPE(row, match.matchedWorkout.rpe || match.matchedWorkout.r || 5, s.maxHR, s.restingHR, s.onboarding?.age);
         wk.rated![match.workoutId] = rpe;
+        noteRatingSource(wk, match.workoutId, deriveRpeSource(row));
         wk.garminMatched![row.garmin_id] = match.workoutId;
 
         if (!wk.garminActuals) wk.garminActuals = {};

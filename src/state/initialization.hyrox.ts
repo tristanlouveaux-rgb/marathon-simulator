@@ -28,10 +28,10 @@ import {
   hyroxTier,
   computeDoublesCap,
 } from '@/constants/hyrox-constants';
-import { generateHyroxPlan, hyroxChronicSeedSnapshot, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
+import { generateHyroxPlan, hyroxChronicSeedSnapshot, refreshHyroxPlanWeakestStation, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
 import { clearStaleGatesForMode } from '@/injury/engine';
 import { getVenueIdForEvent, getHyroxEventById } from '@/data/hyrox-events';
-import { computeHyroxStaleness, bandFromVdot } from '@/calculations/hyrox-staleness';
+import { hyroxStalenessAdjustedBand, bandFromVdot } from '@/calculations/hyrox-staleness';
 import { hasRealRunningFitnessSignal, resolveRunningVdot } from '@/calculations/physiological-vdot';
 import { HYROX_STATION_ORDER } from '@/constants/hyrox-benchmarks';
 import { seedRoxzoneSecForFormat, hyroxDoublesTables } from '@/calculations/hyrox-doubles';
@@ -180,7 +180,7 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     // band, take the SLOWER of the two (conservative. Never over-promise on
     // a stale benchmark). The staleness model is gated by physiology
     // mitigation, so a still-fit athlete keeps their stale-but-credible band.
-    const stalenessProbe = computeHyroxStaleness({
+    const { band, probe: stalenessProbe } = hyroxStalenessAdjustedBand({
       ...(s as any),
       hyroxConfig: {
         ...(s.hyroxConfig as any),
@@ -190,14 +190,9 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
           || state.hyroxPreviousRaceDate,
         hyroxPreviousTimeRaceId: state.hyroxPreviousTimeRaceId,
       },
-    } as any);
-    const vdotBand = bandFromVdot(s.v);
-    let band: AbilityBand = timeBasedBand;
-    if (stalenessProbe.bandWeight < 0.7 && vdotBand && vdotBand !== timeBasedBand) {
-      band = BAND_ORDER.indexOf(timeBasedBand) < BAND_ORDER.indexOf(vdotBand) ? timeBasedBand : vdotBand;
-      if (band !== timeBasedBand) {
-        console.log(`[hyrox init] re-banded ${timeBasedBand} → ${band} due to staleness (months ago: ${stalenessProbe.ageMonths?.toFixed(1)}, VDOT: ${s.v?.toFixed(1)}, mitigation: ${stalenessProbe.physiologyMitigation.toFixed(2)})`);
-      }
+    } as any, timeBasedBand);
+    if (band !== timeBasedBand) {
+      console.log(`[hyrox init] re-banded ${timeBasedBand} → ${band} due to staleness (months ago: ${stalenessProbe.ageMonths?.toFixed(1)}, VDOT: ${s.v?.toFixed(1)}, mitigation: ${stalenessProbe.physiologyMitigation.toFixed(2)})`);
     }
 
     const baseMtlCap = HYROX_MTL_CAP[band];
@@ -413,6 +408,11 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
 
     // Generate the full plan via plan engine.
     s.wks = generateHyroxPlan(s);
+    // The race-pace sessions' weakest station (lane H2b) read from the
+    // forecast of the plan just built (the forecast counts the plan's
+    // sessions), stored so later rebuilds read the same station; the plan is
+    // built again when that station differs from the first build's.
+    if (refreshHyroxPlanWeakestStation(s)) s.wks = generateHyroxPlan(s);
 
     s.initialBaseline = null;
     s.currentFitness = null;
