@@ -855,6 +855,57 @@ describe('a plan rebuilt under an injury is the plan without it through the inju
     expect(off.slice(0, 10)).toEqual([]);
   }, 600000);
 
+  it('an injured week\'s notes come from the gated week alone: what the week is, each session the gates left out, and the hours note at the gated week\'s own minutes; none of the uninjured week\'s notes, which quote the sizes the gates change (v2 review: "W5: 13-min easy erg finisher" beside a 6-min gated finisher, "157 min left unprescribed"); the weeks before keep theirs: singles and doubles, every band at the default hours, 12 weeks, rebuilt from week 1 and from week 8', () => {
+    const states: Caps[] = [[50, 100, 100], [100, 50, 100], [100, 100, 50], [50, 50, 50], [0, 100, 50]];
+    let weeks = 0; let leftNotes = 0; let hoursNotes = 0; let uninjuredNotes = 0;
+    const off: string[] = [];
+    for (const [name, over] of [V_SINGLES, V_DOUBLES]) {
+      for (const band of BANDS) {
+        const hrs = HYROX_HOURS_RANGE[band].default;
+        const base = build(band, hrs, 12, over);
+        const tw = planTrainingWeeks(base);
+        const hoursMin = (base.hyroxConfig!.weeklyHoursAvailable ?? 0) * 60;
+        const chosen = Math.round(hoursMin);
+        for (const from of [1, 8]) {
+          for (const caps of states) {
+            const wks = rebuilt(base, caps, from);
+            const [run, up, lo] = caps;
+            for (let i = 0; i < tw; i++) {
+              const u = base.wks[i]; const wk = wks[i];
+              const l = `${name} ${band} from W${from} at ${caps.join('/')} W${i + 1}`;
+              const un = u.hyroxPlanNotes ?? []; const notes = wk.hyroxPlanNotes ?? [];
+              if (i + 1 < from) { if (JSON.stringify(notes) !== JSON.stringify(un)) off.push(`${l}: a week before the current one changed its notes`); continue; }
+              weeks++;
+              uninjuredNotes += un.length;
+              const head = `W${i + 1}: the week planned without the injury, each session at its capacities' shares (run ${run}%, upper body ${up}%, lower body ${lo}%)`;
+              if (notes[0] !== head) off.push(`${l}: first note ${notes[0]}`);
+              const ids = new Set(prescribed(wk).map(w => w.id));
+              const gone = prescribed(u).filter(w => !ids.has(w.id)).map(w => w.n);
+              const left = notes.filter(n => / left out \(injury: /.test(n));
+              leftNotes += left.length;
+              if (JSON.stringify(left.map(n => n.slice(`W${i + 1}: `.length, n.indexOf(' left out (injury: ')))) !== JSON.stringify(gone)) off.push(`${l}: left-out notes ${JSON.stringify(left)} for ${JSON.stringify(gone)}`);
+              for (const n of notes.slice(1)) {
+                if (left.includes(n)) continue;
+                const m = /^W(\d+): (\d+) of the chosen (\d+) min \((\d+) min without the injury, then the injury gates\)$/.exec(n);
+                if (!m) { off.push(`${l}: note ${n}`); continue; }
+                hoursNotes++;
+                if (Number(m[1]) !== i + 1 || Number(m[2]) !== minutes(wk) || Number(m[3]) !== chosen || Number(m[4]) !== minutes(u)) off.push(`${l}: ${n} (week ${minutes(wk)} min, uninjured ${minutes(u)}, chosen ${chosen})`);
+                if (wk.ph === 'taper' || hoursMin - minutes(wk) < HYROX_RUN_FLOOR_MIN) off.push(`${l}: an hours note on a week ${hoursMin - minutes(wk)} min under the chosen hours (${wk.ph})`);
+              }
+              if (wk.ph !== 'taper' && hoursMin > 0 && hoursMin - minutes(wk) >= HYROX_RUN_FLOOR_MIN && !notes.some(n => n.includes('of the chosen'))) off.push(`${l}: no hours note ${hoursMin - minutes(wk)} min under the chosen hours`);
+              for (const n of un) if (notes.includes(n)) off.push(`${l}: kept the uninjured note ${n}`);
+            }
+          }
+        }
+      }
+    }
+    expect(weeks).toBeGreaterThan(1000);
+    expect(leftNotes).toBeGreaterThan(500);
+    expect(hoursNotes).toBeGreaterThan(100);
+    expect(uninjuredNotes).toBeGreaterThan(100);
+    expect(off.slice(0, 10)).toEqual([]);
+  }, 600000);
+
   it('as any one capacity rises the rebuilt plan loses nothing: every week keeps its sessions and holds no less station work on either side, running, minutes, planned TSS or MTL (run 0 to 50 to 100 at 50/50, a side clearing from 95 to 100 at 30, the lower body past a tie at upper body 50), singles and doubles, every band at the lowest and the default hours, 12 and 16 weeks', () => {
     const chains: Caps[][] = [[[0, 50, 50], [50, 50, 50], [100, 50, 50]], [[100, 30, 95], [100, 30, 100]], [[100, 95, 30], [100, 100, 30]], [[100, 50, 45], [100, 50, 50], [100, 50, 55]]];
     let weeks = 0; let held = 0;

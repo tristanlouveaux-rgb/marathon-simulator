@@ -519,7 +519,11 @@ import {
 //   session is not mostly rest and the 15-min floor (still counting the
 //   planned warm-up) weighs training content; each station's line then
 //   names its own rest. A finisher scaled under HYROX_FINISHER_MIN_MIN, the
-//   uninjured plan's shortest, leaves (a 25-min finisher at 5% was 1 min).
+//   uninjured plan's shortest, leaves (a 25-min finisher at 5% was 1 min);
+// - (v2 review) an injured week's notes come from the gated week alone
+//   (what the week is, the sessions left out, the hours note at its own
+//   minutes, the load steps); the uninjured week's notes, which quoted the
+//   sizes the gates change, stay with the uninjured plan.
 export const HYROX_GENERATOR_VERSION = 19;
 
 type HyroxPhase = 'base' | 'build' | 'peak' | 'taper';
@@ -5342,8 +5346,11 @@ export function buildHyroxTrainingWeeks(
   // session through the injury gates on its day. A session the gates leave
   // out leaves its slot empty, and the week says why. The week keeps the
   // uninjured week's ceilings (its budget, guard and deload ceiling); its
-  // load, long run and hours note are its own.
+  // load, long run and notes are its own.
   const gate = injury?.active ? hyroxInjuryGate(injury, hx.stationAccess) : null;
+  const injRun = getDisciplineCapacity(injury, 'run');
+  const injUpper = getDisciplineCapacity(injury, 'upperLoad');
+  const injLower = getDisciplineCapacity(injury, 'lowerLoad');
   const injuredWeekOf = (u: HyroxWeekDetail): HyroxWeekDetail => {
     const w = u.week;
     const loads = stationLoadsFor(w, u.phase, u.deload);
@@ -5355,18 +5362,19 @@ export function buildHyroxTrainingWeeks(
       else if (x.commute !== true) notes.push(`W${w}: ${x.n} left out (injury: ${g.why})`);
     }
     const plannedMin = hyroxPlannedMinutes(workouts);
-    // The hours note (decision C) with the week's own minutes, the injury
-    // gates added to what holds it.
-    const head = `W${w}: ${u.plannedMin} of the chosen ${Math.round(hoursMin)} min (`;
-    const adjustments: string[] = [];
-    let why = '';
-    for (const n of u.adjustments) {
-      if (n.startsWith(head) && n.endsWith(')')) why = `${n.slice(head.length, -1)}; `;
-      else adjustments.push(n);
-    }
-    adjustments.push(...notes);
+    // The week's notes come from the gated week alone: what the week is, each
+    // session the gates left out and why, and the hours note (decision C)
+    // with the gated week's minutes; the load steps follow (noteLoadSteps,
+    // from the gated sessions). The uninjured week's own notes quote the
+    // sizes the gates change (v2 review: "W5: 13-min easy erg finisher"
+    // beside a 6-min gated finisher, "157 min left unprescribed"), so they
+    // stay with the uninjured plan.
+    const adjustments = [
+      `W${w}: the week planned without the injury, each session at its capacities' shares (run ${injRun}%, upper body ${injUpper}%, lower body ${injLower}%)`,
+      ...notes,
+    ];
     if (u.phase !== 'taper' && hoursMin > 0 && hoursMin - plannedMin >= HYROX_RUN_FLOOR_MIN) {
-      adjustments.push(`W${w}: ${plannedMin} of the chosen ${Math.round(hoursMin)} min (${why}the injury gates)`);
+      adjustments.push(`W${w}: ${plannedMin} of the chosen ${Math.round(hoursMin)} min (${u.plannedMin} min without the injury, then the injury gates)`);
     }
     const { hoursFit: _fit, ...rest } = u;
     const long = workouts.find(isHyroxLongRun);
